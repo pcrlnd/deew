@@ -190,7 +190,7 @@ xml_ac4_base = '''<?xml version="1.0"?>
             <speech_threshold>15</speech_threshold>    <!-- integer: from 0 to 100 -->
           </measure_only>
         </loudness>
-        <data_rate>256</data_rate>    <!-- One of: 64, 72, 112, 144, 256, 320 -->
+        <data_rate>-</data_rate>    <!-- One of: 64, 72 (< 5.3.0), 96 (5.3.0+), 112 (< 5.3.0), 128 (5.3.0+), 144, 256, 320 -->
         <ac4_frame_rate>native</ac4_frame_rate>    <!-- One of: native, 23.976, 24, 25, 29.97 -->
         <ims_legacy_presentation>false</ims_legacy_presentation>    <!-- boolean: true or false -->
         <iframe_interval>0</iframe_interval>    <!-- integer: from 0 to 1000 -->
