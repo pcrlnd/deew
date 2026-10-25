@@ -3,7 +3,8 @@
 - updated the `temp_path` description in the default config
 
 # deew 3.5.0:
-- rewritten in Rust, single binary with no Python runtime needed (the Python version is kept in the `python/` folder)
+- rewritten in Rust, single binary with no Python runtime needed
+- the old Python version is available at https://github.com/pcrlnd/deew-python
 - config is only read from `config.toml` next to the deew binary, `-gc` no longer asks for a location
 - encoding summary: `Input(s)` header, new `Directory` row in Output, clearer Delay row (`0ms`, `Nms`, `Nms (parsed from filenames)`, `mixed (parsed from filenames)`)
 - inputs with different bit depths are supported (`mixed bit depth`)
