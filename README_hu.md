@@ -19,8 +19,7 @@
 
 ## DDP encode-olás még sosem volt ilyen egyszerű!
 
-![img](https://telegra.ph/file/4e75ac457c8f122dfc9a9.gif)
-<!---https://i.kek.sh/f2Iv7nZ2ucf.gif--->
+![img](website/terminal.gif)
 
 # Leírás
 - kezeli a Dolby XML input baromságait és az RF64 intermediate fájlok létrehozását a háttérben, rendes felületet adva

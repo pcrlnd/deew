@@ -181,9 +181,21 @@ fn no_color_env() -> bool {
     std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
 }
 
+/// Lets the terminal interpret the escape codes. On Windows the classic
+/// console (conhost, used by a plain cmd.exe) shows them as text unless
+/// virtual terminal processing is switched on; `console` does that and
+/// returns false where it cannot (old Windows 10 builds), so those get
+/// plain text. Other platforms need nothing.
+fn enable_ansi() -> bool {
+    #[cfg(windows)]
+    return console::Term::stdout().features().colors_supported();
+    #[cfg(not(windows))]
+    true
+}
+
 pub fn color_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::io::stdout().is_terminal() && !no_color_env())
+    *ENABLED.get_or_init(|| std::io::stdout().is_terminal() && !no_color_env() && enable_ansi())
 }
 
 #[macro_export]

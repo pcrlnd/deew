@@ -1,6 +1,7 @@
 # deew 3.6.0:
 - new logo 1, the other logos moved one number up
-- the encoding summary is at most 60 columns wide, a long temp path wraps to two lines and ends in `...` if it is even longer
+- the encoding summary is at most 60 columns wide, a long temp path wraps to
+  two lines and ends in `...` if it is even longer
 - updated icons
   - `deew.exe` uses a sharper icon (every resolution is generated from svg)
   - Linux uses 512px icon instead of 32px
@@ -11,17 +12,23 @@
   - the browser tab title shows the version (`deew-web 0.2.0`)
 
 # deew 3.5.1:
-- WSL with `dee.exe`: if the deew binary is on a Windows drive (`/mnt/c` etc.), the default temp directory is `temp` next to it instead of the Windows temp directory
+- WSL with `dee.exe`: if the deew binary is on a Windows drive (`/mnt/c` etc.),
+  the default temp directory is `temp` next to it instead of
+  the Windows temp directory
 - updated the `temp_path` description in the default config
 
 # deew 3.5.0:
 - rewritten in Rust, single binary with no Python runtime needed
 - the old Python version is available at https://github.com/pcrlnd/deew-python
-- config is only read from `config.toml` next to the deew binary, `-gc` no longer asks for a location
-- encoding summary: `Input(s)` header, new `Directory` row in Output, clearer Delay row (`0ms`, `Nms`, `Nms (parsed from filenames)`, `mixed (parsed from filenames)`)
+- config is only read from `config.toml` next to the deew binary,
+  `-gc` no longer asks for a location
+- encoding summary: `Input(s)` header, new `Directory` row in Output, clearer
+  Delay row (`0ms`, `Nms`, `Nms (parsed from filenames)`, 
+  `mixed (parsed from filenames)`)
 - inputs with different bit depths are supported (`mixed bit depth`)
 - clearer `-np` description
-- new optional desktop GUI (`deew-gui`) and web UI (`deew-web`), see the README
+- new optional desktop GUI (`deew-gui`) and web UI (`deew-web`),
+  see the README
 - config: new optional `[deew_web]` section for the web UI login
 
 # deew 3.2.2:
