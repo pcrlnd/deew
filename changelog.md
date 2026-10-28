@@ -1,3 +1,7 @@
+# deew 3.6.1:
+- fixed colors in the classic Windows console (`cmd.exe` outside
+  Windows Terminal), escape codes were printed as text
+
 # deew 3.6.0:
 - new logo 1, the other logos moved one number up
 - the encoding summary is at most 60 columns wide, a long temp path wraps to
