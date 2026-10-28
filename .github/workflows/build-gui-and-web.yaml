@@ -95,6 +95,30 @@ jobs:
             deew-gui
             deew-web
 
+      # Posting is best effort: a failure is logged as a warning, the run stays green.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        continue-on-error: true
+        with:
+          python-version: '3.x'
+
+      - name: Install requests
+        run: python -m pip install requests || echo "::warning::Installing requests failed"
+
+      - name: Posting changelog to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CH1: ${{ secrets.TG_CH1 }}
+          TG_CH2: ${{ secrets.TG_CH2 }}
+        run: |
+          python dev_scripts/telegram.py "$TG_TOKEN" "$TG_CH1" || echo "::warning::Posting changelog to Telegram (TG_CH1) failed"
+          python dev_scripts/telegram.py "$TG_TOKEN" "$TG_CH2" || echo "::warning::Posting changelog to Telegram (TG_CH2) failed"
+
+      - name: Posting changelog to Doom9
+        env:
+          DOOM9_PASSWORD: ${{ secrets.DOOM9_PASSWORD }}
+        run: python dev_scripts/doom9.py "$DOOM9_PASSWORD" || echo "::warning::Posting changelog to Doom9 failed"
+
   windows:
     name: Windows
     runs-on: windows-latest
