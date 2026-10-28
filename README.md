@@ -19,8 +19,7 @@
 
 ## DDP encoding has never been so easy!
 
-![img](https://telegra.ph/file/4e75ac457c8f122dfc9a9.gif)
-<!---https://i.kek.sh/f2Iv7nZ2ucf.gif--->
+![img](website/terminal.gif)
 
 # Description
 - handles Dolby's XML input fuckery and creating the RF64 intermediate in the background, giving you a proper tool
