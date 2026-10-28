@@ -1,4 +1,4 @@
-/* deew.dev - hand-written, dark only. Brand purple is #473486. */
+/* deew.dev - hand-written, dark only. Accent is the logo blue #497cfe. */
 
 @font-face {
   font-family: "Inter Variable";
@@ -34,11 +34,11 @@
 }
 
 :root {
-  --brand: #473486;
+  --brand: #223f8b;
   --background: oklch(0.14 0.02 288);
   --foreground: oklch(0.97 0.005 288);
   --card: oklch(0.18 0.025 288);
-  --primary: oklch(0.52 0.19 290);
+  --primary: oklch(0.57 0.2 265);
   --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.25 0.04 288);
   --secondary-foreground: oklch(0.97 0.005 288);
@@ -46,7 +46,7 @@
   --muted-foreground: oklch(0.74 0.03 288);
   --border: oklch(0.6 0.08 289 / 20%);
   --input: oklch(0.6 0.08 289 / 28%);
-  --ring: oklch(0.7 0.16 292);
+  --ring: #497cfe;
   --radius: 0.75rem;
   --radius-md: calc(var(--radius) * 0.8);
   --radius-xl: calc(var(--radius) * 1.4);
@@ -82,6 +82,8 @@ body::before {
   background: url("bg.png") center / cover no-repeat;
   background-image: image-set(url("bg.webp") type("image/webp"), url("bg.png") type("image/png"));
 }
+/* blurred from the features section down; the footer's top border hides the seam */
+main, .footer { -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
@@ -154,9 +156,10 @@ h2 { font-size: 1.875rem; line-height: 2.25rem; font-weight: 600; letter-spacing
     radial-gradient(40rem 28rem at 95% 30%, color-mix(in oklch, var(--brand) 35%, transparent), transparent);
 }
 .hero-grid { display: grid; align-items: center; gap: 3rem; padding-top: 3rem; padding-bottom: 4rem; }
-.hero-logo { height: 5rem; width: auto; }
+.hero-brand { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+.hero-logo { height: 4rem; width: auto; flex-shrink: 0; }
 h1 {
-  margin-top: 1.5rem; font-size: 2.25rem; line-height: 1.25; font-weight: 600;
+  font-size: 1.75rem; line-height: 1.25; font-weight: 600;
   letter-spacing: -0.025em; text-wrap: balance;
 }
 .hero .lead { max-width: 36rem; }
@@ -301,6 +304,7 @@ h1 {
 @media (min-width: 40rem) {
   .container { padding-inline: 1.5rem; }
   .hero-grid { padding-top: 4rem; }
+  .hero-brand { gap: 1.25rem; }
   .hero-logo { height: 6rem; }
   h1 { font-size: 3rem; }
   .tabs-list { width: fit-content; }

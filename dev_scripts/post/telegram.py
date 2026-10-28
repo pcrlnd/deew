@@ -4,7 +4,6 @@ import sys
 
 def main():
     token = sys.argv[1]
-    to = sys.argv[2]
 
     with open("changelog.md", "r") as fl:
         last_changelog = fl.read().split("\n\n# deew")[0]
@@ -15,7 +14,7 @@ def main():
     r = requests.post(
         url=f"https://api.telegram.org/bot{token}/sendMessage",
         data={
-            "chat_id": to,
+            "chat_id": "-1003761788743",
             "parse_mode": "html",
             "disable_web_page_preview": "true",
             "text": f'<a href="https://github.com/pcrlnd/deew/releases/tag/{version}">{version}</a> is out!\n\nChangelog:\n<pre><code class="language-json">{changelog}</code></pre>'

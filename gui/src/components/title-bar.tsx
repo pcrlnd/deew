@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { getVersion } from "@tauri-apps/api/app"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { Copy, Minus, Square, X } from "lucide-react"
 
@@ -103,6 +104,20 @@ export function TitleBar({
   menuDisabled: boolean
   onRunInfo: (flag: InfoFlag) => void
 }) {
+  const [version, setVersion] = useState<string>()
+
+  useEffect(() => {
+    let cancelled = false
+    getVersion()
+      .then((value) => {
+        if (!cancelled) setVersion(value)
+      })
+      .catch(console.error)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <header
       data-tauri-drag-region
@@ -113,7 +128,9 @@ export function TitleBar({
         className="pointer-events-none flex items-center gap-2 pl-3"
       >
         <img src="/icon.png" alt="" className="size-4" />
-        <span className="text-xs font-semibold">deew</span>
+        <span className="text-xs font-semibold">
+          {version ? `deew-gui ${version}` : "deew-gui"}
+        </span>
       </div>
       <div data-tauri-drag-region className="h-full flex-1" />
       <div className="mr-1 flex items-center gap-1">

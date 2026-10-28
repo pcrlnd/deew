@@ -167,7 +167,11 @@ fn print_summary(ctx: &Context, files: &[String], instances: f64, versions: &[Op
         temp_path: ctx.temp,
     };
     let rows = summary::summary_rows(&data);
-    let table = summary::render_table("Encoding summary", &rows, crate::term::console_width());
+    let table = summary::render_table(
+        "Encoding summary",
+        &rows,
+        crate::term::console_width().min(summary::MAX_WIDTH),
+    );
     rprintln!("{}", table);
     println!();
 }

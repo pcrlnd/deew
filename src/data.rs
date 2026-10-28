@@ -60,8 +60,15 @@ pub fn allowed_bitrates(key: &str) -> &'static [u32] {
         .unwrap_or_else(|| panic!("unknown bitrate key: {key}"))
 }
 
-/// Banner logos (rich markup), in the order of `logos.py`.
+/// Banner logos (rich markup): a new one first, then the ones of `logos.py` in order.
 pub const LOGOS: &[&str] = &[
+    r#"┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ [blue]╺┳━━┓ ┏━━━╸ ┏━━━╸ ╻   ╻[/blue] ┃
+┃ [blue] ┃  ┃ ┣━━╸  ┣━━╸  ┃ ╻ ┃[/blue] ┃
+┃ [blue]╺┻━━┛ ┗━━━╸ ┗━━━╸ ┗━┻━┛[/blue] ┃
+┃  Dolby Encoding Engine  ┃
+┃   Wrapper by pcroland   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━┛"#,
     r#"[yellow] ▄▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄  ▄▄
  ██  ██ ██▄▄  ██▄▄  ██  ██  ██
  ██  ██ ██    ██    ██  ██  ██
@@ -250,11 +257,11 @@ mod tests {
 
     #[test]
     fn logos() {
-        assert_eq!(LOGOS.len(), 10);
+        assert_eq!(LOGOS.len(), 11);
         assert!(
             LOGOS
                 .iter()
-                .all(|l| l.contains("Dolby Encoding Engine Wrapper"))
+                .all(|l| l.contains("Dolby Encoding Engine") && l.contains("Wrapper"))
         );
     }
 

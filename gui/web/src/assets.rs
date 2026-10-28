@@ -10,6 +10,16 @@ struct Dist;
 
 const MISSING: &str = "frontend not built: run npm run build in gui/ and rebuild deew-web\n";
 
+/// Replaces the first `<title>deew</title>` with one carrying the deew-web version.
+fn with_title(html: Vec<u8>) -> Vec<u8> {
+    const OLD: &[u8] = b"<title>deew</title>";
+    let new = concat!("<title>deew-web ", env!("CARGO_PKG_VERSION"), "</title>");
+    match html.windows(OLD.len()).position(|w| w == OLD) {
+        Some(i) => [&html[..i], new.as_bytes(), &html[i + OLD.len()..]].concat(),
+        None => html,
+    }
+}
+
 /// Serves `path` (without leading slash) from the embedded frontend, falling
 /// back to `index.html` for unknown paths (client-side routing).
 pub fn serve(path: &str) -> Response {
@@ -29,7 +39,12 @@ pub fn serve(path: &str) -> Response {
         },
     };
     let mime = mime_guess::from_path(name).first_or_octet_stream();
-    let mut response = file.data.into_owned().into_response();
+    let data = if name == "index.html" {
+        with_title(file.data.into_owned())
+    } else {
+        file.data.into_owned()
+    };
+    let mut response = data.into_response();
     let headers = response.headers_mut();
     if let Ok(value) = HeaderValue::from_str(mime.as_ref()) {
         headers.insert(header::CONTENT_TYPE, value);
@@ -55,5 +70,18 @@ mod tests {
         assert_eq!(r.headers()[header::CONTENT_TYPE], "text/html");
         let r = serve("some/spa/route");
         assert_eq!(r.headers()[header::CONTENT_TYPE], "text/html");
+    }
+
+    #[tokio::test]
+    async fn index_title_carries_the_version() {
+        let want = concat!("<title>deew-web ", env!("CARGO_PKG_VERSION"), "</title>");
+        for path in ["", "index.html", "some/route"] {
+            let body = axum::body::to_bytes(serve(path).into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let html = String::from_utf8_lossy(&body);
+            assert!(html.contains(want), "{path:?}: {html}");
+            assert!(!html.contains("<title>deew</title>"), "{path:?}");
+        }
     }
 }

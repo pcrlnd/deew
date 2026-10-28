@@ -273,7 +273,7 @@ Update your config file.\n"
 
     #[test]
     fn logo_is_printed_before_the_key_check() {
-        let (out, text) = with_config("logo = 1\n", &["-i", "x.mkv"]);
+        let (out, text) = with_config("logo = 2\n", &["-i", "x.mkv"]);
         assert_eq!(out.status.code(), Some(1), "{text}");
         assert!(
             text.starts_with(" ▄▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄  ▄▄\n"),
@@ -284,7 +284,7 @@ Update your config file.\n"
             "{text}"
         );
         // out of range: no logo
-        let (_, text) = with_config("logo = 11\n", &["-i", "x.mkv"]);
+        let (_, text) = with_config("logo = 12\n", &["-i", "x.mkv"]);
         assert!(text.starts_with("ERROR:"), "{text}");
     }
 
@@ -322,7 +322,7 @@ Update your config file.\n"
             text.ends_with("deew: error: the following arguments are required: -i/--input\n"),
             "{text}"
         );
-        assert!(text.starts_with("deew 3.5.1\n\nUSAGE: deew"), "{text}");
+        assert!(text.starts_with("deew 3.6.0\n\nUSAGE: deew"), "{text}");
     }
 
     #[test]

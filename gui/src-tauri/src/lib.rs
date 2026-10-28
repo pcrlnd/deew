@@ -196,6 +196,18 @@ pub fn run() {
             default_bitrates,
             cli_version
         ])
+        .setup(|app| {
+            match app.get_webview_window("main") {
+                Some(window) => {
+                    let title = format!("deew-gui {}", app.package_info().version);
+                    if let Err(e) = window.set_title(&title) {
+                        log::warn!("could not set the window title: {e}");
+                    }
+                }
+                None => log::warn!("main window not found, keeping the default title"),
+            }
+            Ok(())
+        })
         .on_page_load(|webview, payload| {
             if webview.label() == "main" && matches!(payload.event(), PageLoadEvent::Finished) {
                 log::info!("main webview finished loading");

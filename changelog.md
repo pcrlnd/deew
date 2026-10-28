@@ -1,3 +1,15 @@
+# deew 3.6.0:
+- new logo 1, the other logos moved one number up
+- the encoding summary is at most 60 columns wide, a long temp path wraps to two lines and ends in `...` if it is even longer
+- updated icons
+  - `deew.exe` uses a sharper icon (every resolution is generated from svg)
+  - Linux uses 512px icon instead of 32px
+- updated dependencies
+- `deew-gui` 0.2.0:
+  - the window title shows the version (`deew-gui 0.2.0`)
+- `deew-web` 0.2.0:
+  - the browser tab title shows the version (`deew-web 0.2.0`)
+
 # deew 3.5.1:
 - WSL with `dee.exe`: if the deew binary is on a Windows drive (`/mnt/c` etc.), the default temp directory is `temp` next to it instead of the Windows temp directory
 - updated the `temp_path` description in the default config

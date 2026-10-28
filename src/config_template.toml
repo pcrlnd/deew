@@ -11,7 +11,7 @@ dee_path = 'dee.exe'
 # You can also specify an absolute path or a path relative to the current directory.
 temp_path = ''
 
-# Set between 1 and 10, use the -pl/--print-logos option to see the available logos, set to 0 to disable logo.
+# Set between 1 and 11, use the -pl/--print-logos option to see the available logos, set to 0 to disable logo.
 logo = 1
 
 # Specifies how many encodes can run at the same time.

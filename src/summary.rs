@@ -11,17 +11,24 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const RELEASES_URL: &str = "https://api.github.com/repos/pcrlnd/deew/releases/latest";
 
+/// Widest the table gets, whatever the console width.
+pub const MAX_WIDTH: usize = 60;
+
 /// One table row: up to two cells (markup) and whether a separator follows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub cells: Vec<String>,
     pub end_section: bool,
+    /// Break the value at any character instead of at spaces, over at most
+    /// [`FOLD_LINES`] lines (for paths).
+    pub fold: bool,
 }
 
 fn row(cells: &[&str], end_section: bool) -> Row {
     Row {
         cells: cells.iter().map(|c| c.to_string()).collect(),
         end_section,
+        fold: false,
     }
 }
 
@@ -153,7 +160,10 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
         rows.push(row(&["Files", &d.files.to_string()], false));
         rows.push(row(&["Max instances", &format_g(d.instances)], false));
         rows.push(row(&["Delay", &d.delay], false));
-        rows.push(row(&["Temp path", &escape(d.temp_path)], false));
+        rows.push(Row {
+            fold: true,
+            ..row(&["Temp path", &escape(d.temp_path)], false)
+        });
     }
     rows
 }
@@ -370,16 +380,59 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Lines a folded cell may take.
+const FOLD_LINES: usize = 2;
+
+/// The first `width` columns of `line`.
+fn crop(line: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for c in line.chars() {
+        used += c.width().unwrap_or(0);
+        if used > width {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Break plain text into lines of at most `width` columns at any character,
+/// `max_lines` at most; the last one ends in `...` if something was cut.
+fn fold_lines(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            if lines.len() == max_lines {
+                let last = lines.pop().unwrap_or_default();
+                let dots = &"..."[..width.min(3)];
+                lines.push(format!("{}{dots}", crop(&last, width - dots.len())));
+                return lines;
+            }
+            lines.push(String::new());
+            used = 0;
+        }
+        lines.last_mut().unwrap().push(c);
+        used += w;
+    }
+    lines
+}
+
 /// Lines of the cell content for column width `width` (markup).
-fn cell_lines(cell: &str, width: usize) -> Vec<String> {
+fn cell_lines(cell: &str, width: usize, fold: bool) -> Vec<String> {
     let inner = width.saturating_sub(PADDING);
     if visible_width(cell) <= inner {
         return vec![cell.to_string()];
     }
-    wrap(&strip(cell), inner)
-        .iter()
-        .map(|l| escape(l))
-        .collect()
+    let text = strip(cell);
+    let lines = if fold {
+        fold_lines(&text, inner, FOLD_LINES)
+    } else {
+        wrap(&text, inner)
+    };
+    lines.iter().map(|l| escape(l)).collect()
 }
 
 /// Render the table as markup, `console_width` columns at most.
@@ -404,7 +457,8 @@ pub fn render_table(title: &str, rows: &[Row], console_width: usize) -> String {
     for (i, row) in rows.iter().enumerate() {
         let cells: Vec<Vec<String>> = (0..widths.len())
             .map(|c| match row.cells.get(c) {
-                Some(cell) => cell_lines(cell, widths[c]),
+                // only the value column folds
+                Some(cell) => cell_lines(cell, widths[c], row.fold && c == 1),
                 None => vec![String::new()],
             })
             .collect();
@@ -513,7 +567,11 @@ mod tests {
                 temp_path: s("temp"),
             };
             let width = case["width"].as_u64().unwrap() as usize;
-            let rows = summary_rows(&data);
+            let mut rows = summary_rows(&data);
+            // rich crops instead of folding the temp path (see `folds_temp_path`)
+            for r in &mut rows {
+                r.fold = false;
+            }
             let text = strip(&render_table("Encoding summary", &rows, width));
             let expected = case["expected"].as_str().unwrap().trim_end_matches('\n');
             assert_eq!(text, expected, "width {width}: {p}");
@@ -736,6 +794,64 @@ mod tests {
                 assert!(j.iter().all(|i| top.contains(i)), "{text}");
             }
         }
+    }
+
+    #[test]
+    fn fold_behaviour() {
+        assert_eq!(fold_lines("abcdefgh", 4, 2), ["abcd", "efgh"]);
+        assert_eq!(fold_lines("abcdefghi", 4, 2), ["abcd", "e..."]);
+        assert_eq!(fold_lines("abc", 4, 2), ["abc"]);
+        assert_eq!(fold_lines("日本語で", 4, 2), ["日本", "語で"]);
+        assert_eq!(fold_lines("日本語ですか", 5, 2), ["日本", "語..."]);
+    }
+
+    #[test]
+    fn folds_temp_path() {
+        let s = sections(true);
+        let mut d = data(&s);
+        let temp = format!("X:\\deew_temp_{}", "a".repeat(58));
+        d.temp_path = &temp;
+        d.files = 4;
+        d.instances = 4.0;
+        let rows = summary_rows(&d);
+        let text = strip(&render_table("Encoding summary", &rows, MAX_WIDTH));
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[1..].iter().all(|l| l.width() == MAX_WIDTH), "{text}");
+        assert_eq!(
+            lines[lines.len() - 3..],
+            [
+                format!("│ Temp path       │ X:\\deew_temp_{} │", "a".repeat(25)),
+                format!("│                 │ {}      │", "a".repeat(33)),
+                format!("└{}┴{}┘", "─".repeat(17), "─".repeat(40)),
+            ]
+        );
+
+        // longer than two lines: the second one ends in "..."
+        let temp = format!("X:\\deew_temp_{}", "a".repeat(100));
+        d.temp_path = &temp;
+        let rows = summary_rows(&d);
+        let text = strip(&render_table("Encoding summary", &rows, MAX_WIDTH));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[lines.len() - 2],
+            format!("│                 │ {}... │", "a".repeat(35))
+        );
+        // other rows still crop to one line
+        let d = SummaryData {
+            temp_path: "temp",
+            output_dir: &temp,
+            ..d
+        };
+        let text = strip(&render_table(
+            "Encoding summary",
+            &summary_rows(&d),
+            MAX_WIDTH,
+        ));
+        assert_eq!(
+            text.lines().filter(|l| l.contains("aaa")).count(),
+            1,
+            "{text}"
+        );
     }
 
     #[test]

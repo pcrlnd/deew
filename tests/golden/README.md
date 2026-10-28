@@ -1,6 +1,6 @@
 # Golden reference outputs
 
-These files are reference outputs captured from the Python implementation in `python/` (deew 3.2.2). The `version.txt`, `help.txt`, `no_args.txt` and `err_*` files were later bumped by hand to `deew 3.5.1` (the Rust version number), so they no longer match the Python capture in that one line. They are the behavior the Rust rewrite should match.
+These files are reference outputs captured from the Python implementation in `python/` (deew 3.2.2). The `version.txt`, `help.txt`, `no_args.txt` and `err_*` files were later bumped by hand to `deew 3.6.0` (the Rust version number), so they no longer match the Python capture in that one line. They are the behavior the Rust rewrite should match.
 
 Commands were run from `python/` with stdout redirected to a file (so rich emits no ANSI codes) and the environment `COLUMNS=250 TERM=dumb NO_COLOR=1` (so rich does not wrap lines). `XDG_CONFIG_HOME` pointed at an empty temp dir. Nothing was written to stderr in any case.
 

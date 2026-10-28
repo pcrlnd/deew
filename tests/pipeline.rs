@@ -266,13 +266,20 @@ fn ddp_51_default_and_cleanup() {
     assert!(text.contains("Running the following commands:"), "{text}");
     assert!(text.contains("5.1"), "{text}");
     assert!(text.contains("1024 kbps"), "{text}");
-    // the output directory is listed in the Output section
+    // the output directory is listed in the Output section, cropped to the
+    // table's maximum width
     let dir_row = text
         .lines()
         .find(|l| l.contains("│ Directory"))
         .unwrap_or_else(|| panic!("no Directory row: {text}"));
+    let shown = dir_row
+        .split('│')
+        .nth(2)
+        .unwrap()
+        .trim()
+        .trim_end_matches('…');
     assert!(
-        dir_row.contains(env.out().to_str().unwrap()),
+        shown.len() > 10 && env.out().to_str().unwrap().starts_with(shown),
         "{dir_row}\n{text}"
     );
     // the fake DEE wrote the output; the temp files are gone
