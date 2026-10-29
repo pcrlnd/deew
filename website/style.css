@@ -53,6 +53,7 @@
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
   color-scheme: dark;
+  --grain: url("data:image/png;base64,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") 0 0 / 64px 64px;
 }
 
 /* ---------- reset ---------- */
@@ -67,6 +68,7 @@ html {
   font-family: var(--font-sans);
   line-height: 1.5;
   -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent; /* buttons have their own press feedback */
   scroll-behavior: smooth;
 }
 body {
@@ -75,15 +77,31 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-/* page background: webp, png where image-set() with type() isn't supported */
+/* page background: soft glows in the logo blues, fixed. script.js redraws them
+   (and the hero glows) dithered on canvases; these are the fallback. */
 body::before {
   content: "";
-  position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background: url("bg.png") center / cover no-repeat;
-  background-image: image-set(url("bg.webp") type("image/webp"), url("bg.png") type("image/png"));
+  position: fixed; inset: -20%; z-index: -2; pointer-events: none;
+  background:
+    radial-gradient(32% 28% at 24% 18%, color-mix(in oklch, var(--ring) 26%, transparent), transparent 70%),
+    radial-gradient(30% 34% at 80% 26%, oklch(0.5 0.22 292 / 20%), transparent 70%),
+    radial-gradient(38% 30% at 62% 78%, oklch(0.55 0.13 235 / 13%), transparent 70%),
+    radial-gradient(28% 30% at 16% 66%, color-mix(in oklch, var(--brand) 45%, transparent), transparent 70%);
 }
-/* blurred from the features section down; the footer's top border hides the seam */
-main, .footer { -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+/* dither: fine dark gray noise (50 +- triangular noise, std 20) at 6% opacity
+   adds about +-1.2 color levels per pixel, enough to hide the 8-bit steps of
+   the dark gradients, without lifting them. A 64px tile, 1 tile pixel per CSS
+   pixel, kept sharp. */
+body::after {
+  content: "";
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--grain);
+  image-rendering: pixelated;
+}
+.bg-canvas { position: fixed; inset: 0; z-index: -2; width: 100%; height: 100%; pointer-events: none; }
+.hero-bg canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dithered body::before, .dithered body::after, .dithered .hero-figure::before { display: none; }
+.dithered .hero-bg { background: none; }
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
@@ -114,7 +132,8 @@ pre, code { font-family: var(--font-mono); font-size: 1em; }
 
 /* ---------- layout helpers ---------- */
 .container { width: 100%; max-width: 72rem; margin-inline: auto; padding-inline: 1rem; }
-.section { padding-block: 4rem; }
+.section { padding-block: 2.5rem; }
+.section:last-child { padding-bottom: 4rem; }
 h2 { font-size: 1.875rem; line-height: 2.25rem; font-weight: 600; letter-spacing: -0.025em; }
 .lead { margin-top: 1rem; font-size: 1.125rem; line-height: 1.75rem; color: var(--muted-foreground); text-wrap: pretty; }
 .section-intro { margin-top: 0.75rem; max-width: 42rem; color: var(--muted-foreground); }
@@ -155,7 +174,15 @@ h2 { font-size: 1.875rem; line-height: 2.25rem; font-weight: 600; letter-spacing
     radial-gradient(60rem 30rem at 20% -10%, color-mix(in oklch, var(--brand) 75%, transparent), transparent),
     radial-gradient(40rem 28rem at 95% 30%, color-mix(in oklch, var(--brand) 35%, transparent), transparent);
 }
-.hero-grid { display: grid; align-items: center; gap: 3rem; padding-top: 3rem; padding-bottom: 4rem; }
+/* dot grid, fading out from the top left */
+.hero-bg::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: radial-gradient(circle, oklch(1 0 0 / 10%) 1px, transparent 1.5px) 0 0 / 1.5rem 1.5rem;
+  -webkit-mask-image: radial-gradient(75% 90% at 25% 0%, #000, transparent);
+  mask-image: radial-gradient(75% 90% at 25% 0%, #000, transparent);
+}
+.hero-grid { display: grid; align-items: center; gap: 3rem; padding-top: 3rem; padding-bottom: 2.5rem; }
 .hero-brand { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
 .hero-logo { height: 4rem; width: auto; flex-shrink: 0; }
 h1 {
@@ -166,7 +193,14 @@ h1 {
 .hero .lead b { color: var(--foreground); }
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-top: 2rem; }
 .hint { margin-top: 0.75rem; font-size: 0.875rem; line-height: 1.25rem; color: var(--muted-foreground); }
-.hero-figure { width: 100%; max-width: 28rem; margin-inline: auto; }
+.hero-figure { position: relative; width: 100%; max-width: 28rem; margin-inline: auto; }
+/* blue glow behind the screenshot */
+.hero-figure::before {
+  content: "";
+  position: absolute; inset: 6%; z-index: -1;
+  background: color-mix(in oklch, var(--ring) 35%, transparent);
+  filter: blur(60px);
+}
 .hero-figure img {
   width: 100%;
   filter: drop-shadow(0 20px 25px rgb(0 0 0 / 0.5));
@@ -177,8 +211,10 @@ h1 {
 .feature {
   display: flex; gap: 0.75rem; padding: 1rem;
   border: 1px solid var(--border); border-radius: var(--radius-xl);
-  background: color-mix(in oklch, var(--card) 70%, transparent);
+  /* grain on top again: the blur smooths away the page grain behind */
+  background: var(--grain), color-mix(in oklch, var(--card) 70%, transparent);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  image-rendering: pixelated;
   font-size: 0.875rem; line-height: 1.625;
 }
 .feature > .icon { width: 1.125rem; height: 1.125rem; margin-top: 0.125rem; color: var(--ring); }
@@ -237,7 +273,6 @@ h1 {
 }
 .card-header { display: grid; gap: 0.25rem; padding-inline: 1rem; }
 .card-title { font-size: 1rem; line-height: 1.375; font-weight: 500; }
-.card-title-icon { display: flex; align-items: center; gap: 0.5rem; }
 .card-desc { font-size: 0.875rem; line-height: 1.25rem; color: var(--muted-foreground); }
 .card-content { padding-inline: 1rem; }
 
@@ -278,27 +313,20 @@ h1 {
   box-shadow: 0 0 0 1px var(--border); font-size: 0.8rem; color: var(--foreground);
 }
 
-.cards2 { display: grid; gap: 1.5rem; margin-top: 1.5rem; }
-.bullets { list-style: disc inside; font-size: 0.875rem; line-height: 1.25rem; }
-.bullets li::marker { color: var(--ring); }
-.bullets > * + * { margin-top: 0.25rem; }
-.links { font-size: 0.875rem; line-height: 1.25rem; }
-.links > * + * { margin-top: 0.375rem; }
+.requirements { margin-top: 1.5rem; }
+.requirements-body { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.875rem; line-height: 1.25rem; }
+.chips li {
+  display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: color-mix(in oklch, var(--background) 40%, transparent);
+}
+.chips li::before { content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--ring); }
 .ext-link {
   display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.875rem; line-height: 1.25rem;
   text-decoration: underline; text-underline-offset: 4px;
 }
 .ext-link:hover { color: var(--ring); }
-
-/* ---------- footer ---------- */
-.footer { border-top: 1px solid var(--border); }
-.footer-inner {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: 0.75rem; padding-block: 2rem; font-size: 0.875rem; line-height: 1.25rem;
-  color: var(--muted-foreground);
-}
-.gh-link { display: inline-flex; align-items: center; gap: 0.5rem; }
-.gh-link:hover { color: var(--foreground); }
 
 /* ---------- breakpoints ---------- */
 @media (min-width: 40rem) {
@@ -312,10 +340,12 @@ h1 {
   }
 @media (min-width: 48rem) {
   .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .cards2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* the card with sub-points sits on the right, as tall as the three next to it */
+  .feature:has(.feature-sub) { grid-column: 2; grid-row: span 3; }
+  .requirements { flex-direction: row; align-items: center; justify-content: space-between; }
 }
 @media (min-width: 64rem) {
-  .hero-grid { grid-template-columns: 1.1fr 0.9fr; padding-bottom: 6rem; }
+  .hero-grid { grid-template-columns: 1.1fr 0.9fr; }
   .hero-figure { max-width: none; }
 }
 

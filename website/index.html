@@ -7,7 +7,7 @@
     <link rel="canonical" href="https://deew.dev/" />
     <meta
       name="description"
-      content="A fast CLI and GUI that wraps ffmpeg and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
+      content="A fast CLI and GUI that wraps ffmpeg, ffprobe and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
     />
     <meta name="theme-color" content="#223f8b" />
     <meta name="color-scheme" content="dark" />
@@ -16,7 +16,7 @@
     <meta property="og:title" content="Dolby Encoding Engine Wrapper" />
     <meta
       property="og:description"
-      content="A fast CLI and GUI that wraps ffmpeg and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
+      content="A fast CLI and GUI that wraps ffmpeg, ffprobe and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
     />
     <meta property="og:image" content="https://deew.dev/deew_dark.png" />
     <meta property="og:image:width" content="1080" />
@@ -34,6 +34,11 @@
       </symbol>
       <symbol id="i-windows" viewBox="0 0 21.434 21.5">
         <path d="M0,3.044,8.759,1.851l0,8.449-8.755.05Zm8.755,8.23.007,8.456-8.755-1.2V11.217l8.749.057ZM9.817,1.7,21.431,0V10.193l-11.614.092V1.7Zm11.617,9.658,0,10.147L9.817,19.861,9.8,11.334Z" />
+      </symbol>
+      <symbol id="i-crate" viewBox="0 0 24 24">
+        <path d="M12 2.6 20.2 7 12 11.4 3.8 7z" />
+        <path d="M3 8.4l8.3 4.4v9L3 17.4z" opacity=".75" />
+        <path d="M12.7 12.8 21 8.4v9l-8.3 4.4z" opacity=".55" />
       </symbol>
       <symbol id="i-linux" viewBox="0 0 24 24">
         <path fill-rule="evenodd" d="M12 1.8c2.7 0 4.4 2.1 4.4 5 0 1.7.5 2.7 1.5 4.1 1.2 1.7 2 3.6 2 5.6 0 2.5-2.2 4.2-4.9 4.4H9c-2.7-.2-4.9-1.9-4.9-4.4 0-2 .8-3.9 2-5.6 1-1.4 1.5-2.4 1.5-4.1 0-2.9 1.7-5 4.4-5zm0 8.6c-2.6 0-4.2 2.6-4.2 5.2 0 2.4 1.8 4 4.2 4s4.2-1.6 4.2-4c0-2.6-1.6-5.2-4.2-5.2zM10.4 5.3a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm3.2 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM10.7 8.1h2.6L12 9.5z" />
@@ -77,7 +82,7 @@
             <h1>Dolby Encoding Engine Wrapper</h1>
           </div>
           <p class="lead">
-            A fast CLI and GUI that wraps <b>ffmpeg</b> and
+            A fast CLI and GUI that wraps <b>ffmpeg</b>, <b>ffprobe</b> and
             <b>Dolby Encoding Engine</b> for Dolby-certified audio encoding (DD,
             DDP, AC4, TrueHD).
           </p>
@@ -92,7 +97,6 @@
             </a>
           </div>
           <p class="hint">
-            <span id="download-hint">Windows and Linux builds</span> &middot; always the latest release &middot;
             <a class="underline" href="https://github.com/pcrlnd/deew/releases">All releases &amp; changelogs</a>
           </p>
         </div>
@@ -126,13 +130,13 @@
           <li class="feature">
             <svg class="icon" aria-hidden="true"><use href="#i-circle-check" /></svg>
             <div class="feature-body">
-              <p>runs multiple encodes in parallel for batch encoding (see config)</p>
+              <p>automatic channel swapping for 7.1 sources (DEE swaps Ls Rs with Lrs Rrs for some reason)</p>
             </div>
           </li>
           <li class="feature">
             <svg class="icon" aria-hidden="true"><use href="#i-circle-check" /></svg>
             <div class="feature-body">
-              <p>supports WSL path conversion for the Windows version of DEE (see config)</p>
+              <p>runs multiple encodes in parallel for batch encoding (see config)</p>
             </div>
           </li>
           <li class="feature">
@@ -148,19 +152,19 @@
           <li class="feature">
             <svg class="icon" aria-hidden="true"><use href="#i-circle-check" /></svg>
             <div class="feature-body">
-              <p>automatic channel swapping for 7.1 sources (DEE swaps Ls Rs with Lrs Rrs for some reason)</p>
-            </div>
-          </li>
-          <li class="feature">
-            <svg class="icon" aria-hidden="true"><use href="#i-circle-check" /></svg>
-            <div class="feature-body">
-              <p>automatically compensates for DEE's 256 sample delay (DD and DDP encoding)</p>
+              <p>supports WSL path conversion for the Windows version of DEE (see config)</p>
             </div>
           </li>
           <li class="feature">
             <svg class="icon" aria-hidden="true"><use href="#i-circle-check" /></svg>
             <div class="feature-body">
               <p>works even with video inputs</p>
+            </div>
+          </li>
+          <li class="feature">
+            <svg class="icon" aria-hidden="true"><use href="#i-circle-check" /></svg>
+            <div class="feature-body">
+              <p>automatically compensates for DEE's 256 sample delay (DD and DDP encoding)</p>
             </div>
           </li>
           <li class="feature">
@@ -190,7 +194,7 @@
               <svg class="icon icon-fill i4" aria-hidden="true"><use href="#i-linux" /></svg> Linux
             </button>
             <button type="button" class="tab" role="tab" id="tab-source" aria-controls="panel-source" aria-selected="false" tabindex="-1">
-              Build from source
+              <svg class="icon icon-fill i4" aria-hidden="true"><use href="#i-crate" /></svg> Build from source
             </button>
           </div>
 
@@ -313,63 +317,24 @@
           </div>
         </div>
 
-        <div class="cards2">
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title">Requirements</h3>
-              <p class="card-desc">deew drives these tools, so they need to be installed.</p>
-            </div>
-            <div class="card-content stack">
-              <ul class="bullets">
-                <li>ffmpeg</li>
-                <li>ffprobe</li>
-                <li>Dolby Encoding Engine</li>
-              </ul>
-              <a class="ext-link" href="https://github.com/pcrlnd/deew#dolby-encoding-engine-installation">
-                How to set up Dolby Encoding Engine
-                <svg class="icon i35" aria-hidden="true"><use href="#i-external-link" /></svg>
-              </a>
-            </div>
+        <div class="card requirements">
+          <div class="card-header">
+            <h3 class="card-title">Requirements</h3>
+            <p class="card-desc">deew drives these tools, so they need to be installed.</p>
           </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title card-title-icon">
-                <svg class="icon icon-fill i5" aria-hidden="true"><use href="#i-github" /></svg> GitHub
-              </h3>
-              <p class="card-desc">Source, bug reports and help.</p>
-            </div>
-            <div class="card-content">
-              <ul class="links">
-                <li>
-                  <a class="ext-link" href="https://github.com/pcrlnd/deew">Source code
-                    <svg class="icon i35" aria-hidden="true"><use href="#i-external-link" /></svg></a>
-                </li>
-                <li>
-                  <a class="ext-link" href="https://github.com/pcrlnd/deew/issues">Issues
-                    <svg class="icon i35" aria-hidden="true"><use href="#i-external-link" /></svg></a>
-                </li>
-                <li>
-                  <a class="ext-link" href="https://github.com/pcrlnd/deew/wiki/Troubleshooting">Troubleshooting docs
-                    <svg class="icon i35" aria-hidden="true"><use href="#i-external-link" /></svg></a>
-                </li>
-              </ul>
-            </div>
+          <div class="card-content requirements-body">
+            <ul class="chips">
+              <li>ffmpeg</li>
+              <li>ffprobe</li>
+              <li>Dolby Encoding Engine</li>
+            </ul>
+            <a class="ext-link" href="https://github.com/pcrlnd/deew#dolby-encoding-engine-installation">
+              How to set up Dolby Encoding Engine
+              <svg class="icon i35" aria-hidden="true"><use href="#i-external-link" /></svg>
+            </a>
           </div>
         </div>
       </section>
     </main>
-
-    <footer class="footer">
-      <div class="container footer-inner">
-        <p>
-          deew &copy; <span id="year">2026</span>
-          <a class="underline" href="https://github.com/pcrlnd">pcroland</a>
-        </p>
-        <a class="gh-link" href="https://github.com/pcrlnd/deew">
-          <svg class="icon icon-fill i4" aria-hidden="true"><use href="#i-github" /></svg> GitHub
-        </a>
-      </div>
-    </footer>
   </body>
 </html>
