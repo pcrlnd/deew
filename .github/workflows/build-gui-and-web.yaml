@@ -2,12 +2,6 @@ name: Build GUI and web
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to upload to (empty = version from changelog.md)
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: write
@@ -27,7 +21,6 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_TAG: ${{ inputs.tag }}
         run: |
           repo="$GITHUB_REPOSITORY"
           files="deew deew.exe"
@@ -38,12 +31,9 @@ jobs:
               | grep -Fx $(printf -- '-e %s ' $files) || true
           }
 
-          tag="$INPUT_TAG"
+          tag=$(python -c "print(open('changelog.md', 'r').read().split('\n')[0].split(' ')[2].replace(':', ''))")
           if [ -z "$tag" ]; then
-            tag=$(python -c "print(open('changelog.md', 'r').read().split('\n')[0].split(' ')[2].replace(':', ''))")
-          fi
-          if [ -z "$tag" ]; then
-            echo "::error::Could not read the version from changelog.md. Pass the tag input."
+            echo "::error::Could not read the version from changelog.md"
             exit 1
           fi
 

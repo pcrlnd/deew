@@ -6,6 +6,12 @@ env:
 on:
   repository_dispatch:
   workflow_dispatch:
+    inputs:
+      copy_gui_and_web:
+        description: Copy deew-gui and deew-web from the newest older release that has them
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -134,3 +140,97 @@ jobs:
         run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+
+  copy-gui-and-web:
+    name: Copy GUI and web
+    runs-on: ubuntu-latest
+    needs: [linux-build, windows-build]
+    # The input is absent (null) for repository_dispatch, and null == true is false.
+    if: inputs.copy_gui_and_web == true
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Copy release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          files="deew-gui deew-web deew-gui.exe deew-web.exe"
+
+          # Names of the files above that the release has.
+          wanted_assets() {
+            gh release view "$1" --repo "$repo" --json assets -q '.assets[].name' \
+              | grep -Fx $(printf -- '-e %s ' $files) || true
+          }
+
+          to=$(python -c "print(open('changelog.md', 'r').read().split('\n')[0].split(' ')[2].replace(':', ''))")
+          if [ -z "$to" ]; then
+            echo "::error::Could not read the version from changelog.md"
+            exit 1
+          fi
+
+          # Releases are listed newest first: take the first other one that has the files.
+          from=""
+          for tag in $(gh release list --repo "$repo" --exclude-drafts --limit 100 --json tagName -q '.[].tagName'); do
+            if [ "$tag" != "$to" ] && [ -n "$(wanted_assets "$tag")" ]; then
+              from="$tag"
+              break
+            fi
+          done
+          if [ -z "$from" ]; then
+            echo "::error::No other release with deew-gui or deew-web found"
+            exit 1
+          fi
+
+          assets=$(wanted_assets "$from")
+          for file in $files; do
+            echo "$assets" | grep -Fxq "$file" || echo "::warning::Release $from has no $file, skipping it"
+          done
+
+          # Never overwrite what the target release already has.
+          have=$(wanted_assets "$to")
+          copy=""
+          for file in $assets; do
+            if echo "$have" | grep -Fxq "$file"; then
+              echo "Release $to already has $file, skipping it"
+            else
+              copy="$copy $file"
+            fi
+          done
+          if [ -z "$copy" ]; then
+            echo "Nothing to copy to $to"
+            exit 0
+          fi
+
+          echo "Copying from $from to $to:" $copy
+          mkdir dl
+          for file in $copy; do
+            gh release download "$from" --repo "$repo" --dir dl --pattern "$file"
+          done
+          gh release upload "$to" dl/* --repo "$repo"
+
+      # Posting is best effort: a failure is logged as a warning, the run stays green.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        continue-on-error: true
+        with:
+          python-version: '3.x'
+
+      - name: Install requests
+        run: python -m pip install requests || echo "::warning::Installing requests failed"
+
+      - name: Posting changelog to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CH1: ${{ secrets.TG_CH1 }}
+          TG_CH2: ${{ secrets.TG_CH2 }}
+        run: |
+          python dev_scripts/telegram.py "$TG_TOKEN" "$TG_CH1" || echo "::warning::Posting changelog to Telegram (TG_CH1) failed"
+          python dev_scripts/telegram.py "$TG_TOKEN" "$TG_CH2" || echo "::warning::Posting changelog to Telegram (TG_CH2) failed"
+
+      - name: Posting changelog to Doom9
+        env:
+          DOOM9_PASSWORD: ${{ secrets.DOOM9_PASSWORD }}
+        run: python dev_scripts/doom9.py "$DOOM9_PASSWORD" || echo "::warning::Posting changelog to Doom9 failed"
