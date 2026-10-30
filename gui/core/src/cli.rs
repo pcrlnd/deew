@@ -1,5 +1,6 @@
 //! Discovery and version of the deew CLI that the GUI runs.
 
+use crate::settings::GuiSettings;
 use std::path::{Path, PathBuf};
 
 /// File names under which the deew CLI is looked up next to the executable.
@@ -90,6 +91,16 @@ pub fn cli_version() -> Result<String, String> {
 /// Empty when there is no CLI, config or table: nothing the UI has to show.
 pub fn default_bitrates() -> std::collections::BTreeMap<String, i64> {
     crate::probe::default_bitrates(config_path().as_deref())
+}
+
+/// The `[gui]` settings of the config next to the CLI (defaults when missing).
+pub fn gui_settings() -> GuiSettings {
+    crate::settings::load(config_path().as_deref())
+}
+
+/// Saves the `[gui]` settings into the config next to the CLI.
+pub fn save_gui_settings(settings: &GuiSettings) -> Result<(), String> {
+    crate::settings::save(config_path().as_deref(), settings)
 }
 
 /// Probes the inputs (directories are expanded like the CLI does) with the

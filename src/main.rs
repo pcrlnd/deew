@@ -4,6 +4,7 @@ mod config;
 mod data;
 mod encode;
 mod error;
+mod events;
 mod help;
 mod info;
 mod jobxml;
@@ -34,6 +35,7 @@ fn exit_quietly_on_broken_pipe() {
 
 fn main() {
     exit_quietly_on_broken_pipe();
+    events::init();
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
     if argv.is_empty() {

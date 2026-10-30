@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to upload to (empty = latest release)
+        description: Release tag to upload to (empty = version from changelog.md)
         required: false
         type: string
         default: ''
@@ -20,20 +20,66 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
 
     steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
       - name: Resolve release tag
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
+          repo="$GITHUB_REPOSITORY"
+          files="deew deew.exe"
+
+          # Names of the files above that the release has.
+          wanted_assets() {
+            gh release view "$1" --repo "$repo" --json assets -q '.assets[].name' \
+              | grep -Fx $(printf -- '-e %s ' $files) || true
+          }
+
           tag="$INPUT_TAG"
           if [ -z "$tag" ]; then
-            tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName) || true
+            tag=$(python -c "print(open('changelog.md', 'r').read().split('\n')[0].split(' ')[2].replace(':', ''))")
           fi
           if [ -z "$tag" ]; then
-            echo "::error::No release found. Create a release first or pass the tag input."
+            echo "::error::Could not read the version from changelog.md. Pass the tag input."
             exit 1
           fi
+
+          if gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
+            echo "Release $tag exists, uploading to it"
+          else
+            python -c "print('\n'.join(open('changelog.md', 'r').read().split('\n\n# deew')[0].split('\n')[1:]))" > changelog.txt
+            gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" --title "$tag" --notes-file changelog.txt
+            echo "Created release $tag"
+
+            # Releases are listed newest first: take the first other one that has the CLI binaries.
+            from=""
+            for old in $(gh release list --repo "$repo" --exclude-drafts --limit 100 --json tagName -q '.[].tagName'); do
+              if [ "$old" != "$tag" ] && [ -n "$(wanted_assets "$old")" ]; then
+                from="$old"
+                break
+              fi
+            done
+
+            if [ -z "$from" ]; then
+              echo "::warning::No release with deew or deew.exe found, $tag has no CLI binaries"
+            else
+              assets=$(wanted_assets "$from")
+              for file in $files; do
+                echo "$assets" | grep -Fxq "$file" || echo "::warning::Release $from has no $file, skipping it"
+              done
+
+              mkdir dl
+              for file in $assets; do
+                gh release download "$from" --repo "$repo" --dir dl --pattern "$file"
+              done
+              gh release upload "$tag" dl/* --repo "$repo"
+              echo "Copied" $assets "from $from to $tag"
+            fi
+          fi
+
           echo "Uploading to release: $tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 

@@ -1,8 +1,9 @@
 //! Running one input through ffmpeg and DEE, with progress reporting.
 
 use crate::error::escape;
+use crate::events;
 use crate::plan::Format;
-use crate::ui::{Bar, DESCRIPTION_WIDTH, Ui};
+use crate::ui::{Bar, DESCRIPTION_WIDTH, Stage, Ui};
 use crate::util::{basename, clamp_i, file_name, trim_names, version_ge};
 use regex::Regex;
 use std::io::Read;
@@ -252,6 +253,7 @@ fn cleanup(job: &Job, options: &Options, ui: &Ui) {
                 "[bold yellow]Failed to delete:[/bold yellow] {}",
                 escape(&job.wav_path)
             ));
+            events::warning(&format!("Failed to delete: {}", job.wav_path));
         }
         let _ = std::fs::remove_file(&job.xml_path);
     }
@@ -279,7 +281,7 @@ fn spawn(args: &[String], stdout: Stdio, stderr: Stdio) -> Result<Child, String>
 fn run_ffmpeg(job: &Job, name: &str, bar: &Bar) -> Result<(), String> {
     let mut child = spawn(&job.ffmpeg_args, Stdio::null(), Stdio::piped())?;
     let stderr = child.stderr.take().expect("piped stderr");
-    bar.describe(&desc_ffmpeg(name));
+    bar.describe(&desc_ffmpeg(name), Stage::Ffmpeg, None);
     if job.length == -1.0 {
         bar.indeterminate();
         for_each_line(stderr, |_| {});
@@ -300,9 +302,9 @@ fn run_ffmpeg(job: &Job, name: &str, bar: &Bar) -> Result<(), String> {
 /// DEE: measures the loudness and encodes.
 fn run_dee(job: &Job, options: &Options, name: &str, bar: &Bar, ui: &Ui) -> Result<(), String> {
     if options.dialnorm_set && job.format == Format::Thd {
-        bar.describe(&desc_encode(name));
+        bar.describe(&desc_encode(name), Stage::Encode, None);
     } else {
-        bar.describe(&desc_measure(name));
+        bar.describe(&desc_measure(name), Stage::Measure, None);
     }
     bar.percent(0.0);
     let mut child = spawn(&job.dee_args, Stdio::piped(), Stdio::null())?;
@@ -312,14 +314,26 @@ fn run_dee(job: &Job, options: &Options, name: &str, bar: &Bar, ui: &Ui) -> Resu
         for event in parser.feed(line) {
             match event {
                 DeeEvent::Measured(db) => {
-                    bar.describe(&desc_measured(name, db, options.measure_only));
+                    let stage = if options.measure_only {
+                        Stage::Measure
+                    } else {
+                        Stage::Encode
+                    };
+                    bar.describe(
+                        &desc_measured(name, db, options.measure_only),
+                        stage,
+                        Some(db),
+                    );
                     if options.measure_only {
                         bar.percent(100.0);
                         let _ = child.kill();
                     }
                 }
                 DeeEvent::Progress(percent) => bar.percent(percent),
-                DeeEvent::Error(message) => ui.say_raw(&message),
+                DeeEvent::Error(message) => {
+                    events::error(&message);
+                    ui.say_raw(&message);
+                }
             }
         }
     });
@@ -331,7 +345,7 @@ fn run_dee(job: &Job, options: &Options, name: &str, bar: &Bar, ui: &Ui) -> Resu
 /// Encode one input. `Err` if a program could not be started.
 pub fn run_job(job: &Job, options: &Options, bar: &Bar, ui: &Ui) -> Result<(), String> {
     let name = file_name(&job.input);
-    bar.describe(&desc_starting());
+    bar.describe(&desc_starting(), Stage::Starting, None);
     let result = (|| {
         if !job.intermediate_exists {
             run_ffmpeg(job, name, bar)?;

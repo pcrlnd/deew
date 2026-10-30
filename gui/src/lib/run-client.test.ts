@@ -73,6 +73,9 @@ describe("parseServerMessage", () => {
       type: "error",
       message: "boom",
     })
+    expect(
+      parseServerMessage('{"type":"progress","data":"{\\"type\\":\\"done\\"}"}')
+    ).toEqual({ type: "progress", data: '{"type":"done"}' })
   })
 
   it("knows ping", () => {
@@ -86,6 +89,8 @@ describe("parseServerMessage", () => {
     expect(parseServerMessage('{"type":"state"}')).toBeNull()
     expect(parseServerMessage('{"type":"started","args":[1]}')).toBeNull()
     expect(parseServerMessage('{"type":"error"}')).toBeNull()
+    expect(parseServerMessage('{"type":"progress"}')).toBeNull()
+    expect(parseServerMessage('{"type":"progress","data":1}')).toBeNull()
   })
 })
 
@@ -125,6 +130,7 @@ describe("RunClient", () => {
       onOutput: vi.fn<RunClientHandlers["onOutput"]>(),
       onExit: vi.fn<RunClientHandlers["onExit"]>(),
       onError: vi.fn<RunClientHandlers["onError"]>(),
+      onProgress: vi.fn<RunClientHandlers["onProgress"]>(),
       onClose: vi.fn<NonNullable<RunClientHandlers["onClose"]>>(),
     }
     client = new RunClient({
@@ -153,18 +159,29 @@ describe("RunClient", () => {
     socket.receive('{"type":"started","args":["b"]}')
     socket.receive('{"type":"exit","code":3}')
     socket.receive('{"type":"error","message":"nope"}')
+    socket.receive('{"type":"progress","data":"line"}')
     socket.receive("garbage")
     expect(handlers.onState).toHaveBeenCalledWith(true, ["a"])
     expect(handlers.onOutput).toHaveBeenCalledWith(new Uint8Array([104, 105]))
     expect(handlers.onStarted).toHaveBeenCalledWith(["b"])
     expect(handlers.onExit).toHaveBeenCalledWith(3)
     expect(handlers.onError).toHaveBeenCalledWith("nope")
+    expect(handlers.onProgress).toHaveBeenCalledWith("line")
   })
 
   it("sends JSON only while connected", () => {
     client.connect()
     const [socket] = sockets
     expect(client.send({ type: "stop" })).toBe(false)
+    expect(
+      client.send({
+        type: "start",
+        args: [],
+        cols: 80,
+        rows: 24,
+        native: true,
+      })
+    ).toBe(false)
     socket.open()
     expect(client.send({ type: "input", data: "y" })).toBe(true)
     expect(JSON.parse(socket.sent[0])).toEqual({ type: "input", data: "y" })

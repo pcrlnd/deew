@@ -4,6 +4,7 @@
 //! tested with plain `cargo test`.
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +18,8 @@ pub type Result<T> = std::result::Result<T, String>;
 /// pseudo-terminal is closed forcibly (needed on Windows, where ConPTY keeps
 /// the output pipe open until the console is closed).
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
+/// Time between two reads of the events file while it has no new data.
+const EVENTS_POLL: Duration = Duration::from_millis(50);
 /// Time between the polite interrupt and the hard kill in [`PtySession::stop`].
 #[cfg(unix)]
 const STOP_GRACE: Duration = Duration::from_secs(3);
@@ -28,6 +31,9 @@ pub struct SpawnConfig {
     pub rows: u16,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
+    /// Give the program a file in `DEEW_EVENTS_FILE` to write JSON lines to
+    /// and report them through `on_event`.
+    pub events: bool,
 }
 
 type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
@@ -54,9 +60,16 @@ fn size(cols: u16, rows: u16) -> PtySize {
 /// `on_output` receives the raw bytes the program writes (on a reader
 /// thread). `on_exit` is called exactly once, after all output has been
 /// delivered, with the exit code.
+///
+/// With `config.events` the program also gets an empty temp file whose path
+/// is in `DEEW_EVENTS_FILE`. Every complete line the program appends to it is
+/// passed to `on_event` (without the line ending, empty lines skipped), on a
+/// tail thread. The last lines are delivered before `on_exit` is called, and
+/// the file is deleted afterwards.
 pub fn spawn(
     config: SpawnConfig,
     mut on_output: impl FnMut(&[u8]) + Send + 'static,
+    on_event: impl FnMut(&str) + Send + 'static,
     on_exit: impl FnOnce(i32) + Send + 'static,
 ) -> Result<PtySession> {
     let pair = native_pty_system()
@@ -66,9 +79,27 @@ pub fn spawn(
     let mut cmd = CommandBuilder::new(&config.program);
     cmd.args(&config.args);
     cmd.env("TERM", "xterm-256color");
+    // Never pass on a value inherited from our own environment.
+    cmd.env_remove("DEEW_EVENTS_FILE");
     for (key, value) in &config.env {
         cmd.env(key, value);
     }
+    // The read handle is opened before the child starts, so that no fallible
+    // step is left once it runs. std opens files with all share modes on
+    // Windows, so the CLI can keep appending to the file while we read it.
+    let events = if config.events {
+        let path = tempfile::Builder::new()
+            .prefix("deew-events-")
+            .suffix(".jsonl")
+            .tempfile()
+            .map_err(|e| format!("could not create the events file: {e}"))?
+            .into_temp_path();
+        let file = File::open(&path).map_err(|e| format!("could not open the events file: {e}"))?;
+        cmd.env("DEEW_EVENTS_FILE", path.as_os_str());
+        Some((file, path))
+    } else {
+        None
+    };
     if let Some(cwd) = &config.cwd {
         cmd.cwd(cwd);
     }
@@ -106,6 +137,17 @@ pub fn spawn(
         let _ = done_tx.send(());
     });
 
+    // The tail ends (after a last read) when `events_done` is set.
+    let events_done = Arc::new(AtomicBool::new(false));
+    let tail = match events {
+        Some((file, path)) => {
+            let done = Arc::clone(&events_done);
+            let handle = std::thread::spawn(move || tail_lines(file, &done, on_event));
+            Some((handle, path))
+        }
+        None => None,
+    };
+
     let waiter_master = Arc::clone(&master);
     let waiter_exited = Arc::clone(&exited);
     std::thread::spawn(move || {
@@ -121,6 +163,11 @@ pub fn spawn(
             }
             let _ = done_rx.recv_timeout(Duration::from_secs(2));
         }
+        if let Some((handle, path)) = tail {
+            events_done.store(true, Ordering::SeqCst);
+            let _ = handle.join();
+            drop(path); // deletes the file
+        }
         on_exit(code);
     });
 
@@ -131,6 +178,49 @@ pub fn spawn(
         pid,
         exited,
     })
+}
+
+/// Reads `file` as it grows and calls `on_line` for every line. Once `done`
+/// is set it reads the rest, delivers a last line without line ending too,
+/// and returns.
+fn tail_lines(mut file: File, done: &AtomicBool, mut on_line: impl FnMut(&str)) {
+    let mut pending: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        // Checked before reading, so the final read sees everything written
+        // before the flag was set.
+        let finishing = done.load(Ordering::SeqCst);
+        let mut got_data = false;
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    got_data = true;
+                    pending.extend_from_slice(&buf[..n]);
+                }
+            }
+        }
+        let mut start = 0;
+        while let Some(pos) = pending[start..].iter().position(|&b| b == b'\n') {
+            emit_line(&pending[start..start + pos], &mut on_line);
+            start += pos + 1;
+        }
+        pending.drain(..start);
+        if finishing {
+            emit_line(&pending, &mut on_line);
+            return;
+        }
+        if !got_data {
+            std::thread::sleep(EVENTS_POLL);
+        }
+    }
+}
+
+fn emit_line(line: &[u8], on_line: &mut impl FnMut(&str)) {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if !line.is_empty() {
+        on_line(&String::from_utf8_lossy(line));
+    }
 }
 
 impl PtySession {
@@ -227,13 +317,25 @@ mod tests {
         #[cfg_attr(windows, allow(dead_code))] // keeps the session alive; only read by unix tests
         session: PtySession,
         output: Arc<Mutex<Vec<u8>>>,
-        exit: mpsc::Receiver<i32>,
+        exit: mpsc::Receiver<(i32, Vec<String>)>,
     }
 
     impl Run {
         fn start(program: &Path, args: &[&str], env: Vec<(String, String)>) -> Run {
+            Run::start_with(program, args, env, false)
+        }
+
+        fn start_with(
+            program: &Path,
+            args: &[&str],
+            env: Vec<(String, String)>,
+            events: bool,
+        ) -> Run {
             let output = Arc::new(Mutex::new(Vec::new()));
             let sink = Arc::clone(&output);
+            let events_log = Arc::new(Mutex::new(Vec::new()));
+            let event_sink = Arc::clone(&events_log);
+            let event_log = Arc::clone(&events_log);
             let (tx, exit) = mpsc::channel();
             let session = spawn(
                 SpawnConfig {
@@ -243,10 +345,13 @@ mod tests {
                     rows: 30,
                     cwd: None,
                     env,
+                    events,
                 },
                 move |bytes| sink.lock().unwrap().extend_from_slice(bytes),
+                move |line| event_sink.lock().unwrap().push(line.to_string()),
                 move |code| {
-                    let _ = tx.send(code);
+                    // Everything must have been delivered by now.
+                    let _ = tx.send((code, event_log.lock().unwrap().clone()));
                 },
             )
             .expect("spawn");
@@ -261,10 +366,15 @@ mod tests {
             String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
         }
 
-        fn wait_exit(&self) -> i32 {
+        /// Exit code and the events delivered until the exit callback ran.
+        fn wait_exit_events(&self) -> (i32, Vec<String>) {
             self.exit
                 .recv_timeout(Duration::from_secs(20))
                 .expect("process did not exit in time")
+        }
+
+        fn wait_exit(&self) -> i32 {
+            self.wait_exit_events().0
         }
 
         #[cfg(unix)]
@@ -337,7 +447,9 @@ mod tests {
                 rows: 24,
                 cwd: None,
                 env: vec![],
+                events: false,
             },
+            |_| {},
             |_| {},
             |_| {},
         );
@@ -350,6 +462,49 @@ mod tests {
 
         fn sh(script: &str) -> Run {
             Run::start(Path::new("/bin/sh"), &["-c", script], vec![])
+        }
+
+        fn sh_events(script: &str) -> Run {
+            Run::start_with(Path::new("/bin/sh"), &["-c", script], vec![], true)
+        }
+
+        #[test]
+        fn events_arrive_in_order_before_the_exit() {
+            let run = sh_events(
+                "echo \"path:$DEEW_EVENTS_FILE\"; \
+                 echo '{\"a\":1}' >> \"$DEEW_EVENTS_FILE\"; \
+                 printf '\\n{\"a\":2}\\r\\n' >> \"$DEEW_EVENTS_FILE\"; \
+                 sleep 0.3; \
+                 printf '{\"a\":3}' >> \"$DEEW_EVENTS_FILE\"; \
+                 printf '{\"a\":4}\\n{\"a\"' >> \"$DEEW_EVENTS_FILE\"; \
+                 printf ':5}' >> \"$DEEW_EVENTS_FILE\"",
+            );
+            let (code, events) = run.wait_exit_events();
+            assert_eq!(code, 0);
+            assert_eq!(
+                events,
+                [
+                    r#"{"a":1}"#,
+                    r#"{"a":2}"#,
+                    r#"{"a":3}{"a":4}"#,
+                    r#"{"a":5}"#
+                ]
+            );
+            let text = run.text();
+            let path = text
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("path:"))
+                .expect("path printed");
+            let name = Path::new(path).file_name().unwrap().to_str().unwrap();
+            assert!(name.starts_with("deew-events-") && name.ends_with(".jsonl"));
+            assert!(Path::new(path).is_absolute());
+            assert!(!Path::new(path).exists(), "events file was not removed");
+        }
+
+        #[test]
+        fn no_events_file_without_events() {
+            let run = sh("test -z \"$DEEW_EVENTS_FILE\"");
+            assert_eq!(run.wait_exit_events(), (0, vec![]));
         }
 
         #[test]

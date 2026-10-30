@@ -3,6 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use deew_gui_core::cli;
 use deew_gui_core::probe::ProbeResult;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
+use deew_gui_core::settings::GuiSettings;
 use serde::Serialize;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +19,9 @@ use tauri_plugin_opener::OpenerExt;
 enum RunEvent {
     /// Raw terminal output, base64 encoded.
     Output(String),
+    /// One raw event line (JSON) that the CLI wrote to its events file.
+    /// Only sent when the run was started with `native`.
+    Progress(String),
     /// The process ended. `code` is its exit code.
     Exit { code: Option<i32> },
 }
@@ -42,7 +46,8 @@ fn lock(runner: &Runner) -> Result<std::sync::MutexGuard<'_, Option<ActiveSessio
 
 /// Starts deew inside a pseudo-terminal and streams its output to
 /// `on_output`. Returns as soon as the process is started; the end of the
-/// process is reported as [`RunEvent::Exit`].
+/// process is reported as [`RunEvent::Exit`]. With `native` the CLI also
+/// reports structured events, sent as [`RunEvent::Progress`].
 #[tauri::command]
 async fn run_deew(
     app: AppHandle,
@@ -50,6 +55,7 @@ async fn run_deew(
     args: Vec<String>,
     cols: u16,
     rows: u16,
+    native: bool,
     on_output: Channel<RunEvent>,
 ) -> Result<(), String> {
     let mut active = lock(&runner)?;
@@ -67,14 +73,19 @@ async fn run_deew(
         // meaningful one (`/` on macOS, `/usr/bin` for a deb), so use $HOME.
         cwd: app.path().home_dir().ok(),
         env: vec![("COLORTERM".into(), "truecolor".into())],
+        events: native,
     };
 
     let output = on_output.clone();
+    let events = on_output.clone();
     let exit_app = app.clone();
     let session = pty_session::spawn(
         config,
         move |bytes| {
             let _ = output.send(RunEvent::Output(BASE64.encode(bytes)));
+        },
+        move |line| {
+            let _ = events.send(RunEvent::Progress(line.to_string()));
         },
         move |code| {
             // Free the slot before announcing the end, so that the frontend
@@ -137,6 +148,22 @@ async fn probe_inputs(inputs: Vec<String>, track_index: u32) -> Result<ProbeResu
         .map_err(|e| format!("probing failed: {e}"))?
 }
 
+/// The `[gui]` settings of the config next to the CLI (defaults when missing).
+#[tauri::command]
+async fn gui_settings() -> GuiSettings {
+    tauri::async_runtime::spawn_blocking(cli::gui_settings)
+        .await
+        .unwrap_or_default()
+}
+
+/// Saves the `[gui]` settings into the config next to the CLI.
+#[tauri::command]
+async fn save_gui_settings(settings: GuiSettings) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || cli::save_gui_settings(&settings))
+        .await
+        .map_err(|e| format!("saving the settings failed: {e}"))?
+}
+
 /// The version of the deew CLI that the GUI runs (`deew -v`).
 #[tauri::command]
 async fn cli_version() -> Result<String, String> {
@@ -194,7 +221,9 @@ pub fn run() {
             stop,
             probe_inputs,
             default_bitrates,
-            cli_version
+            cli_version,
+            gui_settings,
+            save_gui_settings
         ])
         .setup(|app| {
             match app.get_webview_window("main") {
@@ -236,6 +265,12 @@ mod tests {
         assert_eq!(
             output,
             serde_json::json!({"event": "output", "data": "aGk="})
+        );
+        let progress =
+            serde_json::to_value(RunEvent::Progress(r#"{"type":"done","job":0}"#.into())).unwrap();
+        assert_eq!(
+            progress,
+            serde_json::json!({"event": "progress", "data": "{\"type\":\"done\",\"job\":0}"})
         );
         let exit = serde_json::to_value(RunEvent::Exit { code: Some(2) }).unwrap();
         assert_eq!(

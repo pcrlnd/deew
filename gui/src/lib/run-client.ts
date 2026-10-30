@@ -6,10 +6,17 @@ export type ServerMessage =
   | { type: "started"; args: string[] }
   | { type: "exit"; code: number | null }
   | { type: "error"; message: string }
+  | { type: "progress"; data: string }
   | { type: "ping" }
 
 export type ClientMessage =
-  | { type: "start"; args: string[]; cols: number; rows: number }
+  | {
+      type: "start"
+      args: string[]
+      cols: number
+      rows: number
+      native: boolean
+    }
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "stop" }
@@ -45,6 +52,10 @@ export function parseServerMessage(text: string): ServerMessage | null {
     case "error":
       return typeof m.message === "string"
         ? { type: "error", message: m.message }
+        : null
+    case "progress":
+      return typeof m.data === "string"
+        ? { type: "progress", data: m.data }
         : null
     case "ping":
       return { type: "ping" }
@@ -100,6 +111,8 @@ export interface RunClientHandlers {
   onOutput: (bytes: Uint8Array) => void
   onExit: (code: number | null) => void
   onError: (message: string) => void
+  /** One raw progress event line (see lib/progress.ts). */
+  onProgress: (line: string) => void
   /** The socket closed; `opened` is false if it never got connected. */
   onClose?: (opened: boolean) => void
 }
@@ -277,6 +290,9 @@ export class RunClient {
         break
       case "error":
         h.onError(message.message)
+        break
+      case "progress":
+        h.onProgress(message.data)
         break
       case "ping":
         break

@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
 
 pub const REPLAY_CAPACITY: usize = 1024 * 1024;
+/// Stored event lines other than `progress` ones (the oldest are dropped).
+pub const EVENT_LOG_CAPACITY: usize = 1000;
 /// Messages a socket may lag behind before it is disconnected.
 pub const SUBSCRIBER_QUEUE: usize = 256;
 
@@ -57,10 +59,65 @@ impl RingBuffer {
     }
 }
 
+/// The event lines of the CLI (see `Event::Progress`) kept for clients that
+/// connect later. Only the newest `progress` line of each job is kept, in the
+/// place of the first one; the other lines are kept in order, up to
+/// `EVENT_LOG_CAPACITY` of them.
+#[derive(Default)]
+pub struct EventLog {
+    /// `Some(job)` for `progress` lines.
+    lines: Vec<(Option<u64>, String)>,
+    other: usize,
+}
+
+impl EventLog {
+    /// Only `type` and `job` are read; a line that is not a JSON object with
+    /// them is a plain line.
+    fn progress_job(line: &str) -> Option<u64> {
+        #[derive(serde::Deserialize)]
+        struct Head {
+            r#type: String,
+            job: u64,
+        }
+        let head: Head = serde_json::from_str(line).ok()?;
+        (head.r#type == "progress").then_some(head.job)
+    }
+
+    pub fn push(&mut self, line: &str) {
+        match Self::progress_job(line) {
+            Some(job) => match self.lines.iter_mut().find(|(j, _)| *j == Some(job)) {
+                Some(entry) => entry.1 = line.to_string(),
+                None => self.lines.push((Some(job), line.to_string())),
+            },
+            None => {
+                self.lines.push((None, line.to_string()));
+                self.other += 1;
+                if self.other > EVENT_LOG_CAPACITY
+                    && let Some(oldest) = self.lines.iter().position(|(j, _)| j.is_none())
+                {
+                    self.lines.remove(oldest);
+                    self.other -= 1;
+                }
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+        self.other = 0;
+    }
+
+    pub fn snapshot(&self) -> Vec<String> {
+        self.lines.iter().map(|(_, line)| line.clone()).collect()
+    }
+}
+
 /// What subscribers receive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Output(Bytes),
+    /// One raw event line (JSON) written by the CLI.
+    Progress(String),
     Started(Vec<String>),
     Exit(Option<i32>),
 }
@@ -77,6 +134,7 @@ struct Inner {
     running: bool,
     args: Option<Vec<String>>,
     buffer: RingBuffer,
+    events: EventLog,
     subscribers: Vec<Subscriber>,
 }
 
@@ -99,6 +157,8 @@ pub struct Subscription {
     pub args: Option<Vec<String>>,
     /// Buffered output so far.
     pub replay: Vec<u8>,
+    /// Stored event lines so far (see [`EventLog`]), sent before `replay`.
+    pub progress: Vec<String>,
     pub events: mpsc::Receiver<Event>,
 }
 
@@ -118,6 +178,7 @@ impl Job {
                 running: false,
                 args: None,
                 buffer: RingBuffer::new(REPLAY_CAPACITY),
+                events: EventLog::default(),
                 subscribers: Vec::new(),
             })),
             program,
@@ -146,6 +207,11 @@ impl Job {
             } else {
                 Vec::new()
             },
+            progress: if inner.running {
+                inner.events.snapshot()
+            } else {
+                Vec::new()
+            },
             events,
         }
     }
@@ -154,7 +220,14 @@ impl Job {
         lock(&self.inner).subscribers.retain(|s| s.id != id);
     }
 
-    pub fn start(&self, args: Vec<String>, cols: u16, rows: u16) -> Result<(), String> {
+    /// `native` also reports the structured events of the CLI.
+    pub fn start(
+        &self,
+        args: Vec<String>,
+        cols: u16,
+        rows: u16,
+        native: bool,
+    ) -> Result<(), String> {
         let program = match &self.program {
             Some(program) => program.clone(),
             None => cli::sidecar_path()?,
@@ -171,8 +244,10 @@ impl Job {
             rows,
             cwd: std::env::home_dir(),
             env: vec![("COLORTERM".into(), "truecolor".into())],
+            events: native,
         };
         let out_inner = Arc::clone(&self.inner);
+        let event_inner = Arc::clone(&self.inner);
         let exit_inner = Arc::clone(&self.inner);
         // The callbacks run on other threads and wait for this lock, so they
         // cannot observe the state before it is complete.
@@ -183,6 +258,13 @@ impl Job {
                 if inner.job_id == job_id {
                     inner.buffer.push(bytes);
                     inner.broadcast(Event::Output(Bytes::copy_from_slice(bytes)));
+                }
+            },
+            move |line| {
+                let mut inner = lock(&event_inner);
+                if inner.job_id == job_id {
+                    inner.events.push(line);
+                    inner.broadcast(Event::Progress(line.to_string()));
                 }
             },
             move |code| {
@@ -199,6 +281,7 @@ impl Job {
         inner.running = true;
         inner.args = Some(args.clone());
         inner.buffer.clear();
+        inner.events.clear();
         inner.broadcast(Event::Started(args));
         Ok(())
     }
@@ -259,6 +342,74 @@ mod tests {
             b.push(&chunk);
         }
         assert_eq!(b.snapshot(), all[all.len() - 7..]);
+    }
+
+    fn progress(job: u64, percent: u32) -> String {
+        format!(r#"{{"type":"progress","job":{job},"stage":"encode","percent":{percent}}}"#)
+    }
+
+    #[test]
+    fn event_log_keeps_the_newest_progress_per_job_in_place() {
+        let mut log = EventLog::default();
+        log.push(r#"{"type":"hello","version":"1"}"#);
+        log.push(&progress(0, 1));
+        log.push(&progress(1, 2));
+        log.push(r#"{"type":"warning","text":"w"}"#);
+        log.push(&progress(0, 50));
+        log.push(&progress(1, 60));
+        log.push(&progress(0, 99));
+        assert_eq!(
+            log.snapshot(),
+            [
+                r#"{"type":"hello","version":"1"}"#.to_string(),
+                progress(0, 99),
+                progress(1, 60),
+                r#"{"type":"warning","text":"w"}"#.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn event_log_treats_unparsable_lines_as_plain() {
+        let mut log = EventLog::default();
+        log.push("not json");
+        log.push("not json");
+        // A progress line without a job cannot be replaced.
+        log.push(r#"{"type":"progress"}"#);
+        log.push(r#"{"type":"progress","job":"x"}"#);
+        assert_eq!(log.snapshot().len(), 4);
+    }
+
+    #[test]
+    fn event_log_caps_other_lines_and_keeps_progress() {
+        let mut log = EventLog::default();
+        log.push(&progress(0, 5));
+        for i in 0..EVENT_LOG_CAPACITY + 20 {
+            log.push(&format!(r#"{{"type":"warning","text":"{i}"}}"#));
+        }
+        log.push(&progress(0, 6));
+        let lines = log.snapshot();
+        assert_eq!(lines.len(), EVENT_LOG_CAPACITY + 1);
+        assert_eq!(lines[0], progress(0, 6));
+        assert_eq!(lines[1], r#"{"type":"warning","text":"20"}"#);
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!(
+                r#"{{"type":"warning","text":"{}"}}"#,
+                EVENT_LOG_CAPACITY + 19
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn event_log_is_cleared_on_start() {
+        let job = Job::new(Some(PathBuf::from("/bin/sh")));
+        lock(&job.inner).events.push(&progress(0, 1));
+        job.start(vec!["-c".into(), "true".into()], 80, 24, false)
+            .unwrap();
+        assert!(lock(&job.inner).events.snapshot().is_empty());
+        assert!(job.subscribe().progress.is_empty());
     }
 
     #[test]

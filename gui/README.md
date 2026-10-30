@@ -83,11 +83,37 @@ Security notes:
 - The pages are served with a strict CSP (no inline scripts), which is why the
   theme snippet lives in `public/theme-init.js`.
 
+## Output: CLI or GUI
+
+The toggle after the Stop button picks what the window shows of a run:
+
+- **CLI** (default): the terminal output of the CLI.
+- **GUI**: native progress bars per file, warnings and errors as lines, and the
+  CLI's y/n questions as pop-up dialogs. The terminal stays available in a
+  collapsible "CLI output" section (it opens by itself for the Utilities menu
+  commands, which have no progress).
+
+The mode of a run is fixed when it starts, so the toggle is disabled while a job
+runs. The choice is saved in the CLI's config (same in `deew-web`), in its own
+section, and can also be edited by hand:
+
+```toml
+[gui]
+    progress = 'cli' # or 'native'
+```
+
+The toggle only edits an existing `config.toml` (run deew once to create it);
+otherwise it shows "Setting not saved". The GUI mode reads progress events that
+the CLI writes when `DEEW_EVENTS_FILE` is set, so it needs deew 3.6.2 or newer.
+Both `deew-gui` and `deew-web` run the `deew` binary next to them; with an older
+one the GUI mode shows a note that the CLI does not report progress, switch to
+CLI output then.
+
 ## Layout
 
 - `src/lib/deew-args.ts`: option state to argv and display quoting (unit tested)
 - `src/lib/runner.ts`: Tauri / web transport; `web-api.ts`, `run-client.ts`: HTTP and WebSocket client of the web mode
-- `src/components/`: title bar, utilities menu, options form, command bar, terminal pane
+- `src/components/`: title bar, utilities menu, options form, command bar, terminal pane, progress pane
 - `core/src/pty_session.rs`: Tauri-independent PTY session (unit tested)
 - `core/`: Tauri-independent backend (CLI discovery, probing, PTY session)
 - `src-tauri/src/lib.rs`: Tauri commands `run_deew`, `write_stdin`, `resize`, `stop`

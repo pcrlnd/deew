@@ -83,11 +83,37 @@ Biztonsági megjegyzések:
 - Az oldalak szigorú CSP-vel mennek ki (nincsenek inline scriptek), ezért van a téma
   snippet a `public/theme-init.js` fájlban.
 
+## Kimenet: CLI vagy GUI
+
+A Stop gomb utáni kapcsoló választja ki, mit mutat az ablak a futásból:
+
+- **CLI** (alapértelmezett): a CLI terminálkimenete.
+- **GUI**: natív folyamatjelző sávok fájlonként, a figyelmeztetések és hibák sorokként,
+  a CLI i/n kérdései pedig felugró dialógusként. A terminál egy összecsukható "CLI
+  output" szakaszban továbbra is elérhető (a Segédeszközök menü parancsainál, amelyeknek
+  nincs folyamatjelzőjük, magától kinyílik).
+
+A futás módja az indításakor rögzül, ezért a kapcsoló futás közben le van tiltva. A
+választás a CLI configjába kerül (a `deew-web`-nél is), egy saját szakaszba, és kézzel is
+szerkeszthető:
+
+```toml
+[gui]
+    progress = 'cli' # vagy 'native'
+```
+
+A kapcsoló csak létező `config.toml`-t módosít (futtasd egyszer a deew-t, hogy létrejöjjön),
+különben "Setting not saved" üzenetet ír. A GUI mód a CLI által írt eseményeket olvassa,
+amikor a `DEEW_EVENTS_FILE` be van állítva, ezért deew 3.6.2 vagy újabb kell hozzá.
+A `deew-gui` és a `deew-web` is a mellettük lévő `deew` binárist futtatja; régebbinél
+a GUI mód egy megjegyzést mutat, hogy a CLI nem jelent folyamatot, ilyenkor válts
+CLI kimenetre.
+
 ## Felépítés
 
 - `src/lib/deew-args.ts`: az opciók állapotából argv, és idézőjelezés a megjelenítéshez (unit tesztelve)
 - `src/lib/runner.ts`: Tauri / webes transport; `web-api.ts`, `run-client.ts`: a webes mód HTTP és WebSocket kliense
-- `src/components/`: címsor, segédeszközök menü, opciók űrlap, parancssáv, terminál panel
+- `src/components/`: címsor, segédeszközök menü, opciók űrlap, parancssáv, terminál panel, folyamat panel
 - `core/src/pty_session.rs`: Tauri-független PTY session (unit tesztelve)
 - `core/`: Tauri-független backend (CLI felderítés, probe-olás, PTY session)
 - `src-tauri/src/lib.rs`: Tauri parancsok: `run_deew`, `write_stdin`, `resize`, `stop`

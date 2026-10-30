@@ -1,8 +1,15 @@
 import { useEffect, useRef } from "react"
-import { Copy, Play, Square } from "lucide-react"
+import {
+  ChartNoAxesGantt,
+  Copy,
+  Play,
+  Square,
+  SquareTerminal,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { flashClass, useFlash } from "@/lib/use-flash"
+import type { OutputView } from "@/lib/runner"
 import { cn } from "@/lib/utils"
 
 interface CommandBarProps {
@@ -16,7 +23,27 @@ interface CommandBarProps {
   canRun: boolean
   onRun: () => void
   onStop: () => void
+  /** Which output the window shows. */
+  view: OutputView
+  onViewChange: (view: OutputView) => void
+  /** The view is fixed while a job runs. */
+  viewDisabled: boolean
 }
+
+const VIEWS = [
+  {
+    value: "cli",
+    label: "CLI",
+    title: "Show the terminal output of the CLI",
+    Icon: SquareTerminal,
+  },
+  {
+    value: "native",
+    label: "GUI",
+    title: "Show progress bars, warnings and pop-up prompts",
+    Icon: ChartNoAxesGantt,
+  },
+] as const
 
 export function CommandBar({
   command,
@@ -27,6 +54,9 @@ export function CommandBar({
   canRun,
   onRun,
   onStop,
+  view,
+  onViewChange,
+  viewDisabled,
 }: CommandBarProps) {
   const {
     phase: copyPhase,
@@ -113,6 +143,34 @@ export function CommandBar({
             <Square data-icon="inline-start" />
             Stop
           </Button>
+          <div
+            role="group"
+            aria-label="Output"
+            className={cn(
+              "flex shrink-0 items-stretch overflow-hidden rounded-lg border border-input",
+              viewDisabled && "opacity-50"
+            )}
+          >
+            {VIEWS.map(({ value, label, title, Icon }) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={view === value}
+                title={title}
+                disabled={viewDisabled}
+                onClick={() => onViewChange(value)}
+                className={cn(
+                  "flex items-center gap-1 px-2 text-sm font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:pointer-events-none [&_svg]:size-4",
+                  view === value
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted"
+                )}
+              >
+                <Icon />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       {problems.length > 0 && (

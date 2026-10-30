@@ -16,10 +16,12 @@ import { checkSession, requestJson } from "@/lib/web-api"
 type RunEvent =
   | { event: "output"; data: string } // base64 of raw pty bytes
   | { event: "exit"; data: { code: number | null } }
+  | { event: "progress"; data: string } // raw event line of the CLI
 
 export interface RunHandlers {
   onOutput: (bytes: Uint8Array) => void
   onExit: (code: number | null) => void
+  onProgress: (line: string) => void
 }
 
 export const inTauri = (): boolean => isTauri()
@@ -97,6 +99,7 @@ export async function runDeew(
   args: string[],
   cols: number,
   rows: number,
+  native: boolean,
   handlers: RunHandlers
 ): Promise<void> {
   // Web: output / exit arrive through `connectRunEvents`, `handlers` is unused.
@@ -105,15 +108,16 @@ export async function runDeew(
     // A socket that was just replaced or is reconnecting is not open yet.
     if (runClient && !(await runClient.whenConnected(5000)))
       throw new Error("Not connected to the server")
-    return sendWeb({ type: "start", args, cols, rows })
+    return sendWeb({ type: "start", args, cols, rows, native })
   }
   const channel = new Channel<RunEvent>()
   channel.onmessage = (message) => {
     if (message.event === "output")
       handlers.onOutput(decodeBase64(message.data))
+    else if (message.event === "progress") handlers.onProgress(message.data)
     else handlers.onExit(message.data.code)
   }
-  await invoke("run_deew", { args, cols, rows, onOutput: channel })
+  await invoke("run_deew", { args, cols, rows, native, onOutput: channel })
 }
 
 export const writeStdin = (data: string): Promise<void> =>
@@ -150,3 +154,19 @@ export const defaultBitrates = (): Promise<Record<string, number>> =>
 /** Lists a directory of the machine deew-web runs on (web only). */
 export const listDirectory = (path?: string): Promise<FsListing> =>
   requestJson(fsRequestPath(path))
+
+/** What the window shows of a run: the CLI's terminal or native progress. */
+export type OutputView = "cli" | "native"
+
+export interface GuiSettings {
+  progress: OutputView
+}
+
+/** The config's `[gui]` section. */
+export const guiSettings = (): Promise<GuiSettings> =>
+  inWeb() ? requestJson("/api/settings") : invoke("gui_settings")
+
+export const saveGuiSettings = (settings: GuiSettings): Promise<void> =>
+  inWeb()
+    ? requestJson("/api/settings", { method: "POST", body: settings })
+    : invoke("save_gui_settings", { settings })

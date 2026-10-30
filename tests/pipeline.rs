@@ -792,3 +792,82 @@ fn declining_the_prompt_exits() {
     assert!(stdout(&out).contains("are you sure you want to use DEE?"));
     assert!(!env.out().join("a.ec3").exists());
 }
+
+/// Parse the lines of an events file.
+fn events(path: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}")))
+        .collect()
+}
+
+#[test]
+fn events_file_describes_an_encode() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let file = env.path("events.jsonl");
+    let out = env.deew_with(
+        &["-np", "-o", env.out().to_str().unwrap(), "-i", "in.wav"],
+        &[
+            ("DEEW_EVENTS_FILE", file.to_str().unwrap()),
+            ("FAKE_DEE_ERROR", "boom"),
+        ],
+    );
+    ok(&out);
+    let all = events(&file);
+    assert_eq!(all[0]["type"], "hello");
+    assert_eq!(all[0]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(all[1]["type"], "jobs");
+    assert_eq!(all[1]["files"], serde_json::json!(["in.wav"]));
+    let progress: Vec<_> = all.iter().filter(|e| e["type"] == "progress").collect();
+    assert!(progress.iter().all(|e| e["job"] == 0));
+    assert_eq!(progress[0]["stage"], "starting");
+    assert!(progress.iter().any(|e| e["stage"] == "ffmpeg"));
+    assert!(progress.iter().any(|e| e["stage"] == "measure"));
+    assert!(
+        progress
+            .iter()
+            .any(|e| e["stage"] == "encode" && e["db"] == -23)
+    );
+    assert!(progress.iter().any(|e| e["percent"] == 100.0));
+    assert!(
+        all.iter()
+            .any(|e| e["type"] == "error" && e["text"] == "boom")
+    );
+    assert_eq!(
+        all.last().unwrap(),
+        &serde_json::json!({"type": "done", "job": 0})
+    );
+    // the final bar lines still reach the terminal log
+    assert!(stdout(&out).contains("100.00%"), "{}", stdout(&out));
+}
+
+#[test]
+fn events_file_records_prompt_and_answer() {
+    let env = env_or_skip!();
+    env.media("a.wav", "stereo", 48000, "pcm_s16le");
+    let file = env.path("events.jsonl");
+    let mut child = spawn_retry(
+        command(env.bin())
+            .args(["-o", env.out().to_str().unwrap(), "-i", "a.wav"])
+            .current_dir(env.work())
+            .env("XDG_CONFIG_HOME", env.path("xdg"))
+            .env("DEEW_EVENTS_FILE", &file)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), b"n\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    let all = events(&file);
+    assert_eq!(all[1]["type"], "prompt");
+    assert!(
+        all[1]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Consider using qaac or opus for mono and stereo encoding,")
+    );
+    assert_eq!(all[2], serde_json::json!({"type": "answered"}));
+}

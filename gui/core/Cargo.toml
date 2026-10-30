@@ -14,11 +14,10 @@ name = "deew_gui_core"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
 toml = "1"
+toml_edit = "0.25"
 which = "8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[dev-dependencies]
-tempfile = "3"

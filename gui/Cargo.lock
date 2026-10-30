@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "deew-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "deew-gui-core",
@@ -854,12 +854,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 1.1.8+spec-1.1.0",
+ "toml_edit 0.25.17+spec-1.1.0",
  "which",
 ]
 
 [[package]]
 name = "deew-web"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "axum",
@@ -4535,6 +4536,7 @@ dependencies = [
  "indexmap 2.14.2",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

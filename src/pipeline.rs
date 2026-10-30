@@ -9,7 +9,9 @@ use crate::config::{Config, Paths};
 use crate::data::ErrorKind;
 use crate::encode::{self, Job, Options};
 use crate::error::{error_line, escape, print_exit};
+use crate::events;
 use crate::jobxml::{XmlParams, build_xml};
+use crate::markup;
 use crate::plan::{
     self, InputInfo, Layout, Validated, check_inputs, compute_instances, input_delay, notices,
     resolve_layout, select_bitrate, validate_args,
@@ -91,6 +93,7 @@ fn probe_inputs(ffprobe: &str, track_index: i64, files: &[String]) -> Vec<Probe>
 fn show_notices(list: &[plan::Notice], no_prompt: bool) {
     for notice in list {
         if no_prompt {
+            events::warning(&markup::strip(notice.note));
             rprintln!("{}", notice.note);
         } else if !prompt::confirm(notice.question) {
             std::process::exit(1);
@@ -299,6 +302,8 @@ fn print_commands(prepared: &Prepared, long: bool, dee_is_exe: bool) {
 
 /// Run the jobs on `instances` workers; returns the error messages.
 fn run_jobs(jobs: &[Job], options: &Options, instances: f64) -> Vec<String> {
+    let names: Vec<&str> = jobs.iter().map(|job| file_name(&job.input)).collect();
+    events::jobs(&names);
     let ui = Ui::new();
     let workers = (instances.ceil() as usize).clamp(1, jobs.len().max(1));
     let next = AtomicUsize::new(0);
@@ -309,7 +314,7 @@ fn run_jobs(jobs: &[Job], options: &Options, instances: f64) -> Vec<String> {
                 loop {
                     let index = next.fetch_add(1, Ordering::SeqCst);
                     let Some(job) = jobs.get(index) else { break };
-                    let bar = ui.add_bar();
+                    let bar = ui.add_bar(index);
                     if let Err(message) = encode::run_job(job, options, &bar, &ui) {
                         errors.lock().expect("errors").push(message);
                     }
@@ -405,6 +410,7 @@ pub fn run(args: Args, config: Config, paths: Paths) {
     let errors = run_jobs(&prepared.jobs, &options, instances);
     if !errors.is_empty() {
         for message in &errors {
+            events::error(message);
             rprintln!(
                 "[color(231) on red]ERROR:[/color(231) on red] {}",
                 escape(message)

@@ -5,11 +5,11 @@ import {
   FolderOpen,
   Loader2,
   Trash2,
-  TriangleAlert,
   X,
 } from "lucide-react"
 
 import { Hint } from "@/components/hint"
+import { NoteLine } from "@/components/note-line"
 import { SimpleSelect, type SelectChoice } from "@/components/simple-select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -172,14 +172,13 @@ function ProbeSummaryLine({
         <p className="truncate font-mono whitespace-nowrap text-muted-foreground">{summary}</p>
       )}
       {notes.map((n, i) => (
-        <p
+        <NoteLine
           key={i}
-          title={n.title ?? n.text}
-          className="flex items-center gap-1 truncate whitespace-nowrap text-amber-500"
-        >
-          <TriangleAlert className="size-3 shrink-0" />
-          <span className="truncate">{n.text}</span>
-        </p>
+          tone="warning"
+          text={n.text}
+          title={n.title}
+          truncate
+        />
       ))}
     </div>
   )

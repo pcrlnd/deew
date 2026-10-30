@@ -1,12 +1,15 @@
 //! Progress display, modelled on `rich.progress.Progress` with the columns
 //! `[`, description, `]`, bar and a magenta percentage.
 
+use crate::events;
 use crate::markup::{color_enabled, render, visible_width};
 use crate::term::console_width;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
 use std::fmt::Write;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+pub use crate::events::Stage;
 
 /// Width of the bar when there is enough room.
 const BAR_WIDTH: usize = 40;
@@ -130,18 +133,64 @@ fn style() -> ProgressStyle {
         })
 }
 
+/// Minimum time between two percent events of one bar.
+const EVENT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Whether a percent change is written as an event: always for 0, 100 and
+/// the first one after a stage change, else at most every `EVENT_INTERVAL`.
+fn should_emit(pct: f64, fresh: bool, last: Option<Instant>, now: Instant) -> bool {
+    fresh
+        || pct <= 0.0
+        || pct >= 100.0
+        || last.is_none_or(|last| now.saturating_duration_since(last) >= EVENT_INTERVAL)
+}
+
+/// What was last written as an event of a bar.
+struct EventState {
+    stage: Option<Stage>,
+    db: Option<i64>,
+    /// `None` while the total is unknown.
+    percent: Option<f64>,
+    /// A stage change was not followed by a percent event yet.
+    fresh: bool,
+    last: Option<Instant>,
+}
+
 /// A progress line of one job.
 pub struct Bar {
     pb: ProgressBar,
+    index: usize,
+    events: Mutex<EventState>,
     /// Last description (markup) and fraction, for the output without a
     /// terminal.
     last: Mutex<(String, Option<f64>)>,
 }
 
 impl Bar {
-    pub fn describe(&self, markup: &str) {
+    /// Set the description (markup); `stage` and `db` go to the events.
+    pub fn describe(&self, markup: &str, stage: Stage, db: Option<i64>) {
         self.pb.set_message(render(markup, color_enabled()));
         self.last.lock().expect("bar state").0 = markup.to_string();
+        if !events::enabled() {
+            return;
+        }
+        let mut state = self.events.lock().expect("event state");
+        if state.stage != Some(stage) || state.db != db {
+            state.stage = Some(stage);
+            state.db = db;
+            state.fresh = true;
+            state.last = Some(Instant::now());
+            events::progress(self.index, stage, state.percent, db);
+        }
+    }
+
+    /// Write a progress event for the current state, if a stage is known.
+    fn emit(&self, state: &mut EventState, now: Instant) {
+        if let Some(stage) = state.stage {
+            state.fresh = false;
+            state.last = Some(now);
+            events::progress(self.index, stage, state.percent, state.db);
+        }
     }
 
     /// Set the progress, 0 to 100.
@@ -156,12 +205,29 @@ impl Bar {
         }
         self.pb.set_position((pct * 100.0).round() as u64);
         self.last.lock().expect("bar state").1 = Some(pct / 100.0);
+        if !events::enabled() {
+            return;
+        }
+        let mut state = self.events.lock().expect("event state");
+        state.percent = Some(pct);
+        let now = Instant::now();
+        if should_emit(pct, state.fresh, state.last, now) {
+            self.emit(&mut state, now);
+        }
     }
 
     /// Unknown total: show a pulsing bar.
     pub fn indeterminate(&self) {
         self.pb.unset_length();
         self.last.lock().expect("bar state").1 = None;
+        if !events::enabled() {
+            return;
+        }
+        let mut state = self.events.lock().expect("event state");
+        if state.percent.is_some() {
+            state.percent = None;
+            self.emit(&mut state, Instant::now());
+        }
     }
 }
 
@@ -174,18 +240,30 @@ pub struct Ui {
 impl Ui {
     pub fn new() -> Ui {
         Ui {
-            multi: MultiProgress::with_draw_target(ProgressDrawTarget::stdout_with_hz(8)),
+            multi: MultiProgress::with_draw_target(if events::enabled() {
+                ProgressDrawTarget::hidden()
+            } else {
+                ProgressDrawTarget::stdout_with_hz(8)
+            }),
             finals: Mutex::new(Vec::new()),
         }
     }
 
-    /// Add a progress line (at the bottom).
-    pub fn add_bar(&self) -> Bar {
+    /// Add a progress line (at the bottom) for the job `index`.
+    pub fn add_bar(&self, index: usize) -> Bar {
         let pb = self.multi.add(ProgressBar::new(SCALE));
         pb.set_style(style());
         pb.enable_steady_tick(Duration::from_millis(125));
         Bar {
             pb,
+            index,
+            events: Mutex::new(EventState {
+                stage: None,
+                db: None,
+                percent: Some(0.0),
+                fresh: false,
+                last: None,
+            }),
             last: Mutex::new((String::new(), Some(0.0))),
         }
     }
@@ -194,6 +272,7 @@ impl Ui {
     pub fn finish(&self, index: usize, bar: Bar) {
         bar.pb.disable_steady_tick();
         bar.pb.abandon();
+        events::done(index);
         let (description, fraction) = bar.last.lock().expect("bar state").clone();
         self.finals
             .lock()
@@ -310,6 +389,19 @@ mod tests {
         assert!(text.contains(BACK));
         assert!(text.contains("╺"));
         assert!(bar_text(Some(1.0), true, 0.0, 40).starts_with(FINISHED));
+    }
+
+    #[test]
+    fn percent_events_are_throttled() {
+        let t0 = Instant::now();
+        let later = |ms| t0 + Duration::from_millis(ms);
+        assert!(should_emit(5.0, false, None, t0));
+        assert!(!should_emit(5.0, false, Some(t0), later(50)));
+        assert!(should_emit(5.0, false, Some(t0), later(100)));
+        // 0, 100 and the first one after a stage change are never dropped
+        assert!(should_emit(0.0, false, Some(t0), later(1)));
+        assert!(should_emit(100.0, false, Some(t0), later(1)));
+        assert!(should_emit(5.0, true, Some(t0), later(1)));
     }
 
     #[test]

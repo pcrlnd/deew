@@ -47,3 +47,8 @@ max_instances = '50%'
 [deew_web]
     user = ''
     pass = ''
+
+# Output of deew-gui and deew-web: 'cli' shows the terminal output of the CLI,
+# 'native' shows progress bars, warnings and pop-up prompts in the window.
+[gui]
+    progress = 'cli'

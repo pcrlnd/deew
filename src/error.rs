@@ -10,6 +10,7 @@ pub fn escape(s: &str) -> String {
 
 /// Print `ERROR: <markup>` to stdout and exit with status 1.
 pub fn error_line(markup: &str) -> ! {
+    crate::events::error(&crate::markup::strip(markup));
     rprintln!("[color(231) on red]ERROR:[/color(231) on red] {}", markup);
     std::process::exit(1);
 }

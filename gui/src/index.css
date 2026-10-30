@@ -188,3 +188,17 @@ body {
     @apply select-text;
   }
 }
+
+@theme {
+  --animate-indeterminate: indeterminate 1.4s ease-in-out infinite;
+
+  /* A bar of unknown progress: the fill slides across the track. */
+  @keyframes indeterminate {
+    0% {
+      left: -40%;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+}

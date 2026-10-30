@@ -13,6 +13,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use deew_gui_core::cli;
+use deew_gui_core::settings::{self, GuiSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub auth: Option<Credentials>,
     pub sessions: Sessions,
     pub job: Job,
+    /// Config file of the settings API; `None` uses the one next to the CLI.
+    pub config_path: Option<PathBuf>,
     /// Bound to a loopback address: enables the Host check.
     pub loopback: bool,
     /// Delay before a failed login is answered.
@@ -43,6 +46,7 @@ impl AppState {
             auth,
             sessions: Sessions::default(),
             job: Job::new(program),
+            config_path: None,
             loopback,
             login_fail_delay: Duration::from_secs(1),
             ping_period: Duration::from_secs(5),
@@ -84,6 +88,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/logout", post(logout))
         .route("/api/version", get(version))
         .route("/api/default-bitrates", get(default_bitrates))
+        .route("/api/settings", get(get_settings).post(set_settings))
         .route("/api/probe", post(probe))
         .route("/api/fs", get(fs_list))
         .route("/api/run", get(run_socket))
@@ -265,6 +270,27 @@ async fn default_bitrates() -> axum::Json<std::collections::BTreeMap<String, i64
     )
 }
 
+fn config_path(state: &AppState) -> Option<PathBuf> {
+    state.config_path.clone().or_else(cli::config_path)
+}
+
+async fn get_settings(State(state): State<Shared>) -> axum::Json<GuiSettings> {
+    axum::Json(
+        tokio::task::spawn_blocking(move || settings::load(config_path(&state).as_deref()))
+            .await
+            .unwrap_or_default(),
+    )
+}
+
+async fn set_settings(State(state): State<Shared>, body: Bytes) -> Result<StatusCode, ApiError> {
+    let new: GuiSettings = parse_json(&body)?;
+    tokio::task::spawn_blocking(move || settings::save(config_path(&state).as_deref(), &new))
+        .await
+        .map_err(|e| ApiError::internal(format!("saving the settings failed: {e}")))?
+        .map_err(ApiError::bad_request)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProbeBody {
@@ -302,6 +328,8 @@ enum ClientMessage {
         cols: u16,
         #[serde(default = "default_rows")]
         rows: u16,
+        #[serde(default)]
+        native: bool,
     },
     Input {
         data: String,
@@ -336,6 +364,9 @@ async fn send_json(socket: &mut WebSocket, value: serde_json::Value) -> Option<(
 fn event_message(event: Event) -> Message {
     match event {
         Event::Output(bytes) => Message::Binary(bytes),
+        Event::Progress(line) => {
+            Message::Text(json!({"type": "progress", "data": line}).to_string().into())
+        }
         Event::Started(args) => {
             Message::Text(json!({"type": "started", "args": args}).to_string().into())
         }
@@ -363,6 +394,14 @@ async fn serve_socket(state: &Shared, socket: &mut WebSocket, sub: &mut crate::j
     let initial = json!({"type": "state", "running": sub.running, "args": sub.args});
     if send_json(socket, initial).await.is_none() {
         return;
+    }
+    for line in std::mem::take(&mut sub.progress) {
+        if send_json(socket, json!({"type": "progress", "data": line}))
+            .await
+            .is_none()
+        {
+            return;
+        }
     }
     for chunk in std::mem::take(&mut sub.replay).chunks(64 * 1024) {
         if socket
@@ -418,7 +457,12 @@ async fn handle_client_message(state: &Shared, text: &str) -> Option<String> {
     let state = Arc::clone(state);
     // Starting and writing touch the pty and may block briefly.
     let result = tokio::task::spawn_blocking(move || match message {
-        ClientMessage::Start { args, cols, rows } => state.job.start(args, cols, rows),
+        ClientMessage::Start {
+            args,
+            cols,
+            rows,
+            native,
+        } => state.job.start(args, cols, rows, native),
         ClientMessage::Input { data } => state.job.write(data.as_bytes()),
         ClientMessage::Resize { cols, rows } => state.job.resize(cols, rows),
         ClientMessage::Stop => {

@@ -1,3 +1,15 @@
+# deew 3.6.2:
+- reports progress, warnings and prompts to `deew-gui` and `deew-web` for
+  their new GUI output (the terminal output doesn't change)
+- default config: new `[gui]` section for `deew-gui` and `deew-web`
+- `deew-gui` 0.3.0 and `deew-web` 0.3.0:
+  - new GUI output next to the CLI output, switched with the `CLI | GUI`
+    toggle next to Run/Stop: progress bars per file, warnings and errors
+    listed under them, prompts as pop-ups, the CLI output stays available
+    below
+  - the choice is saved in the new `[gui]` section of the config
+    (`progress = 'cli'` or `'native'`, default `'cli'`)
+
 # deew 3.6.1:
 - fixed colors in the classic Windows console (`cmd.exe` outside
   Windows Terminal), escape codes were printed as text

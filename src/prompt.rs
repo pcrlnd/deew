@@ -23,10 +23,17 @@ fn show_prompt(question: &str, choices: &str) {
 /// Port of `Confirm.ask(question)`.
 pub fn confirm(question: &str) -> bool {
     loop {
+        crate::events::prompt(&crate::markup::strip(question));
         show_prompt(question, "y/n");
         match read_line().trim().to_lowercase().as_str() {
-            "y" => return true,
-            "n" => return false,
+            "y" => {
+                crate::events::answered();
+                return true;
+            }
+            "n" => {
+                crate::events::answered();
+                return false;
+            }
             _ => rprintln!("[red]Please enter Y or N"),
         }
     }

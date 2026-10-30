@@ -163,7 +163,7 @@ fn template_matches_python() {
     assert!(t.starts_with("# These are required.\n"));
     assert!(t.contains("max_instances = '50%'\n"));
     assert!(t.contains("    other = true\n"));
-    assert!(t.ends_with("    pass = ''\n"));
+    assert!(t.ends_with("[gui]\n    progress = 'cli'\n"));
 }
 
 #[cfg(target_os = "linux")]
@@ -189,6 +189,45 @@ mod linux {
             "{text}"
         );
         assert!(text.contains(&template()), "{text}");
+    }
+
+    #[test]
+    fn events_file_gets_hello_and_error() {
+        let sb = Sandbox::new();
+        std::fs::write(sb.config(), template()).unwrap();
+        let events = sb.dir.path().join("events.jsonl");
+        let mut child = spawn_retry(
+            Command::new(&sb.bin)
+                .args(["-i", "nope.mkv"])
+                .env("XDG_CONFIG_HOME", sb.dir.path().join("xdg"))
+                .env("DEEW_EVENTS_FILE", &events)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        );
+        child.stdin.take();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+        let text = std::fs::read_to_string(&events).unwrap();
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[0]["version"], env!("CARGO_PKG_VERSION"));
+        let error = lines.iter().find(|l| l["type"] == "error").unwrap();
+        let shown = stdout(&out);
+        let message = shown
+            .lines()
+            .find_map(|l| l.strip_prefix("ERROR: "))
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert_eq!(error["text"], message);
+        assert!(!message.contains('['), "{message}");
+        // without the variable nothing is written
+        let sb2 = Sandbox::new();
+        std::fs::write(sb2.config(), template()).unwrap();
+        sb2.run(&["-i", "nope.mkv"], "");
+        assert!(!sb2.dir.path().join("events.jsonl").exists());
     }
 
     #[test]
@@ -322,7 +361,7 @@ Update your config file.\n"
             text.ends_with("deew: error: the following arguments are required: -i/--input\n"),
             "{text}"
         );
-        assert!(text.starts_with("deew 3.6.1\n\nUSAGE: deew"), "{text}");
+        assert!(text.starts_with("deew 3.6.2\n\nUSAGE: deew"), "{text}");
     }
 
     #[test]
