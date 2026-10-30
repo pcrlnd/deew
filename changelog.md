@@ -1,3 +1,12 @@
+# deew 3.6.3:
+- `deew-gui` 0.3.1 and `deew-web` 0.3.1:
+  - the command line field is at most 3 lines high, a longer command ends
+    in `...` (hover it for the full command), Run and Stop are as tall as
+    the field and the copy button is centered
+  - GUI output: no separate "CLI output" section anymore, the `CLI | GUI`
+    toggle switches between the two and also works while a job runs
+  - in GUI output the Utilities commands show their output in the terminal
+
 # deew 3.6.2:
 - reports progress, warnings and prompts to `deew-gui` and `deew-web` for
   their new GUI output (the terminal output doesn't change)

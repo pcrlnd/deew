@@ -112,7 +112,7 @@ export function ProgressPane({
       {silentCli && (
         <NoteLine
           tone="warning"
-          text="This deew CLI does not report progress, update it or switch to the CLI output."
+          text="This deew CLI does not report progress (needs deew 3.6.2 or newer), use the CLI output."
         />
       )}
       {ended && (
@@ -131,7 +131,11 @@ export function ProgressPane({
         </p>
       )}
       {running && progress.jobs.length === 0 && !info && (
-        <p className="text-muted-foreground">Waiting for deew…</p>
+        <p className="text-muted-foreground">
+          {native
+            ? "Waiting for deew…"
+            : "This run was started with the CLI output."}
+        </p>
       )}
     </div>
   )

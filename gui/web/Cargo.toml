@@ -1,6 +1,6 @@
 [package]
 name = "deew-web"
-version = "0.3.0"
+version = "0.3.1"
 description = "Browser version of the deew GUI: serves the frontend and runs the deew CLI"
 authors = ["pcroland <pcroland@protonmail.ch>"]
 license = "MIT"

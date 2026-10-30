@@ -8,7 +8,6 @@ import {
 } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
-import { ChevronDown, ChevronRight } from "lucide-react"
 
 import { CommandBar } from "@/components/command-bar"
 import { NoteLine } from "@/components/note-line"
@@ -55,7 +54,6 @@ import {
   type RunStatus,
 } from "@/lib/progress"
 import { stateAction } from "@/lib/run-client"
-import { cn } from "@/lib/utils"
 import { useProbe } from "@/lib/use-probe"
 import { errorMessage } from "@/lib/web-api"
 import {
@@ -130,10 +128,11 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   // Mode of the current / last run (fixed at its start).
   const [runNative, setRunNative] = useState(false)
   const [runIsInfo, setRunIsInfo] = useState(false)
-  const [outputOpen, setOutputOpen] = useState(false)
   const [defaults, setDefaults] = useState<Record<string, number>>({})
 
   const native = view === "native"
+  // Info runs have no progress: their output is shown until the next run.
+  const showTerminal = !native || runIsInfo
 
   const args = useMemo(() => buildArgs(options), [options])
   const command = useMemo(() => formatCommand(args, platform), [args])
@@ -265,8 +264,6 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     setRunStatus({ kind: "running" })
     setRunNative(native)
     setRunIsInfo(info)
-    // Info runs have no progress: show their output.
-    if (native && info) setOutputOpen(true)
   }, [])
 
   const answerPrompt = (yes: boolean) => {
@@ -412,7 +409,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       const native = viewRef.current === "native"
       await printStart(term, runArgs)
       // Focusing opens the on-screen keyboard on phones.
-      // A collapsed (hidden) terminal must not take the keystrokes.
+      // A hidden terminal must not take the keystrokes.
       const visible = !native || isInfoRun(runArgs)
       if (visible && !window.matchMedia("(pointer: coarse)").matches)
         term.focus()
@@ -590,7 +587,6 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               }}
               view={view}
               onViewChange={changeView}
-              viewDisabled={running}
             />
             {saveError !== null && (
               <NoteLine
@@ -600,7 +596,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
             )}
 
             <div className="flex min-h-40 flex-1 flex-col gap-2">
-              {native && (
+              {!showTerminal && (
                 <ProgressPane
                   className="min-h-24 flex-1"
                   progress={progress}
@@ -609,31 +605,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
                   info={runIsInfo}
                 />
               )}
-              {native && (
-                <button
-                  type="button"
-                  aria-expanded={outputOpen}
-                  className="flex shrink-0 items-center gap-1 self-start text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
-                  onClick={() => setOutputOpen((o) => !o)}
-                >
-                  {outputOpen ? (
-                    <ChevronDown className="size-3.5" />
-                  ) : (
-                    <ChevronRight className="size-3.5" />
-                  )}
-                  CLI output
-                </button>
-              )}
               {/* Always mounted, only hidden: remounting would lose the xterm. */}
-              <div
-                className={cn(
-                  !native
-                    ? "min-h-0 flex-1"
-                    : outputOpen
-                      ? "h-56 shrink-0"
-                      : "hidden"
-                )}
-              >
+              <div className={showTerminal ? "min-h-0 flex-1" : "hidden"}>
                 <TerminalPane
                   ref={terminal}
                   className="size-full overflow-hidden rounded-lg border border-input p-2"

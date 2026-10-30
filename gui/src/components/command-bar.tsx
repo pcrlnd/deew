@@ -26,8 +26,6 @@ interface CommandBarProps {
   /** Which output the window shows. */
   view: OutputView
   onViewChange: (view: OutputView) => void
-  /** The view is fixed while a job runs. */
-  viewDisabled: boolean
 }
 
 const VIEWS = [
@@ -56,7 +54,6 @@ export function CommandBar({
   onStop,
   view,
   onViewChange,
-  viewDisabled,
 }: CommandBarProps) {
   const {
     phase: copyPhase,
@@ -101,18 +98,21 @@ export function CommandBar({
     <div className="@container flex flex-col gap-1">
       <div className="flex flex-col gap-2 @min-[520px]:flex-row @min-[520px]:items-stretch">
         <div className="flex min-h-7 min-w-0 items-stretch overflow-hidden rounded-lg border border-input bg-muted/40 @min-[520px]:flex-1">
-          <div
-            className="ui-selectable max-h-40 min-w-0 flex-1 overflow-y-auto px-2.5 py-[5px] font-mono text-xs break-all whitespace-pre-wrap @min-[520px]:max-h-20"
-            data-testid="command"
-          >
-            {command}
+          <div className="min-w-0 flex-1 px-2.5 py-[5px]">
+            <div
+              className="ui-selectable line-clamp-3 font-mono text-xs break-all whitespace-pre-wrap"
+              data-testid="command"
+              title={command}
+            >
+              {command}
+            </div>
           </div>
           <div className="w-px shrink-0 self-stretch bg-border" />
           <button
             type="button"
             ref={attachCopy}
             className={cn(
-              "group flex w-7 shrink-0 items-start justify-center self-stretch pt-[7px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted",
+              "group flex w-7 shrink-0 items-center justify-center self-stretch text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted",
               flashClass(copyPhase, copyKind, "fast")
             )}
             aria-label="Copy command"
@@ -126,7 +126,10 @@ export function CommandBar({
           <Button
             ref={attachRun}
             size="sm"
-            className={cn("flex-1 @min-[520px]:flex-none", runClass)}
+            className={cn(
+              "flex-1 @min-[520px]:h-auto @min-[520px]:flex-none",
+              runClass
+            )}
             onClick={onRun}
             disabled={!canRun || running}
           >
@@ -135,7 +138,7 @@ export function CommandBar({
           </Button>
           <Button
             size="sm"
-            className="flex-1 @min-[520px]:flex-none"
+            className="flex-1 @min-[520px]:h-auto @min-[520px]:flex-none"
             variant="destructive"
             onClick={onStop}
             disabled={!running}
@@ -146,10 +149,7 @@ export function CommandBar({
           <div
             role="group"
             aria-label="Output"
-            className={cn(
-              "flex shrink-0 items-stretch overflow-hidden rounded-lg border border-input",
-              viewDisabled && "opacity-50"
-            )}
+            className="flex shrink-0 items-stretch overflow-hidden rounded-lg border border-input"
           >
             {VIEWS.map(({ value, label, title, Icon }) => (
               <button
@@ -157,7 +157,6 @@ export function CommandBar({
                 type="button"
                 aria-pressed={view === value}
                 title={title}
-                disabled={viewDisabled}
                 onClick={() => onViewChange(value)}
                 className={cn(
                   "flex items-center gap-1 px-2 text-sm font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:pointer-events-none [&_svg]:size-4",

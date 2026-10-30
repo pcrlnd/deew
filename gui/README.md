@@ -89,12 +89,12 @@ The toggle after the Stop button picks what the window shows of a run:
 
 - **CLI** (default): the terminal output of the CLI.
 - **GUI**: native progress bars per file, warnings and errors as lines, and the
-  CLI's y/n questions as pop-up dialogs. The terminal stays available in a
-  collapsible "CLI output" section (it opens by itself for the Utilities menu
-  commands, which have no progress).
+  CLI's y/n questions as pop-up dialogs. The Utilities menu commands have no
+  progress, so their output is shown in the terminal instead.
 
-The mode of a run is fixed when it starts, so the toggle is disabled while a job
-runs. The choice is saved in the CLI's config (same in `deew-web`), in its own
+The mode of a run is fixed when it starts; the toggle only switches what is
+shown, also while a job runs (a run started with the CLI output shows a note in
+the GUI view). The choice is saved in the CLI's config (same in `deew-web`), in its own
 section, and can also be edited by hand:
 
 ```toml
@@ -106,7 +106,7 @@ The toggle only edits an existing `config.toml` (run deew once to create it);
 otherwise it shows "Setting not saved". The GUI mode reads progress events that
 the CLI writes when `DEEW_EVENTS_FILE` is set, so it needs deew 3.6.2 or newer.
 Both `deew-gui` and `deew-web` run the `deew` binary next to them; with an older
-one the GUI mode shows a note that the CLI does not report progress, switch to
+one the GUI mode shows a note that the CLI does not report progress, use the
 CLI output then.
 
 ## Layout

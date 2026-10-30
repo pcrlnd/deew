@@ -89,11 +89,11 @@ A Stop gomb utáni kapcsoló választja ki, mit mutat az ablak a futásból:
 
 - **CLI** (alapértelmezett): a CLI terminálkimenete.
 - **GUI**: natív folyamatjelző sávok fájlonként, a figyelmeztetések és hibák sorokként,
-  a CLI i/n kérdései pedig felugró dialógusként. A terminál egy összecsukható "CLI
-  output" szakaszban továbbra is elérhető (a Segédeszközök menü parancsainál, amelyeknek
-  nincs folyamatjelzőjük, magától kinyílik).
+  a CLI i/n kérdései pedig felugró dialógusként. A Segédeszközök menü
+  parancsainak nincs folyamatjelzőjük, ezért ezeknél a terminálkimenet látszik.
 
-A futás módja az indításakor rögzül, ezért a kapcsoló futás közben le van tiltva. A
+A futás módja az indításakor rögzül; a kapcsoló csak azt váltja, mit mutat az ablak,
+futás közben is (a CLI kimenettel indított futásnál a GUI nézet megjegyzést mutat). A
 választás a CLI configjába kerül (a `deew-web`-nél is), egy saját szakaszba, és kézzel is
 szerkeszthető:
 
