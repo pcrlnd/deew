@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>deew - Dolby Encoding Engine Wrapper</title>
+    <link rel="canonical" href="https://deew.dev/" />
+    <meta
+      name="description"
+      content="A fast CLI and GUI that wraps ffmpeg, ffprobe and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
+    />
+    <meta name="theme-color" content="#223f8b" />
+    <meta name="color-scheme" content="light dark" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://deew.dev/" />
+    <meta property="og:title" content="Dolby Encoding Engine Wrapper" />
+    <meta
+      property="og:description"
+      content="A fast CLI and GUI that wraps ffmpeg, ffprobe and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
+    />
+    <meta property="og:image" content="https://deew.dev/deew_dark.png" />
+    <meta property="og:image:width" content="1080" />
+    <meta property="og:image:height" content="1080" />
+    <link rel="icon" type="image/png" href="icon.png" />
+    <script>
+      ;(function () {
+        var mq = window.matchMedia("(prefers-color-scheme: dark)")
+        function apply() {
+          var el = document.documentElement
+          el.classList.toggle("dark", mq.matches)
+          el.style.colorScheme = mq.matches ? "dark" : "light"
+        }
+        apply()
+        if (mq.addEventListener) mq.addEventListener("change", apply)
+        else if (mq.addListener) mq.addListener(apply)
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
