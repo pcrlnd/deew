@@ -184,6 +184,13 @@ export function stageLabel(job: JobProgress): string {
   return job.db === null ? label : `${label} (${job.db} dB)`
 }
 
+/** `45.55%` like the CLI bar: `100%` when finished, at most `99.99%` before. */
+export function formatPercent(percent: number | null): string {
+  if (percent === null) return ""
+  if (percent >= 100) return "100%"
+  return `${Math.min(percent, 99.99).toFixed(2)}%`
+}
+
 /** Mean percent over all jobs (done = 100, unknown = 0); null without jobs. */
 export function overallPercent(jobs: JobProgress[]): number | null {
   if (jobs.length === 0) return null

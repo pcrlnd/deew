@@ -102,11 +102,15 @@ pub fn bar_text(fraction: Option<f64>, color: bool, time: f64, width: usize) -> 
 }
 
 /// `{task.percentage:>3.2f}%` in magenta, padded to the column width.
+/// A finished bar shows `100%`, an unfinished one at most `99.99%`.
 pub fn percent_text(fraction: Option<f64>, color: bool) -> String {
-    let text = format!(
-        "{:<PERCENT_WIDTH$}",
-        format!("{:.2}%", fraction.unwrap_or(0.0) * 100.0)
-    );
+    let percent = fraction.unwrap_or(0.0) * 100.0;
+    let percent = if percent >= 100.0 {
+        "100%".to_string()
+    } else {
+        format!("{:.2}%", percent.min(99.99))
+    };
+    let text = format!("{percent:<PERCENT_WIDTH$}");
     if color {
         format!("\x1b[35m{text}{RESET}")
     } else {
@@ -240,11 +244,7 @@ pub struct Ui {
 impl Ui {
     pub fn new() -> Ui {
         Ui {
-            multi: MultiProgress::with_draw_target(if events::enabled() {
-                ProgressDrawTarget::hidden()
-            } else {
-                ProgressDrawTarget::stdout_with_hz(8)
-            }),
+            multi: MultiProgress::with_draw_target(ProgressDrawTarget::stdout_with_hz(8)),
             finals: Mutex::new(Vec::new()),
         }
     }
@@ -407,7 +407,8 @@ mod tests {
     #[test]
     fn percentage() {
         assert_eq!(percent_text(Some(0.4555), false), "45.55% ");
-        assert_eq!(percent_text(Some(1.0), false), "100.00%");
+        assert_eq!(percent_text(Some(1.0), false), "100%   ");
+        assert_eq!(percent_text(Some(0.99996), false), "99.99% ");
         assert_eq!(percent_text(None, false), "0.00%  ");
         assert_eq!(percent_text(Some(0.0), true), "\x1b[35m0.00%  \x1b[0m");
     }

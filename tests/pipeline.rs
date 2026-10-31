@@ -609,7 +609,7 @@ fn mixed_bit_depths_use_their_own_depth() {
         "{}",
         commands[1]
     );
-    assert_eq!(summary_row(&text, "Bit depth"), "mixed bit depth");
+    assert_eq!(summary_row(&text, "Bit depth"), "16/24");
     assert!(text.contains("Input(s)"), "{text}");
 
     // the short print lists the distinct depths
@@ -840,7 +840,7 @@ fn events_file_describes_an_encode() {
         &serde_json::json!({"type": "done", "job": 0})
     );
     // the final bar lines still reach the terminal log
-    assert!(stdout(&out).contains("100.00%"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("100%"), "{}", stdout(&out));
 }
 
 #[test]

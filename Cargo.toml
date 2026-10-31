@@ -1,6 +1,6 @@
 [package]
 name = "deew"
-version = "3.6.2"
+version = "3.6.5"
 edition = "2024"
 description = "Dolby Encoding Engine Wrapper"
 license = "MIT"

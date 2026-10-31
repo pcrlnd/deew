@@ -22,9 +22,8 @@ export interface ProbeSummary {
   /** Common values; `null` if unknown or the files differ. */
   channels: number | null
   sampleRate: number | null
-  bitDepth: number | null
-  /** True if the (normalised) bit depths differ between files. */
-  mixedBitDepth: boolean
+  /** The distinct (normalised) bit depths, sorted; more than one if mixed. */
+  bitDepths: number[]
   /** Like the CLI's mismatch errors. */
   mismatches: string[]
   errors: { path: string; error: string }[]
@@ -63,7 +62,6 @@ export function summarizeProbe(files: readonly FileProbe[]): ProbeSummary {
   check(rates, "sample rate")
   check(channels, "channel count")
 
-  const normDepths = unique(depths.map(normalizeBitDepth))
   const common = (values: number[]): number | null =>
     unique(values).length === 1 ? values[0] : null
   return {
@@ -72,8 +70,7 @@ export function summarizeProbe(files: readonly FileProbe[]): ProbeSummary {
     channels: errors.length === 0 ? common(channels) : null,
     sampleRate: common(rates),
     // Compared after the CLI's normalisation.
-    bitDepth: normDepths.length === 1 ? normDepths[0] : null,
-    mixedBitDepth: normDepths.length > 1,
+    bitDepths: unique(depths.map(normalizeBitDepth)).sort((a, b) => a - b),
     mismatches,
     errors,
   }
@@ -102,13 +99,12 @@ export function formatSampleRate(hz: number): string {
   return `${Number((hz / 1000).toFixed(3))} kHz`
 }
 
-/** E.g. `5.1 - 48 kHz - 24-bit - 3 files`, or `mixed bit depth` in place of the depth. */
+/** E.g. `5.1 - 48 kHz - 24-bit - 3 files`, or `16/24/32-bit` for mixed bit depths. */
 export function formatSummary(s: ProbeSummary): string {
   const parts: string[] = []
   if (s.channels !== null) parts.push(formatChannels(s.channels))
   if (s.sampleRate !== null) parts.push(formatSampleRate(s.sampleRate))
-  if (s.mixedBitDepth) parts.push("mixed bit depth")
-  else if (s.bitDepth !== null) parts.push(`${s.bitDepth}-bit`)
+  if (s.bitDepths.length > 0) parts.push(`${s.bitDepths.join("/")}-bit`)
   parts.push(s.files === 1 ? "1 file" : `${s.files} files`)
   return parts.join(" - ")
 }

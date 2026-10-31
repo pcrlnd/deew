@@ -361,7 +361,7 @@ Update your config file.\n"
             text.ends_with("deew: error: the following arguments are required: -i/--input\n"),
             "{text}"
         );
-        assert!(text.starts_with("deew 3.6.2\n\nUSAGE: deew"), "{text}");
+        assert!(text.starts_with("deew 3.6.5\n\nUSAGE: deew"), "{text}");
     }
 
     #[test]

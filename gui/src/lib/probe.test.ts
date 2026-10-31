@@ -25,8 +25,7 @@ describe("summarizeProbe", () => {
       files: 2,
       channels: 6,
       sampleRate: 48000,
-      bitDepth: 24,
-      mixedBitDepth: false,
+      bitDepths: [24],
       mismatches: [],
       errors: [],
     })
@@ -42,21 +41,25 @@ describe("summarizeProbe", () => {
       "each input has to have the same sample rate: [48000, 44100]",
       "each input has to have the same channel count: [6, 2]",
     ])
-    expect([s.channels, s.sampleRate, s.bitDepth]).toEqual([null, null, null])
-    expect(formatSummary(s)).toBe("mixed bit depth - 2 files")
+    expect([s.channels, s.sampleRate]).toEqual([null, null])
+    expect(formatSummary(s)).toBe("16/24-bit - 2 files")
   })
 
   it("shows mixed bit depths without a warning", () => {
-    const s = summarizeProbe([file(), file({ path: "b", bitDepth: 16 })])
+    const s = summarizeProbe([
+      file({ bitDepth: 32 }),
+      file({ path: "b", bitDepth: 16 }),
+      file({ path: "c" }),
+      file({ path: "d", bitDepth: 16 }),
+    ])
     expect(s.mismatches).toEqual([])
-    expect(s.mixedBitDepth).toBe(true)
-    expect(formatSummary(s)).toBe("5.1 - 48 kHz - mixed bit depth - 2 files")
+    expect(s.bitDepths).toEqual([16, 24, 32])
+    expect(formatSummary(s)).toBe("5.1 - 48 kHz - 16/24/32-bit - 4 files")
   })
 
   it("compares bit depths after normalisation", () => {
     const s = summarizeProbe([file({ bitDepth: 20 }), file({ path: "b" })])
-    expect(s.mixedBitDepth).toBe(false)
-    expect(s.bitDepth).toBe(24)
+    expect(s.bitDepths).toEqual([24])
     expect(formatSummary(s)).toBe("5.1 - 48 kHz - 24-bit - 2 files")
   })
 

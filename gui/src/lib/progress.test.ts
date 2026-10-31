@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   EMPTY_PROGRESS,
+  formatPercent,
   isInfoRun,
   overallPercent,
   parseProgressEvent,
@@ -228,5 +229,15 @@ describe("isInfoRun", () => {
     expect(isInfoRun(["--version"])).toBe(true)
     expect(isInfoRun([])).toBe(true)
     expect(isInfoRun(["-i", "a.mkv", "-b", "448"])).toBe(false)
+  })
+})
+
+describe("formatPercent", () => {
+  it("keeps two decimals until the job is finished", () => {
+    expect(formatPercent(45.55)).toBe("45.55%")
+    expect(formatPercent(0)).toBe("0.00%")
+    expect(formatPercent(99.996)).toBe("99.99%")
+    expect(formatPercent(100)).toBe("100%")
+    expect(formatPercent(null)).toBe("")
   })
 })

@@ -62,13 +62,13 @@ pub fn allowed_bitrates(key: &str) -> &'static [u32] {
 
 /// Banner logos (rich markup): a new one first, then the ones of `logos.py` in order.
 pub const LOGOS: &[&str] = &[
-    r#"┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ [blue]╺┳━━┓ ┏━━━╸ ┏━━━╸ ╻   ╻[/blue] ┃
-┃ [blue] ┃  ┃ ┣━━╸  ┣━━╸  ┃ ╻ ┃[/blue] ┃
-┃ [blue]╺┻━━┛ ┗━━━╸ ┗━━━╸ ┗━┻━┛[/blue] ┃
-┃  Dolby Encoding Engine  ┃
-┃   Wrapper by pcroland   ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━┛"#,
+    r#"┌─────────────────────────┐
+│ [blue]╺┳━━┓ ┏━━━╸ ┏━━━╸ ╻   ╻[/blue] │
+│ [blue] ┃  ┃ ┣━━╸  ┣━━╸  ┃ ╻ ┃[/blue] │
+│ [blue]╺┻━━┛ ┗━━━╸ ┗━━━╸ ┗━┻━┛[/blue] │
+│  Dolby Encoding Engine  │
+│   Wrapper by pcroland   │
+└─────────────────────────┘"#,
     r#"[yellow] ▄▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄  ▄▄
  ██  ██ ██▄▄  ██▄▄  ██  ██  ██
  ██  ██ ██    ██    ██  ██  ██

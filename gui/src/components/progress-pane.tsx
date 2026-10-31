@@ -2,6 +2,7 @@ import { CircleCheck, CircleX } from "lucide-react"
 
 import { NoteLine } from "@/components/note-line"
 import {
+  formatPercent,
   overallPercent,
   stageLabel,
   statusText,
@@ -21,9 +22,6 @@ interface ProgressPaneProps {
   info: boolean
   className?: string
 }
-
-const formatPercent = (percent: number | null): string =>
-  percent === null ? "" : `${percent.toFixed(2)}%`
 
 /** Bar of one job; `failed` marks an unfinished job of a failed run. */
 function Bar({ job, failed }: { job: JobProgress; failed: boolean }) {

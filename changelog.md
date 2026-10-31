@@ -1,3 +1,18 @@
+# deew 3.6.5:
+- logo 1 uses a thin border
+- the encoding summary shows the bit depths of mixed inputs (e.g. `16/24`)
+  instead of `mixed bit depth`
+- finished progress bars show `100%` instead of `100.00%`
+- the progress bars are drawn in color in the terminal also when the GUI
+  output is used in `deew-gui` and `deew-web` (switching to the CLI output
+  showed them without color)
+- `deew-gui` 0.4.1 and `deew-web` 0.4.1:
+  - the copy button copies the command in browsers opened over plain `http`
+    (e.g. on a phone), and flashes red if copying fails
+  - the input file summary shows the bit depths of mixed inputs
+    (e.g. `16/24/32-bit`) instead of `mixed bit depth`
+  - in GUI output finished progress bars show `100%` instead of `100.00%`
+
 # deew 3.6.4:
 - `deew-gui` 0.4.0 and `deew-web` 0.4.0:
   - new look: boxy style, blue accents and IBM Plex Sans font

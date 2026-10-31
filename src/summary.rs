@@ -62,11 +62,13 @@ fn version_cell(version: Option<&str>) -> String {
     version.map_or_else(|| COULDNT_PARSE.to_string(), escape)
 }
 
+/// The distinct bit depths sorted, e.g. `24` or `16/24/32`.
 fn bit_depth_cell(depths: &[u32]) -> String {
-    match depths {
-        [first, rest @ ..] if rest.iter().all(|d| d == first) => first.to_string(),
-        _ => "mixed bit depth".to_string(),
-    }
+    let mut distinct = depths.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let depths: Vec<String> = distinct.iter().map(u32::to_string).collect();
+    depths.join("/")
 }
 
 /// A delay in milliseconds as shown in the summary: at most 3 decimals
@@ -645,8 +647,9 @@ mod tests {
     fn bit_depth_cell_values() {
         assert_eq!(bit_depth_cell(&[24]), "24");
         assert_eq!(bit_depth_cell(&[16, 16, 16]), "16");
-        assert_eq!(bit_depth_cell(&[16, 24]), "mixed bit depth");
-        assert_eq!(bit_depth_cell(&[24, 24, 32]), "mixed bit depth");
+        assert_eq!(bit_depth_cell(&[16, 24]), "16/24");
+        assert_eq!(bit_depth_cell(&[24, 24, 32]), "24/32");
+        assert_eq!(bit_depth_cell(&[32, 16, 24, 16]), "16/24/32");
     }
 
     /// Characters of `ansi` that are rendered while an SGR style is active.

@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { copyText } from "@/lib/clipboard"
 import { flashClass, useFlash } from "@/lib/use-flash"
 import type { OutputView } from "@/lib/runner"
 import { cn } from "@/lib/utils"
@@ -63,10 +64,11 @@ export function CommandBar({
   } = useFlash("fast")
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(command)
+      await copyText(command)
       startCopyFlash("success")
     } catch (error) {
       console.error("copy failed", error)
+      startCopyFlash("failure")
     }
   }
 
