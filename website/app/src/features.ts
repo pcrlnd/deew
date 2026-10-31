@@ -1,6 +1,7 @@
 export type Feature = {
   text: string
   sub?: string[]
+  tall?: boolean
 }
 
 export const features: Feature[] = [
@@ -10,14 +11,15 @@ export const features: Feature[] = [
   {
     text: "automatic channel swapping for 7.1 sources (DEE swaps Ls Rs with Lrs Rrs for some reason)",
   },
-  { text: "runs multiple encodes in parallel for batch encoding (see config)" },
   {
     text: "automatic sample rate conversion using ffmpeg's soxr resampler in case of an unsupported sample rate",
     sub: [
       "for DD/DDP/AC4 unsupported rates will be converted to 48 kHz",
       "for TrueHD unsupported rates will be converted to 48 kHz if source sample rate is lower than 72 kHz, otherwise will be converted to 96 kHz",
     ],
+    tall: true,
   },
+  { text: "runs multiple encodes in parallel for batch encoding (see config)" },
   {
     text: "supports WSL path conversion for the Windows version of DEE (see config)",
   },

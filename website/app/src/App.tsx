@@ -7,6 +7,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { features } from "@/features"
 import { detectPlatform, LATEST, RELEASES, REPO } from "@/lib/platform"
+import { cn } from "@/lib/utils"
 
 function DownloadButton({
   platform,
@@ -114,7 +115,13 @@ export default function App() {
           </p>
           <ul className="mt-6 grid gap-x-10 gap-y-4 lg:grid-cols-2">
             {features.map((f) => (
-              <li key={f.text} className="flex items-start gap-3">
+              <li
+                key={f.text}
+                className={cn(
+                  "flex items-start gap-3",
+                  f.tall && "lg:row-span-3"
+                )}
+              >
                 <CircleCheckIcon className="mt-0.5 size-5 shrink-0 text-primary dark:text-blue-400" />
                 <div className="min-w-0 text-sm">
                   <p>{f.text}</p>
