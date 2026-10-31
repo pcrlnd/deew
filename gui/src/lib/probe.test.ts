@@ -30,7 +30,7 @@ describe("summarizeProbe", () => {
       mismatches: [],
       errors: [],
     })
-    expect(formatSummary(s)).toBe("5.1 · 48 kHz · 24-bit · 2 files")
+    expect(formatSummary(s)).toBe("5.1 - 48 kHz - 24-bit - 2 files")
   })
 
   it("reports mismatches like the CLI and has no common value", () => {
@@ -43,21 +43,21 @@ describe("summarizeProbe", () => {
       "each input has to have the same channel count: [6, 2]",
     ])
     expect([s.channels, s.sampleRate, s.bitDepth]).toEqual([null, null, null])
-    expect(formatSummary(s)).toBe("mixed bit depth · 2 files")
+    expect(formatSummary(s)).toBe("mixed bit depth - 2 files")
   })
 
   it("shows mixed bit depths without a warning", () => {
     const s = summarizeProbe([file(), file({ path: "b", bitDepth: 16 })])
     expect(s.mismatches).toEqual([])
     expect(s.mixedBitDepth).toBe(true)
-    expect(formatSummary(s)).toBe("5.1 · 48 kHz · mixed bit depth · 2 files")
+    expect(formatSummary(s)).toBe("5.1 - 48 kHz - mixed bit depth - 2 files")
   })
 
   it("compares bit depths after normalisation", () => {
     const s = summarizeProbe([file({ bitDepth: 20 }), file({ path: "b" })])
     expect(s.mixedBitDepth).toBe(false)
     expect(s.bitDepth).toBe(24)
-    expect(formatSummary(s)).toBe("5.1 · 48 kHz · 24-bit · 2 files")
+    expect(formatSummary(s)).toBe("5.1 - 48 kHz - 24-bit - 2 files")
   })
 
   it("does not know the layout when a file failed", () => {
@@ -112,7 +112,7 @@ describe("formatting", () => {
 
   it("uses the singular for one file", () => {
     expect(formatSummary(summarizeProbe([file()]))).toBe(
-      "5.1 · 48 kHz · 24-bit · 1 file"
+      "5.1 - 48 kHz - 24-bit - 1 file"
     )
   })
 })

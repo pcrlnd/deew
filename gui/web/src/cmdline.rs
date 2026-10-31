@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn plain_help_is_exact() {
-        let expected = "deew-web 0.3.1
+        let expected = "deew-web 0.4.0
 
 USAGE: deew-web [FLAGS]
 
@@ -330,7 +330,7 @@ FLAGS:
 
     #[test]
     fn plain_version() {
-        assert_eq!(version_text(false), "deew-web 0.3.1");
+        assert_eq!(version_text(false), "deew-web 0.4.0");
     }
 
     #[test]

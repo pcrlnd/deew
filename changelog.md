@@ -1,21 +1,27 @@
+# deew 3.6.4:
+- `deew-gui` 0.4.0 and `deew-web` 0.4.0:
+  - new look: boxy style, blue accents and IBM Plex Sans font
+  - the terminal uses IBM Plex Mono
+  - `-` instead of `·` between the values in the input file summary and in
+    the progress summary
+
 # deew 3.6.3:
 - `deew-gui` 0.3.1 and `deew-web` 0.3.1:
   - the command line field is at most 3 lines high, a longer command ends
     in `...` (hover it for the full command), Run and Stop are as tall as
-    the field and the copy button is centered
+	the field and the copy button is centered
   - GUI output: no separate "CLI output" section anymore, the `CLI | GUI`
     toggle switches between the two and also works while a job runs
   - in GUI output the Utilities commands show their output in the terminal
 
 # deew 3.6.2:
-- reports progress, warnings and prompts to `deew-gui` and `deew-web` for
-  their new GUI output (the terminal output doesn't change)
+- reports progress, warnings and prompts to `deew-gui` and `deew-web` for their
+  new GUI output (the terminal output doesn't change)
 - default config: new `[gui]` section for `deew-gui` and `deew-web`
 - `deew-gui` 0.3.0 and `deew-web` 0.3.0:
   - new GUI output next to the CLI output, switched with the `CLI | GUI`
-    toggle next to Run/Stop: progress bars per file, warnings and errors
-    listed under them, prompts as pop-ups, the CLI output stays available
-    below
+    toggle next to Run/Stop: progress bars per file, warnings and errors listed
+	under them, prompts as pop-ups, the CLI output stays available below
   - the choice is saved in the new `[gui]` section of the config
     (`progress = 'cli'` or `'native'`, default `'cli'`)
 
@@ -31,10 +37,8 @@
   - `deew.exe` uses a sharper icon (every resolution is generated from svg)
   - Linux uses 512px icon instead of 32px
 - updated dependencies
-- `deew-gui` 0.2.0:
-  - the window title shows the version (`deew-gui 0.2.0`)
-- `deew-web` 0.2.0:
-  - the browser tab title shows the version (`deew-web 0.2.0`)
+- `deew-gui` 0.2.0: the window title shows the version (`deew-gui 0.2.0`)
+- `deew-web` 0.2.0: the browser tab title shows the version (`deew-web 0.2.0`)
 
 # deew 3.5.1:
 - WSL with `dee.exe`: if the deew binary is on a Windows drive (`/mnt/c` etc.),

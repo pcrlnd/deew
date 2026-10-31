@@ -102,7 +102,7 @@ export function formatSampleRate(hz: number): string {
   return `${Number((hz / 1000).toFixed(3))} kHz`
 }
 
-/** E.g. `5.1 · 48 kHz · 24-bit · 3 files`, or `mixed bit depth` in place of the depth. */
+/** E.g. `5.1 - 48 kHz - 24-bit - 3 files`, or `mixed bit depth` in place of the depth. */
 export function formatSummary(s: ProbeSummary): string {
   const parts: string[] = []
   if (s.channels !== null) parts.push(formatChannels(s.channels))
@@ -110,5 +110,5 @@ export function formatSummary(s: ProbeSummary): string {
   if (s.mixedBitDepth) parts.push("mixed bit depth")
   else if (s.bitDepth !== null) parts.push(`${s.bitDepth}-bit`)
   parts.push(s.files === 1 ? "1 file" : `${s.files} files`)
-  return parts.join(" · ")
+  return parts.join(" - ")
 }

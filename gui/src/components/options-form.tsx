@@ -344,7 +344,7 @@ export function OptionsForm({
               type="number"
               min={0}
               step={1}
-              className="h-7 text-sm"
+              className="h-7"
               value={value.trackIndex}
               onChange={(e) => patch({ trackIndex: e.target.value })}
               disabled={waiting}
@@ -404,7 +404,7 @@ export function OptionsForm({
           >
             <Input
               id={id("d")}
-              className="h-7 text-sm"
+              className="h-7"
               ref={delayRef}
               placeholder={delayPlaceholder}
               value={value.delay}
@@ -441,7 +441,7 @@ export function OptionsForm({
               min={-31}
               max={0}
               step={1}
-              className="h-7 text-sm"
+              className="h-7"
               value={value.dialnorm}
               onChange={(e) => patch({ dialnorm: e.target.value })}
               disabled={waiting}
@@ -456,7 +456,7 @@ export function OptionsForm({
           >
             <Input
               id={id("in")}
-              className="h-7 text-sm"
+              className="h-7"
               placeholder="50%"
               value={value.instances}
               onChange={(e) => patch({ instances: e.target.value })}
@@ -474,7 +474,7 @@ export function OptionsForm({
             <div className="flex gap-1.5">
               <Input
                 id={id("o")}
-                className="h-7 flex-1 font-mono text-sm"
+                className="h-7 flex-1 font-mono"
                 placeholder="default (current directory)"
                 value={value.output}
                 onChange={(e) => patch({ output: e.target.value })}

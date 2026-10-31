@@ -99,7 +99,7 @@ export function ProgressPane({
     >
       {overall !== null && !info && (
         <p className="font-medium">
-          {doneCount} of {progress.jobs.length} files done ·{" "}
+          {doneCount} of {progress.jobs.length} files done -{" "}
           {overall.toFixed(0)}%
         </p>
       )}

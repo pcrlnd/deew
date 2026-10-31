@@ -1,7 +1,16 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react"
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react"
 import { FitAddon } from "@xterm/addon-fit"
+import { WebglAddon } from "@xterm/addon-webgl"
 import { Terminal, type ITheme } from "@xterm/xterm"
 import "@xterm/xterm/css/xterm.css"
+import "@fontsource/ibm-plex-mono/400.css"
+import "@fontsource/ibm-plex-mono/700.css"
 
 import { fittingFontSize } from "@/lib/fitting-font-size"
 import {
@@ -15,6 +24,12 @@ import {
 
 const MAX_FONT = 13
 const MIN_COLS = 60
+// Only the bundled font, no fallbacks (the cell size is measured from it).
+const FONT_FAMILY = '"IBM Plex Mono"'
+const FONT_FACES = [
+  `400 ${MAX_FONT}px ${FONT_FAMILY}`,
+  `700 ${MAX_FONT}px ${FONT_FAMILY}`,
+]
 
 function scrollableAncestor(el: HTMLElement): HTMLElement | null {
   for (let p = el.parentElement; p; p = p.parentElement) {
@@ -176,77 +191,122 @@ export const TerminalPane = forwardRef<TerminalHandle, TerminalPaneProps>(
       onResizeRef.current = onResize
     })
 
+    // Calls that arrive before the terminal exists (it waits for the font):
+    // applied in order once it is created.
+    const pending = useRef<Array<(t: Terminal) => void>>([])
+    const run = useCallback((op: (t: Terminal) => void) => {
+      const t = term.current
+      if (t) op(t)
+      else pending.current.push(op)
+    }, [])
+
     useEffect(() => {
       const el = container.current
       if (!el) return
-      const terminal = new Terminal({
-        fontFamily:
-          'ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace',
-        fontSize: MAX_FONT,
-        scrollback: 10000,
-        cursorBlink: true,
-        allowProposedApi: true,
-        theme: DARK,
-      })
-      const fit = new FitAddon()
-      terminal.loadAddon(fit)
-      terminal.open(el)
-      const refit = () => {
-        if (!(el.clientWidth > 0 && el.clientHeight > 0)) return
-        // At least MIN_COLS columns: shrink the font when too narrow, grow
-        // back (up to MAX_FONT) when there is room.
-        for (let i = 0; i < 3; i++) {
-          const dims = fit.proposeDimensions()
-          if (!dims) break
-          const current = terminal.options.fontSize ?? MAX_FONT
-          const next = fittingFontSize(current, dims.cols, MIN_COLS, MAX_FONT)
-          if (next === current) break
-          terminal.options.fontSize = next
+      let cancelled = false
+      let teardown: (() => void) | undefined
+
+      const create = () => {
+        const terminal = new Terminal({
+          fontFamily: FONT_FAMILY,
+          fontSize: MAX_FONT,
+          scrollback: 10000,
+          cursorBlink: true,
+          allowProposedApi: true,
+          theme: DARK,
+        })
+        const fit = new FitAddon()
+        terminal.loadAddon(fit)
+        terminal.open(el)
+        // The WebGL renderer draws box-drawing and block characters itself,
+        // so they don't depend on the font (which has none). Without WebGL
+        // the DOM renderer stays; terminal.dispose() disposes the addon.
+        try {
+          const webgl = new WebglAddon()
+          webgl.onContextLoss(() => webgl.dispose())
+          terminal.loadAddon(webgl)
+        } catch (e) {
+          console.warn(e)
         }
-        fit.fit()
+        const refit = () => {
+          if (!(el.clientWidth > 0 && el.clientHeight > 0)) return
+          // At least MIN_COLS columns: shrink the font when too narrow, grow
+          // back (up to MAX_FONT) when there is room.
+          for (let i = 0; i < 3; i++) {
+            const dims = fit.proposeDimensions()
+            if (!dims) break
+            const current = terminal.options.fontSize ?? MAX_FONT
+            const next = fittingFontSize(current, dims.cols, MIN_COLS, MAX_FONT)
+            if (next === current) break
+            terminal.options.fontSize = next
+          }
+          fit.fit()
+        }
+        // Subscribed before the first fit: a job started while the font was
+        // loading got the default size and needs the real one.
+        const dataSub = terminal.onData((d) => onDataRef.current(d))
+        const resizeSub = terminal.onResize(({ cols, rows }) =>
+          onResizeRef.current(cols, rows)
+        )
+        refit()
+        const observer = new ResizeObserver(refit)
+        observer.observe(el)
+        const isTouch =
+          window.matchMedia("(pointer: coarse)").matches ||
+          navigator.maxTouchPoints > 0
+        const stopTouch = isTouch ? setupTouchScroll(el, terminal) : undefined
+        term.current = terminal
+        const queued = pending.current
+        pending.current = []
+        for (const op of queued) op(terminal)
+        teardown = () => {
+          stopTouch?.()
+          observer.disconnect()
+          dataSub.dispose()
+          resizeSub.dispose()
+          terminal.dispose()
+          term.current = null
+        }
       }
-      refit()
-      const dataSub = terminal.onData((d) => onDataRef.current(d))
-      const resizeSub = terminal.onResize(({ cols, rows }) =>
-        onResizeRef.current(cols, rows)
-      )
-      const observer = new ResizeObserver(refit)
-      observer.observe(el)
-      const isTouch =
-        window.matchMedia("(pointer: coarse)").matches ||
-        navigator.maxTouchPoints > 0
-      const stopTouch = isTouch ? setupTouchScroll(el, terminal) : undefined
-      term.current = terminal
+
+      // xterm measures the cell size when it opens, so the font must be ready.
+      // A failed load still creates the terminal: it must never stay blank.
+      Promise.all(FONT_FACES.map((face) => document.fonts.load(face)))
+        .catch(console.warn)
+        .then(() => {
+          if (!cancelled) create()
+        })
+
       return () => {
-        stopTouch?.()
-        observer.disconnect()
-        dataSub.dispose()
-        resizeSub.dispose()
-        terminal.dispose()
-        term.current = null
+        cancelled = true
+        teardown?.()
       }
     }, [])
 
-    useImperativeHandle(ref, () => ({
-      write: (data) => term.current?.write(data),
-      flush: () =>
-        new Promise<void>((resolve) => {
-          const t = term.current
-          if (t) t.write("", resolve)
-          else resolve()
+    useImperativeHandle(
+      ref,
+      () => ({
+        write: (data) => run((t) => t.write(data)),
+        flush: () =>
+          new Promise<void>((resolve) => {
+            const t = term.current
+            if (t) t.write("", resolve)
+            else pending.current.push((late) => late.write("", resolve))
+          }),
+        cursorX: () => term.current?.buffer.active.cursorX ?? 0,
+        hasContent: () => {
+          const b = term.current?.buffer.active
+          return !!b && (b.baseY > 0 || b.cursorY > 0 || b.cursorX > 0)
+        },
+        reset: () => run((t) => t.reset()),
+        focus: () => run((t) => t.focus()),
+        size: () => ({
+          cols: term.current?.cols ?? 80,
+          rows: term.current?.rows ?? 24,
         }),
-      cursorX: () => term.current?.buffer.active.cursorX ?? 0,
-      hasContent: () => {
-        const b = term.current?.buffer.active
-        return !!b && (b.baseY > 0 || b.cursorY > 0 || b.cursorX > 0)
-      },
-      reset: () => term.current?.reset(),
-      focus: () => term.current?.focus(),
-      size: () => ({
-        cols: term.current?.cols ?? 80,
-        rows: term.current?.rows ?? 24,
       }),
-    }))
+      [run]
+    )
 
     return (
       <div
