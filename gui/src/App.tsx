@@ -45,13 +45,10 @@ import {
   successStatus,
 } from "@/lib/terminal-format"
 import {
-  EMPTY_PROGRESS,
+  EMPTY_HISTORY,
   isInfoRun,
   parseProgressEvent,
-  reduceProgress,
-  type ProgressEvent,
-  type ProgressState,
-  type RunStatus,
+  reduceHistory,
 } from "@/lib/progress"
 import { stateAction } from "@/lib/run-client"
 import { useProbe } from "@/lib/use-probe"
@@ -73,17 +70,6 @@ import {
 } from "@/lib/runner"
 
 const platform = detectPlatform(navigator.userAgent)
-
-type ProgressAction = ProgressEvent | { type: "reset" }
-
-function progressReducer(
-  state: ProgressState,
-  action: ProgressAction
-): ProgressState {
-  return action.type === "reset"
-    ? EMPTY_PROGRESS
-    : reduceProgress(state, action)
-}
 
 function addUnique(list: string[], extra: string[]): string[] {
   const seen = new Set(list)
@@ -120,19 +106,14 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const [view, setView] = useState<OutputView>("cli")
   const viewRef = useRef<OutputView>("cli")
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [progress, dispatchProgress] = useReducer(
-    progressReducer,
-    EMPTY_PROGRESS
-  )
-  const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
-  // Mode of the current / last run (fixed at its start).
-  const [runNative, setRunNative] = useState(false)
-  const [runIsInfo, setRunIsInfo] = useState(false)
+  // Every run of this session, for the native view (like the terminal's).
+  const [history, dispatchHistory] = useReducer(reduceHistory, EMPTY_HISTORY)
+  const current = history.runs.at(-1)
   const [defaults, setDefaults] = useState<Record<string, number>>({})
 
   const native = view === "native"
   // Info runs have no progress: their output is shown until the next run.
-  const showTerminal = !native || runIsInfo
+  const showTerminal = !native || (current?.info ?? false)
 
   const args = useMemo(() => buildArgs(options), [options])
   const command = useMemo(() => formatCommand(args, platform), [args])
@@ -253,21 +234,20 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   // Raw event lines of the CLI; anything unparsable is ignored.
   const onProgressLine = useCallback((line: string) => {
     const event = parseProgressEvent(line)
-    if (event) dispatchProgress(event)
+    if (event) dispatchHistory({ type: "event", event })
   }, [])
 
-  // Resets the native view for a run that is starting / attached.
+  // Adds the run that is starting / attached to the native view.
   const beginProgress = useCallback((runArgs: string[]) => {
-    const native = viewRef.current === "native"
-    const info = isInfoRun(runArgs)
-    dispatchProgress({ type: "reset" })
-    setRunStatus({ kind: "running" })
-    setRunNative(native)
-    setRunIsInfo(info)
+    dispatchHistory({
+      type: "begin",
+      command: formatCommand(runArgs, platform),
+      info: isInfoRun(runArgs),
+    })
   }, [])
 
   const answerPrompt = (yes: boolean) => {
-    dispatchProgress({ type: "answered" })
+    dispatchHistory({ type: "event", event: { type: "answered" } })
     writeStdin(yes ? "y\r" : "n\r").catch(console.error)
   }
 
@@ -367,16 +347,16 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               ms === null
               ? finishedStatus()
               : successStatus(ms)
-      setRunStatus(
-        stoppedRef.current
+      dispatchHistory({
+        type: "end",
+        status: stoppedRef.current
           ? { kind: "stopped" }
           : code === undefined || code === null
             ? { kind: "exit", code: null }
             : code !== 0
               ? { kind: "exit", code }
-              : { kind: "success", ms }
-      )
-      dispatchProgress({ type: "answered" })
+              : { kind: "success", ms },
+      })
       void finish(term, status)
     },
     [finish, clearStartTimer]
@@ -390,8 +370,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       setRunning(false)
       setOutcome(runOutcome({ error: true }))
       setEndCount((n) => n + 1)
-      setRunStatus({ kind: "error", message })
-      dispatchProgress({ type: "answered" })
+      dispatchHistory({ type: "end", status: { kind: "error", message } })
       void finish(term, errorStatus(message))
     },
     [finish, clearStartTimer]
@@ -406,18 +385,17 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       stoppedRef.current = false
       setRunning(true)
       beginProgress(runArgs)
-      const native = viewRef.current === "native"
       await printStart(term, runArgs)
       // Focusing opens the on-screen keyboard on phones.
       // A hidden terminal must not take the keystrokes.
-      const visible = !native || isInfoRun(runArgs)
+      const visible = viewRef.current !== "native" || isInfoRun(runArgs)
       if (visible && !window.matchMedia("(pointer: coarse)").matches)
         term.focus()
       startedAtRef.current = performance.now()
       try {
         const { cols, rows } = term.size()
         // Tauri reports through the handlers, the web through `attachWeb`.
-        await runDeew(runArgs, cols, rows, native, {
+        await runDeew(runArgs, cols, rows, true, {
           onOutput: (bytes) => term.write(bytes),
           onExit: (code) => endRun(term, code),
           onProgress: onProgressLine,
@@ -491,7 +469,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
             // The whole output is replayed: start over.
             term.reset()
             // Stored progress lines follow the state frame.
-            dispatchProgress({ type: "reset" })
+            dispatchHistory({ type: "restart" })
             promptShownRef.current = false
             await printStart(term, runArgs ?? [])
           } else if (action === "lost") {
@@ -597,13 +575,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
 
             <div className="flex min-h-40 flex-1 flex-col gap-2">
               {!showTerminal && (
-                <ProgressPane
-                  className="min-h-24 flex-1"
-                  progress={progress}
-                  status={runStatus}
-                  native={runNative}
-                  info={runIsInfo}
-                />
+                <ProgressPane className="min-h-24 flex-1" runs={history.runs} />
               )}
               {/* Always mounted, only hidden: remounting would lose the xterm. */}
               <div className={showTerminal ? "min-h-0 flex-1" : "hidden"}>
@@ -619,7 +591,10 @@ export function App({ onLogout }: { onLogout?: () => void }) {
         </div>
       </div>
       <FileBrowserDialog request={browseRequest} />
-      <PromptDialog question={progress.prompt} onAnswer={answerPrompt} />
+      <PromptDialog
+        question={showTerminal ? null : (current?.progress.prompt ?? null)}
+        onAnswer={answerPrompt}
+      />
     </TooltipProvider>
   )
 }

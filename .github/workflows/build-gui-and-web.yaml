@@ -39,6 +39,9 @@ jobs:
 
           if gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
             echo "Release $tag exists, uploading to it"
+            python -c "print('\n'.join(open('changelog.md', 'r').read().split('\n\n# deew')[0].split('\n')[1:]))" > changelog.txt
+            gh release edit "$tag" --repo "$repo" --notes-file changelog.txt
+            echo "Updated the description of release $tag from changelog.md"
           else
             python -c "print('\n'.join(open('changelog.md', 'r').read().split('\n\n# deew')[0].split('\n')[1:]))" > changelog.txt
             gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" --title "$tag" --notes-file changelog.txt
@@ -124,12 +127,10 @@ jobs:
           mv gui/target/x86_64-unknown-linux-musl/release/deew-web deew-web
 
       - name: Upload release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.resolve-tag.outputs.tag }}
-          files: |
-            deew-gui
-            deew-web
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: gh release upload "$TAG" deew-gui deew-web --repo "$GITHUB_REPOSITORY" --clobber
 
       # Posting is best effort: a failure is logged as a warning, the run stays green.
       - name: Set up Python
@@ -194,9 +195,8 @@ jobs:
         run: cargo build -p deew-web --release --locked
 
       - name: Upload release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.resolve-tag.outputs.tag }}
-          files: |
-            gui/target/release/deew-gui.exe
-            gui/target/release/deew-web.exe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: gh release upload "$TAG" gui/target/release/deew-gui.exe gui/target/release/deew-web.exe --repo "$GITHUB_REPOSITORY" --clobber

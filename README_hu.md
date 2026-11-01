@@ -1,6 +1,6 @@
 [![builds](https://img.shields.io/github/actions/workflow/status/pcrlnd/deew/build-cli.yaml?logo=github&style=flat-square)](https://github.com/pcrlnd/deew/actions/workflows/build-cli.yaml)
 [![github_release](https://img.shields.io/github/v/release/pcrlnd/deew?logo=github&color=70920c&style=flat-square)](https://github.com/pcrlnd/deew/releases)
-[![crates_release](https://img.shields.io/crates/v/deew?style=flat-square)](https://crates.io/crates/deew)
+[![crates_release](https://img.shields.io/crates/v/deew?logo=rust&style=flat-square)](https://crates.io/crates/deew)
 [![license](https://img.shields.io/github/license/pcrlnd/deew?color=blueviolet&style=flat-square)](https://github.com/pcrlnd/deew/blob/main/LICENSE)
 \
 [![telegram](https://telegram-badge.vercel.app/api/telegram-badge?channelId=@deew_supp&style=flat-square&label=Discussion+and+support)](https://t.me/deew_supp)

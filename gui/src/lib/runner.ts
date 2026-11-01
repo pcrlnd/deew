@@ -95,6 +95,10 @@ function decodeBase64(text: string): Uint8Array {
   return bytes
 }
 
+/**
+ * Starts a run. `native` asks the CLI for structured progress events; the GUI
+ * always passes `true`, so the GUI view works whichever view the run started in.
+ */
 export async function runDeew(
   args: string[],
   cols: number,

@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  EMPTY_HISTORY,
   EMPTY_PROGRESS,
   formatPercent,
   isInfoRun,
   overallPercent,
   parseProgressEvent,
+  reduceHistory,
   reduceProgress,
   stageLabel,
   statusText,
   type JobProgress,
+  type RunHistory,
   type ProgressEvent,
   type ProgressState,
 } from "./progress"
@@ -239,5 +242,69 @@ describe("formatPercent", () => {
     expect(formatPercent(99.996)).toBe("99.99%")
     expect(formatPercent(100)).toBe("100%")
     expect(formatPercent(null)).toBe("")
+  })
+})
+
+describe("reduceHistory", () => {
+  const begin = (h: RunHistory, command: string, info = false) =>
+    reduceHistory(h, { type: "begin", command, info })
+  const jobs: ProgressEvent = { type: "jobs", files: ["a.ac3"] }
+
+  it("appends a running entry on begin", () => {
+    const h = begin(begin(EMPTY_HISTORY, "one"), "two", true)
+    expect(h.runs.map((r) => [r.command, r.info])).toEqual([
+      ["one", false],
+      ["two", true],
+    ])
+    expect(h.runs[1].status).toEqual({ kind: "running" })
+    expect(h.runs[1].progress).toBe(EMPTY_PROGRESS)
+    expect(h.runs[0].id).not.toBe(h.runs[1].id)
+  })
+
+  it("applies events to the last entry only", () => {
+    const h = reduceHistory(begin(begin(EMPTY_HISTORY, "a"), "b"), {
+      type: "event",
+      event: jobs,
+    })
+    expect(h.runs[0].progress).toBe(EMPTY_PROGRESS)
+    expect(h.runs[1].progress.jobs).toHaveLength(1)
+  })
+
+  it("ignores events without entries", () => {
+    expect(reduceHistory(EMPTY_HISTORY, { type: "event", event: jobs })).toBe(
+      EMPTY_HISTORY
+    )
+  })
+
+  it("sets the status on end and clears the prompt", () => {
+    let h = begin(EMPTY_HISTORY, "a")
+    h = reduceHistory(h, {
+      type: "event",
+      event: { type: "prompt", text: "Overwrite?" },
+    })
+    expect(h.runs[0].progress.prompt).toBe("Overwrite?")
+    h = reduceHistory(h, { type: "end", status: { kind: "stopped" } })
+    expect(h.runs[0].status).toEqual({ kind: "stopped" })
+    expect(h.runs[0].progress.prompt).toBeNull()
+  })
+
+  it("restart resets only the last entry", () => {
+    let h = begin(begin(EMPTY_HISTORY, "a"), "b")
+    h = reduceHistory(h, { type: "event", event: jobs })
+    h = reduceHistory(h, { type: "end", status: { kind: "stopped" } })
+    const first = h.runs[0]
+    h = reduceHistory(h, { type: "restart" })
+    expect(h.runs[0]).toBe(first)
+    expect(h.runs[1].progress).toBe(EMPTY_PROGRESS)
+    expect(h.runs[1].status).toEqual({ kind: "running" })
+    expect(h.runs[1].command).toBe("b")
+  })
+
+  it("keeps at most 50 entries, dropping the oldest", () => {
+    let h = EMPTY_HISTORY
+    for (let i = 0; i < 55; i++) h = begin(h, `run ${i}`)
+    expect(h.runs).toHaveLength(50)
+    expect(h.runs[0].command).toBe("run 5")
+    expect(h.runs[49].command).toBe("run 54")
   })
 })

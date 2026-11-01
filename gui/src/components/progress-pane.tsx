@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react"
 import { CircleCheck, CircleX } from "lucide-react"
 
 import { NoteLine } from "@/components/note-line"
@@ -7,19 +8,12 @@ import {
   stageLabel,
   statusText,
   type JobProgress,
-  type ProgressState,
-  type RunStatus,
+  type RunEntry,
 } from "@/lib/progress"
 import { cn } from "@/lib/utils"
 
 interface ProgressPaneProps {
-  progress: ProgressState
-  /** Null before the first run. */
-  status: RunStatus | null
-  /** The current / last run was started in native mode. */
-  native: boolean
-  /** The current / last run only prints information (no encode, no bars). */
-  info: boolean
+  runs: RunEntry[]
   className?: string
 }
 
@@ -47,55 +41,53 @@ function Bar({ job, failed }: { job: JobProgress; failed: boolean }) {
   )
 }
 
-/** One job: file name, stage, bar and percent (stacked when narrow). */
+/**
+ * One job: file name, stage, bar and percent. Narrow: file name and stage on
+ * one line, bar and percent below; wide: all four in one row.
+ */
 function JobRow({ job, failed }: { job: JobProgress; failed: boolean }) {
   const percent = job.done ? 100 : job.percent
   const stage = job.done ? "done" : stageLabel(job)
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 @min-[520px]:grid-cols-[minmax(0,1fr)_10rem_minmax(0,12rem)_4.5rem]">
-      <span
-        className="order-1 truncate font-mono @min-[520px]:order-none"
-        title={job.file}
-      >
-        {job.file || "…"}
-      </span>
-      <span className="order-3 col-span-2 truncate text-muted-foreground @min-[520px]:order-none @min-[520px]:col-span-1">
-        {stage}
-      </span>
-      <div className="order-4 col-span-2 @min-[520px]:order-none @min-[520px]:col-span-1">
-        <Bar job={job} failed={failed} />
+    <div className="grid grid-cols-1 gap-y-1 @min-[520px]:grid-cols-[minmax(0,1fr)_10rem_minmax(0,12rem)_4.5rem] @min-[520px]:items-center @min-[520px]:gap-x-3">
+      <div className="flex min-w-0 items-center gap-x-3 @min-[520px]:contents">
+        <span className="min-w-0 flex-1 truncate font-mono" title={job.file}>
+          {job.file || "…"}
+        </span>
+        <span className="shrink-0 text-right whitespace-nowrap text-muted-foreground @min-[520px]:min-w-0 @min-[520px]:shrink @min-[520px]:truncate @min-[520px]:text-left">
+          {stage}
+        </span>
       </div>
-      <span className="order-2 text-right tabular-nums @min-[520px]:order-none">
-        {formatPercent(percent)}
-      </span>
+      <div className="flex items-center gap-x-3 @min-[520px]:contents">
+        <div className="min-w-0 flex-1">
+          <Bar job={job} failed={failed} />
+        </div>
+        <span className="w-14 shrink-0 text-right tabular-nums @min-[520px]:w-auto">
+          {formatPercent(percent)}
+        </span>
+      </div>
     </div>
   )
 }
 
-/** Native view of a run: progress bars, warnings, errors and the status. */
-export function ProgressPane({
-  progress,
-  status,
-  native,
-  info,
-  className,
-}: ProgressPaneProps) {
-  const running = status?.kind === "running"
-  const ended = status !== null && !running
-  const failed = ended && status.kind !== "success"
+/** One run: its command, then bars, notes and the final status. */
+function RunSection({ run }: { run: RunEntry }) {
+  const { progress, status } = run
+  const running = status.kind === "running"
+  const failed = !running && status.kind !== "success"
   const overall = overallPercent(progress.jobs)
   const doneCount = progress.jobs.filter((j) => j.done).length
-  const silentCli =
-    native && ended && !info && !progress.cliReports && status !== null
+  const silentCli = !running && !progress.cliReports
 
   return (
-    <div
-      className={cn(
-        "@container flex flex-col gap-2 overflow-y-auto rounded-lg border border-input bg-background p-3 text-xs",
-        className
-      )}
-    >
-      {overall !== null && !info && (
+    <section className="flex flex-col gap-2">
+      <p
+        className="truncate font-mono text-muted-foreground"
+        title={run.command}
+      >
+        {run.command}
+      </p>
+      {overall !== null && (
         <p className="font-medium">
           {doneCount} of {progress.jobs.length} files done -{" "}
           {overall.toFixed(0)}%
@@ -113,7 +105,7 @@ export function ProgressPane({
           text="This deew CLI does not report progress (needs deew 3.6.2 or newer), use the CLI output."
         />
       )}
-      {ended && (
+      {!running && (
         <p className="flex items-start gap-1">
           {status.kind === "success" ? (
             <CircleCheck className="mt-[3px] size-3 shrink-0 text-green-600" />
@@ -123,18 +115,51 @@ export function ProgressPane({
           <span className="min-w-0 break-words">{statusText(status)}</span>
         </p>
       )}
-      {status === null && (
+      {running && progress.jobs.length === 0 && (
+        <p className="text-muted-foreground">Waiting for deew…</p>
+      )}
+    </section>
+  )
+}
+
+/** Native view: every encode run of the session, oldest first. */
+export function ProgressPane({ runs, className }: ProgressPaneProps) {
+  const shown = runs.filter((r) => !r.info)
+  const ref = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(true)
+
+  // Keep following the end unless the user scrolled up to an older run.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight
+  })
+
+  return (
+    <div
+      ref={ref}
+      onScroll={(e) => {
+        const el = e.currentTarget
+        atBottom.current =
+          el.scrollHeight - el.scrollTop - el.clientHeight <= 24
+      }}
+      className={cn(
+        "@container flex flex-col gap-3 overflow-y-auto rounded-lg border border-input bg-background p-3 text-xs",
+        className
+      )}
+    >
+      {shown.length === 0 && (
         <p className="text-muted-foreground">
           Progress of the encodes is shown here.
         </p>
       )}
-      {running && progress.jobs.length === 0 && !info && (
-        <p className="text-muted-foreground">
-          {native
-            ? "Waiting for deew…"
-            : "This run was started with the CLI output."}
-        </p>
-      )}
+      {shown.map((run, i) => (
+        <div
+          key={run.id}
+          className={cn("flex flex-col", i > 0 && "border-t pt-3")}
+        >
+          <RunSection run={run} />
+        </div>
+      ))}
     </div>
   )
 }

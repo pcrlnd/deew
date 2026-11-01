@@ -227,3 +227,78 @@ export function statusText(status: RunStatus): string {
 
 /** Utilities-menu commands (`--version` and the like) encode nothing. */
 export const isInfoRun = (args: string[]): boolean => !args.includes("-i")
+
+/** One run in the history of the native view. */
+export interface RunEntry {
+  id: number
+  command: string
+  /** Only prints information (no encode, no bars). */
+  info: boolean
+  progress: ProgressState
+  status: RunStatus
+}
+
+export interface RunHistory {
+  runs: RunEntry[]
+  nextId: number
+}
+
+export const EMPTY_HISTORY: RunHistory = { runs: [], nextId: 1 }
+
+/** Number of runs kept in the history. */
+export const MAX_RUNS = 50
+
+export type HistoryAction =
+  | { type: "begin"; command: string; info: boolean }
+  | { type: "event"; event: ProgressEvent }
+  | { type: "end"; status: RunStatus }
+  | { type: "restart" }
+
+function updateLast(
+  history: RunHistory,
+  update: (entry: RunEntry) => RunEntry
+): RunHistory {
+  if (history.runs.length === 0) return history
+  const runs = [...history.runs]
+  runs[runs.length - 1] = update(runs[runs.length - 1])
+  return { ...history, runs }
+}
+
+/** Applies one action; never mutates `history`. */
+export function reduceHistory(
+  history: RunHistory,
+  action: HistoryAction
+): RunHistory {
+  switch (action.type) {
+    case "begin": {
+      const entry: RunEntry = {
+        id: history.nextId,
+        command: action.command,
+        info: action.info,
+        progress: EMPTY_PROGRESS,
+        status: { kind: "running" },
+      }
+      return {
+        runs: [...history.runs, entry].slice(-MAX_RUNS),
+        nextId: history.nextId + 1,
+      }
+    }
+    case "event":
+      return updateLast(history, (e) => ({
+        ...e,
+        progress: reduceProgress(e.progress, action.event),
+      }))
+    case "end":
+      return updateLast(history, (e) => ({
+        ...e,
+        status: action.status,
+        progress: reduceProgress(e.progress, { type: "answered" }),
+      }))
+    case "restart":
+      return updateLast(history, (e) => ({
+        ...e,
+        progress: EMPTY_PROGRESS,
+        status: { kind: "running" },
+      }))
+  }
+}

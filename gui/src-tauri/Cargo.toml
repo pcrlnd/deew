@@ -1,6 +1,6 @@
 [package]
 name = "deew-gui"
-version = "0.4.1"
+version = "0.4.2"
 description = "Desktop GUI for deew (Dolby Encoding Engine Wrapper)"
 authors = ["pcroland <pcroland@protonmail.ch>"]
 license = "MIT"

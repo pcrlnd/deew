@@ -7,7 +7,14 @@
   output is used in `deew-gui` and `deew-web` (switching to the CLI output
   showed them without color)
 - updated dependencies
-- `deew-gui` 0.4.1 and `deew-web` 0.4.1:
+- `deew-gui`/`deew-web` 0.4.2:
+  - GUI output also works for runs started with the CLI output (switching
+    to it during or after such a run showed nothing)
+  - GUI output keeps the previous runs like the CLI output does, scroll up to
+    see them
+  - narrow screens (e.g. phones): the progress bars show the status next to
+    the file name and the percentage next to the bar
+- `deew-gui`/`deew-web` 0.4.1:
   - the copy button copies the command in browsers opened over plain `http`
     (e.g. on a phone), and flashes red if copying fails
   - the input file summary shows the bit depths of mixed inputs
@@ -16,14 +23,14 @@
   - updated dependencies
 
 # deew 3.6.4:
-- `deew-gui` 0.4.0 and `deew-web` 0.4.0:
+- `deew-gui`/`deew-web` 0.4.0:
   - new look: boxy style, blue accents and IBM Plex Sans font
   - the terminal uses IBM Plex Mono
   - `-` instead of `·` between the values in the input file summary and in
     the progress summary
 
 # deew 3.6.3:
-- `deew-gui` 0.3.1 and `deew-web` 0.3.1:
+- `deew-gui`/`deew-web` 0.3.1:
   - the command line field is at most 3 lines high, a longer command ends
     in `...` (hover it for the full command), Run and Stop are as tall as
 	the field and the copy button is centered
@@ -35,7 +42,7 @@
 - reports progress, warnings and prompts to `deew-gui` and `deew-web` for their
   new GUI output (the terminal output doesn't change)
 - default config: new `[gui]` section for `deew-gui` and `deew-web`
-- `deew-gui` 0.3.0 and `deew-web` 0.3.0:
+- `deew-gui`/`deew-web` 0.3.0:
   - new GUI output next to the CLI output, switched with the `CLI | GUI`
     toggle next to Run/Stop: progress bars per file, warnings and errors listed
 	under them, prompts as pop-ups, the CLI output stays available below
