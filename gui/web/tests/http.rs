@@ -47,6 +47,44 @@ fn login_request(user: &str, pass: &str) -> Request<Body> {
         .unwrap()
 }
 
+async fn login_cookie(remember: Option<&str>) -> String {
+    let app = router(state(true));
+    let mut body = serde_json::json!({"user": "bob", "pass": "secret"});
+    if let Some(r) = remember {
+        body["remember"] = r.into();
+    }
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header(header::HOST, "localhost:8765")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let r = send(&app, req).await;
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    r.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn login_remember_choices() {
+    assert!(
+        login_cookie(Some("30d"))
+            .await
+            .contains("; Max-Age=2592000")
+    );
+    assert!(login_cookie(Some("1d")).await.contains("; Max-Age=86400"));
+    assert!(!login_cookie(Some("session")).await.contains("Max-Age"));
+    assert!(login_cookie(None).await.contains("; Max-Age=604800"));
+    assert!(
+        login_cookie(Some("bogus"))
+            .await
+            .contains("; Max-Age=604800")
+    );
+}
+
 #[tokio::test]
 async fn session_without_auth() {
     let app = router(state(false));
@@ -97,7 +135,7 @@ async fn login_flow() {
         .to_string();
     assert!(cookie.starts_with("deew_session="), "{cookie}");
     assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
-    assert!(cookie.contains("Path=/") && !cookie.contains("Max-Age"));
+    assert!(cookie.contains("Path=/") && cookie.contains("Max-Age=604800"));
     let pair = cookie.split(';').next().unwrap().to_string();
 
     let r = send(
@@ -300,8 +338,15 @@ async fn settings_round_trip() {
 
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
     assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!(body_json(r).await, serde_json::json!({"progress": "cli"}));
+    let home = std::env::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    assert_eq!(
+        body_json(r).await,
+        serde_json::json!({"progress": "cli", "output": "", "toInput": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming"})
+    );
 
+    // an extra defaultOutput is ignored, a missing output means empty
     let r = send(&app, settings_request("POST", r#"{"progress":"native"}"#)).await;
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     let saved = std::fs::read_to_string(&config).unwrap();
@@ -311,7 +356,21 @@ async fn settings_round_trip() {
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "native"})
+        serde_json::json!({"progress": "native", "output": "", "toInput": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming"})
+    );
+
+    let body =
+        r#"{"progress":"cli","output":"C:\\Users\\pc\\Music","toInput":true,"defaultOutput":"x"}"#;
+    let r = send(&app, settings_request("POST", body)).await;
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    let saved = std::fs::read_to_string(&config).unwrap();
+    assert!(saved.contains("[output]"), "{saved}");
+    assert!(saved.contains("path = 'C:\\Users\\pc\\Music'"), "{saved}");
+    assert!(saved.contains("to_input = true"), "{saved}");
+    let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
+    assert_eq!(
+        body_json(r).await,
+        serde_json::json!({"progress": "cli", "output": "C:\\Users\\pc\\Music", "toInput": true, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming"})
     );
 }
 
@@ -323,7 +382,9 @@ async fn settings_errors() {
 
     // no config yet: reading gives the default, saving explains what to do
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
-    assert_eq!(body_json(r).await, serde_json::json!({"progress": "cli"}));
+    let body = body_json(r).await;
+    assert_eq!(body["progress"], "cli");
+    assert_eq!(body["output"], "");
     let r = send(&app, settings_request("POST", r#"{"progress":"native"}"#)).await;
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     let error = body_json(r).await;

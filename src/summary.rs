@@ -3,8 +3,8 @@
 use crate::config::SummarySections;
 use crate::error::escape;
 use crate::markup::{balanced, strip, visible_width};
-use crate::plan::{Format, channel_name, filename_delay};
-use crate::tools::COULDNT_PARSE;
+use crate::plan::{Format, Profile71, channel_name, filename_delay};
+use crate::tools::{COULDNT_PARSE, Version, Versions};
 use crate::util::{convert_delay_to_ms, format_g, version_lt};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -38,15 +38,18 @@ pub struct SummaryData<'a> {
     pub sections: &'a SummarySections,
     /// Markup for the "Latest" row (see [`latest_markup`]).
     pub latest: String,
-    pub dee_version: Option<&'a str>,
-    pub ffmpeg_version: Option<&'a str>,
-    pub ffprobe_version: Option<&'a str>,
+    pub versions: Versions,
     pub channels: i64,
+    /// Sample rate in Hz of every input.
+    pub sample_rates: &'a [i64],
     /// Normalised bit depth of every input.
     pub bit_depths: &'a [u32],
     pub measure_only: bool,
     pub format: Format,
-    pub outchannels: i64,
+    /// The channels of the output as shown (`5.0`, `7.1`, `Atmos`, ...).
+    pub output_channels: String,
+    /// The 7.1 DDP profile.
+    pub profile: Option<Profile71>,
     pub bitrate: Option<u32>,
     pub dialnorm: i64,
     /// Resolved absolute output directory.
@@ -58,8 +61,34 @@ pub struct SummaryData<'a> {
     pub temp_path: &'a str,
 }
 
-fn version_cell(version: Option<&str>) -> String {
-    version.map_or_else(|| COULDNT_PARSE.to_string(), escape)
+fn version_cell(version: &Version) -> String {
+    match version {
+        Version::Found(version) => escape(version),
+        Version::NotFound => NOT_FOUND.to_string(),
+        Version::CouldntParse => COULDNT_PARSE.to_string(),
+    }
+}
+
+const NOT_FOUND: &str = "[red]not found";
+
+/// Channels of the input, as far as ffprobe reports them.
+fn input_channels(channels: i64) -> String {
+    match channels {
+        1 | 2 | 5 | 6 | 7 | 8 => channel_name(channels).to_string(),
+        other => format!("{other} channels"),
+    }
+}
+
+/// The version rows of the binaries section (and of `deew -v`): label and
+/// value (markup).
+pub fn binary_cells(v: &Versions) -> [(&'static str, String); 5] {
+    [
+        ("DEE version", version_cell(&v.dee)),
+        ("truehdd version", version_cell(&v.truehdd)),
+        ("dee_shim version", version_cell(&v.shim)),
+        ("ffmpeg version", version_cell(&v.ffmpeg)),
+        ("ffprobe version", version_cell(&v.ffprobe)),
+    ]
 }
 
 /// The distinct bit depths sorted, e.g. `24` or `16/24/32`.
@@ -71,11 +100,26 @@ fn bit_depth_cell(depths: &[u32]) -> String {
     depths.join("/")
 }
 
+/// The distinct sample rates in kHz, ascending, e.g. `48 kHz` or `44.1/48 kHz`.
+fn sample_rate_cell(rates: &[i64]) -> String {
+    let mut distinct = rates.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let khz: Vec<String> = distinct
+        .iter()
+        .map(|&r| {
+            let text = format!("{:.3}", r as f64 / 1000.0);
+            text.trim_end_matches('0').trim_end_matches('.').to_string()
+        })
+        .collect();
+    format!("{} kHz", khz.join("/"))
+}
+
 /// A delay in milliseconds as shown in the summary: at most 3 decimals
 /// without trailing zeros, no `-0`, e.g. `-5.1ms`. `Err` for an unsupported
 /// delay.
 fn delay_ms_text(delay: &str) -> Result<String, ()> {
-    let (print, _, _) = convert_delay_to_ms(delay, false)?;
+    let (print, _, _) = convert_delay_to_ms(delay, 0)?;
     // `print` is "{:.3} ms"
     let number = print.trim_end_matches(" ms");
     let number = if number.contains('.') {
@@ -117,33 +161,33 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
         rows.push(row(&["[bold cyan]Latest", &d.latest], true));
     }
     if d.sections.binaries {
-        rows.push(row(
-            &["[cyan]DEE version", &version_cell(d.dee_version)],
-            false,
-        ));
-        rows.push(row(
-            &["[cyan]ffmpeg version", &version_cell(d.ffmpeg_version)],
-            false,
-        ));
-        rows.push(row(
-            &["[cyan]ffprobe version", &version_cell(d.ffprobe_version)],
-            true,
-        ));
+        let cells = binary_cells(&d.versions);
+        let last = cells.len() - 1;
+        for (i, (label, cell)) in cells.iter().enumerate() {
+            rows.push(row(&[&format!("[cyan]{label}"), cell], i == last));
+        }
     }
     if d.sections.input_info {
         rows.push(row(&["[bold yellow]Input(s)"], false));
-        rows.push(row(&["Channels", channel_name(d.channels)], false));
-        rows.push(row(&["Bit depth", &bit_depth_cell(d.bit_depths)], true));
+        rows.push(row(&["Channels", &input_channels(d.channels)], false));
+        rows.push(row(
+            &["Sample rate", &sample_rate_cell(d.sample_rates)],
+            false,
+        ));
+        rows.push(row(&["Bit depth", &bit_depth_cell(d.bit_depths)], false));
+        rows.push(row(&["Files", &d.files.to_string()], true));
     }
     if !d.measure_only && d.sections.output_info {
         rows.push(row(&["[bold yellow]Output"], false));
         rows.push(row(&["Format", d.format.summary_name()], false));
-        let channels = if d.format == Format::Ac4 {
-            "immersive stereo"
-        } else {
-            channel_name(d.outchannels)
-        };
-        rows.push(row(&["Channels", channels], false));
+        rows.push(row(&["Channels", &d.output_channels], false));
+        if let Some(profile) = d.profile {
+            let text = match profile {
+                Profile71::Standard => "Standard (dee_shim)",
+                Profile71::Bluray => "Blu-ray",
+            };
+            rows.push(row(&["Profile", text], false));
+        }
         let bitrate = match (d.format, d.bitrate) {
             (Format::Thd, _) | (_, None) => "N/A".to_string(),
             (_, Some(b)) => format!("{b} kbps"),
@@ -159,7 +203,6 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
     }
     if d.sections.other {
         rows.push(row(&["[bold yellow]Other"], false));
-        rows.push(row(&["Files", &d.files.to_string()], false));
         rows.push(row(&["Max instances", &format_g(d.instances)], false));
         rows.push(row(&["Delay", &d.delay], false));
         rows.push(Row {
@@ -507,14 +550,20 @@ mod tests {
         SummaryData {
             sections,
             latest: "[red]couldn't fetch".into(),
-            dee_version: Some("5.2.1"),
-            ffmpeg_version: Some("7.1.5"),
-            ffprobe_version: None,
+            versions: Versions {
+                dee: Version::Found("6.7.0".into()),
+                truehdd: Version::Found("0.6.2".into()),
+                shim: Version::NotFound,
+                ffmpeg: Version::Found("7.1.5".into()),
+                ffprobe: Version::CouldntParse,
+            },
             channels: 6,
+            sample_rates: &[48000],
             bit_depths: &[24, 24],
             measure_only: false,
             format: Format::Ddp,
-            outchannels: 6,
+            output_channels: "5.1".to_string(),
+            profile: None,
             bitrate: Some(1024),
             dialnorm: 0,
             output_dir: "/out/di[r]",
@@ -548,18 +597,29 @@ mod tests {
                 .iter()
                 .map(|d| d.as_u64().unwrap() as u32)
                 .collect();
-            let version = |key: &str| (s(key) != COULDNT_PARSE).then(|| s(key));
+            let version = |key: &str| {
+                if s(key) == COULDNT_PARSE {
+                    Version::CouldntParse
+                } else {
+                    Version::Found(s(key).to_string())
+                }
+            };
             let data = SummaryData {
                 sections: &sections,
                 latest: s("latest").to_string(),
-                dee_version: version("dee"),
-                ffmpeg_version: version("ffmpeg"),
-                ffprobe_version: version("ffprobe"),
+                versions: Versions {
+                    dee: version("dee"),
+                    ffmpeg: version("ffmpeg"),
+                    ffprobe: version("ffprobe"),
+                    ..Versions::default()
+                },
                 channels: p["channels"].as_i64().unwrap(),
+                sample_rates: &[48000],
                 bit_depths: &bit_depths,
                 measure_only: p["measure_only"].as_bool().unwrap(),
                 format: Format::parse(s("format")).unwrap(),
-                outchannels: p["outchannels"].as_i64().unwrap(),
+                output_channels: channel_name(p["outchannels"].as_i64().unwrap()).to_string(),
+                profile: None,
                 bitrate: p["bitrate"].as_u64().map(|b| b as u32),
                 dialnorm: p["dialnorm"].as_i64().unwrap(),
                 output_dir: s("output"),
@@ -570,12 +630,35 @@ mod tests {
             };
             let width = case["width"].as_u64().unwrap() as usize;
             let mut rows = summary_rows(&data);
-            // rich crops instead of folding the temp path (see `folds_temp_path`)
+            // The fixtures are older than the truehdd and dee_shim rows and the
+            // AC4 channels, only the renderer is compared.
+            rows.retain(|r| !r.cells[0].contains("truehdd") && !r.cells[0].contains("dee_shim"));
+            // ... and older than the Sample rate row and the Files row in the
+            // Input(s) section
+            rows.retain(|r| r.cells[0] != "Sample rate");
+            if let Some(files) = rows.iter().position(|r| r.cells[0] == "Files") {
+                rows.remove(files);
+                rows[files - 1].end_section = true;
+            }
+            if sections.other {
+                let other = rows
+                    .iter()
+                    .position(|r| r.cells[0].contains("Other"))
+                    .unwrap();
+                let count = data.files.to_string();
+                rows.insert(other + 1, row(&["Files", &count], false));
+            }
             for r in &mut rows {
+                // rich crops instead of folding the temp path (see `folds_temp_path`)
                 r.fold = false;
+                if data.format == Format::Ac4 && r.cells == ["Channels", "stereo"] {
+                    r.cells[1] = "immersive stereo".to_string();
+                }
             }
             let text = strip(&render_table("Encoding summary", &rows, width));
             let expected = case["expected"].as_str().unwrap().trim_end_matches('\n');
+            // the fixtures show the version they were made with
+            let expected = expected.replace("3.6.5", env!("CARGO_PKG_VERSION"));
             assert_eq!(text, expected, "width {width}: {p}");
         }
     }
@@ -652,6 +735,36 @@ mod tests {
         assert_eq!(bit_depth_cell(&[32, 16, 24, 16]), "16/24/32");
     }
 
+    #[test]
+    fn sample_rate_cell_values() {
+        assert_eq!(sample_rate_cell(&[48000]), "48 kHz");
+        assert_eq!(sample_rate_cell(&[44100, 44100]), "44.1 kHz");
+        assert_eq!(sample_rate_cell(&[22050]), "22.05 kHz");
+        assert_eq!(sample_rate_cell(&[88200]), "88.2 kHz");
+        assert_eq!(sample_rate_cell(&[176400]), "176.4 kHz");
+        assert_eq!(sample_rate_cell(&[48000, 44100, 48000]), "44.1/48 kHz");
+    }
+
+    #[test]
+    fn input_section_rows() {
+        let sections = sections(true);
+        let rows = summary_rows(&data(&sections));
+        let label = |i: usize| rows[i].cells[0].as_str();
+        let at = rows
+            .iter()
+            .position(|r| r.cells[0].contains("Input"))
+            .unwrap();
+        let input: Vec<&str> = (at + 1..at + 5).map(label).collect();
+        assert_eq!(input, ["Channels", "Sample rate", "Bit depth", "Files"]);
+        assert!(rows[at + 4].end_section && !rows[at + 3].end_section);
+        let other = rows
+            .iter()
+            .position(|r| r.cells[0].contains("Other"))
+            .unwrap();
+        assert_eq!(label(other + 1), "Max instances");
+        assert!(rows.iter().filter(|r| r.cells[0] == "Files").count() == 1);
+    }
+
     /// Characters of `ansi` that are rendered while an SGR style is active.
     fn styled_chars(ansi: &str, targets: &str) -> Vec<(usize, char)> {
         let mut bad = Vec::new();
@@ -682,7 +795,7 @@ mod tests {
     fn borders_are_never_styled() {
         let s = sections(true);
         let mut d = data(&s);
-        d.ffprobe_version = Some("7.1.5");
+        d.versions.ffprobe = Version::Found("7.1.5".into());
         let mut rows = summary_rows(&d);
         rows.push(row(&["[bold cyan]Version", "[cyan]DEE version"], true));
         rows.push(row(&["[bold yellow]Input", "[red]couldn't fetch"], false));
@@ -714,15 +827,66 @@ mod tests {
         assert_eq!(texts[5], ["Directory", "/out/di\\[r]"]);
         assert!(!rows[4].end_section && rows[5].end_section);
         d.format = Format::Ac4;
-        d.outchannels = 2;
+        d.output_channels = "stereo".to_string();
         d.bitrate = Some(320);
         let rows = summary_rows(&d);
-        assert_eq!(rows[2].cells, ["Channels", "immersive stereo"]);
+        assert_eq!(rows[2].cells, ["Channels", "stereo"]);
         assert_eq!(rows[3].cells, ["Bitrate", "320 kbps"]);
+        d.format = Format::DdpAtmos;
+        d.output_channels = "Atmos".to_string();
+        d.bitrate = Some(768);
+        let rows = summary_rows(&d);
+        assert_eq!(rows[1].cells, ["Format", "DDP Atmos"]);
+        assert_eq!(rows[2].cells, ["Channels", "Atmos"]);
+        assert_eq!(rows[3].cells, ["Bitrate", "768 kbps"]);
+        d.format = Format::Aac;
+        d.output_channels = "stereo".to_string();
+        assert_eq!(summary_rows(&d)[1].cells, ["Format", "AAC"]);
+        d.format = Format::Ac4;
+        d.measure_only = false;
         d.measure_only = true;
         assert!(summary_rows(&d).is_empty());
         assert!(!any_section(&sections(false)));
         assert!(any_section(&s));
+    }
+
+    #[test]
+    fn binaries_section_order() {
+        let mut s = sections(false);
+        s.binaries = true;
+        let mut d = data(&s);
+        d.versions.shim = Version::Found("0.1.0".into());
+        d.versions.ffprobe = Version::CouldntParse;
+        let rows = summary_rows(&d);
+        let cells: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|r| (r.cells[0].as_str(), r.cells[1].as_str()))
+            .collect();
+        assert_eq!(
+            cells,
+            [
+                ("[cyan]DEE version", "6.7.0"),
+                ("[cyan]truehdd version", "0.6.2"),
+                ("[cyan]dee_shim version", "0.1.0"),
+                ("[cyan]ffmpeg version", "7.1.5"),
+                ("[cyan]ffprobe version", "[red]couldn't parse"),
+            ]
+        );
+        assert!(rows[4].end_section && !rows[3].end_section);
+        d.versions.truehdd = Version::NotFound;
+        d.versions.shim = Version::NotFound;
+        let rows = summary_rows(&d);
+        assert_eq!(rows[1].cells[1], "[red]not found");
+        assert_eq!(rows[2].cells[1], "[red]not found");
+    }
+
+    #[test]
+    fn odd_input_channels_do_not_panic() {
+        let mut s = sections(false);
+        s.input_info = true;
+        let mut d = data(&s);
+        d.channels = 3;
+        assert_eq!(summary_rows(&d)[1].cells, ["Channels", "3 channels"]);
     }
 
     #[test]
@@ -823,9 +987,9 @@ mod tests {
         assert_eq!(
             lines[lines.len() - 3..],
             [
-                format!("│ Temp path       │ X:\\deew_temp_{} │", "a".repeat(25)),
-                format!("│                 │ {}      │", "a".repeat(33)),
-                format!("└{}┴{}┘", "─".repeat(17), "─".repeat(40)),
+                format!("│ Temp path        │ X:\\deew_temp_{} │", "a".repeat(24)),
+                format!("│                  │ {}    │", "a".repeat(34)),
+                format!("└{}┴{}┘", "─".repeat(18), "─".repeat(39)),
             ]
         );
 
@@ -837,7 +1001,7 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(
             lines[lines.len() - 2],
-            format!("│                 │ {}... │", "a".repeat(35))
+            format!("│                  │ {}... │", "a".repeat(34))
         );
         // other rows still crop to one line
         let d = SummaryData {

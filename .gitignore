@@ -4,6 +4,7 @@ __pycache__
 
 # rust
 /target
+/target-win
 
 # pyinstaller
 build
@@ -19,6 +20,7 @@ term_render.yml
 gui/node_modules
 gui/dist
 gui/target
+gui/target-win
 gui/src-tauri/binaries
 gui/src-tauri/gen/schemas
 

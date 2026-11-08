@@ -3,7 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use deew_gui_core::cli;
 use deew_gui_core::probe::ProbeResult;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
-use deew_gui_core::settings::GuiSettings;
+use deew_gui_core::settings::{GuiSettings, SettingsView};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -150,7 +150,7 @@ async fn probe_inputs(inputs: Vec<String>, track_index: u32) -> Result<ProbeResu
 
 /// The `[gui]` settings of the config next to the CLI (defaults when missing).
 #[tauri::command]
-async fn gui_settings() -> GuiSettings {
+async fn gui_settings() -> SettingsView {
     tauri::async_runtime::spawn_blocking(cli::gui_settings)
         .await
         .unwrap_or_default()

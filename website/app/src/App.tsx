@@ -1,28 +1,47 @@
 import { CircleCheckIcon, DownloadIcon, ExternalLinkIcon } from "lucide-react"
 
-import { GithubIcon, LinuxIcon, WindowsIcon } from "@/components/brand-icons"
+import {
+  AppleIcon,
+  GithubIcon,
+  LinuxIcon,
+  MoneroIcon,
+  WindowsIcon,
+} from "@/components/brand-icons"
+import { CopyBlock } from "@/components/copy-block"
 import { GetStarted } from "@/components/get-started"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { features } from "@/features"
 import { detectPlatform, LATEST, RELEASES, REPO } from "@/lib/platform"
-import { cn } from "@/lib/utils"
 
 function DownloadButton({
   platform,
 }: {
   platform: ReturnType<typeof detectPlatform>
 }) {
-  const win = platform === "windows"
   const known = platform !== "other"
-  const href = known ? LATEST + (win ? "deew.exe" : "deew") : RELEASES
+  const file =
+    platform === "windows"
+      ? "deew.exe"
+      : platform === "macos"
+        ? "deew-macos"
+        : "deew"
+  const href = known ? LATEST + file : RELEASES
   const label = !known
     ? "Download"
-    : win
+    : platform === "windows"
       ? "Download for Windows"
-      : "Download for Linux"
-  const Icon = !known ? DownloadIcon : win ? WindowsIcon : LinuxIcon
+      : platform === "macos"
+        ? "Download for macOS"
+        : "Download for Linux"
+  const Icon = !known
+    ? DownloadIcon
+    : platform === "windows"
+      ? WindowsIcon
+      : platform === "macos"
+        ? AppleIcon
+        : LinuxIcon
   return (
     <a
       href={href}
@@ -58,11 +77,12 @@ export default function App() {
               </h1>
             </div>
             <p className="mt-6 max-w-xl text-base text-muted-foreground sm:text-lg">
-              A fast CLI and GUI that wraps{" "}
-              <b className="text-foreground">ffmpeg</b>,{" "}
-              <b className="text-foreground">ffprobe</b> and{" "}
-              <b className="text-foreground">Dolby Encoding Engine</b> for
-              Dolby-certified audio encoding (DD, DDP, AC4, TrueHD).
+              A fast CLI and GUI for{" "}
+              <b className="text-foreground">Dolby Encoding Engine</b>. deew
+              prepares your audio with{" "}
+              <b className="text-foreground">ffmpeg</b> and{" "}
+              <b className="text-foreground">truehdd</b> and encodes it to DD,
+              DDP, TrueHD, AC4 and AAC, including Atmos.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <DownloadButton platform={platform} />
@@ -111,20 +131,30 @@ export default function App() {
           </h2>
           <p className="mt-2 text-muted-foreground">
             Everything deew does in the background so you don't have to fight
-            DEE's XML files.
+            DEE's command line tools.
           </p>
-          <ul className="mt-6 grid gap-x-10 gap-y-4 lg:grid-cols-2">
+          <ul className="mt-6 gap-x-10 lg:columns-2">
             {features.map((f) => (
               <li
                 key={f.text}
-                className={cn(
-                  "flex items-start gap-3",
-                  f.tall && "lg:row-span-3"
-                )}
+                className="mb-4 flex break-inside-avoid items-start gap-3"
               >
                 <CircleCheckIcon className="mt-0.5 size-5 shrink-0 text-primary dark:text-blue-400" />
                 <div className="min-w-0 text-sm">
-                  <p>{f.text}</p>
+                  <p>
+                    {f.text}
+                    {f.link && (
+                      <>
+                        {" "}
+                        <a
+                          className="font-medium text-primary underline underline-offset-4 dark:text-blue-400"
+                          href={f.link.href}
+                        >
+                          {f.link.label}
+                        </a>
+                      </>
+                    )}
+                  </p>
                   {f.sub && (
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
                       {f.sub.map((s) => (
@@ -153,8 +183,9 @@ export default function App() {
           </h2>
           <p className="mt-2 mb-6 max-w-2xl text-muted-foreground">
             deew ships as standalone builds for{" "}
-            <b className="text-foreground">Windows</b> and{" "}
-            <b className="text-foreground">Linux</b>, both as a command line
+            <b className="text-foreground">Windows</b>,{" "}
+            <b className="text-foreground">Linux</b> and{" "}
+            <b className="text-foreground">macOS</b>, both as a command line
             tool and as a desktop GUI. You can also build it from source.
           </p>
 
@@ -169,22 +200,92 @@ export default function App() {
             </div>
             <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
               <ul className="flex flex-wrap gap-2">
-                {["ffmpeg", "ffprobe", "Dolby Encoding Engine"].map((r) => (
-                  <li key={r}>
-                    <Badge variant="outline" className="h-6 px-2.5 text-sm">
-                      {r}
-                    </Badge>
+                {[
+                  { label: "ffmpeg" },
+                  { label: "ffprobe" },
+                  {
+                    label: "Dolby Encoding Engine 6.7",
+                    href: "https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670",
+                  },
+                  {
+                    label: "truehdd",
+                    href: "https://github.com/truehdd/truehdd",
+                  },
+                  {
+                    label: "dee_shim",
+                    href: "https://github.com/truehdd/dee-shim",
+                  },
+                ].map(({ label, href }) => (
+                  <li key={label}>
+                    {href ? (
+                      <Badge
+                        variant="outline"
+                        className="h-6 px-2.5 text-sm"
+                        render={<a href={href} />}
+                      >
+                        {label}
+                        <ExternalLinkIcon
+                          className="size-3"
+                          aria-hidden="true"
+                        />
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="h-6 px-2.5 text-sm">
+                        {label}
+                      </Badge>
+                    )}
                   </li>
                 ))}
               </ul>
-              <a
-                className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline dark:text-blue-400"
-                href="https://github.com/pcrlnd/deew#dolby-encoding-engine-installation"
-              >
-                How to set up Dolby Encoding Engine
-                <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
-              </a>
             </div>
+          </div>
+        </section>
+
+        <Separator />
+
+        <section
+          id="donate"
+          aria-labelledby="donate-h"
+          className="py-12 sm:py-16"
+        >
+          <h2 id="donate-h" className="text-2xl font-semibold tracking-tight">
+            Donate
+          </h2>
+          <p className="mt-2 mb-6 max-w-2xl text-muted-foreground">
+            If you like deew, you can support the people behind it with Monero.
+          </p>
+
+          <div className="border bg-card text-card-foreground">
+            {[
+              {
+                label: "Donate Monero to pcroland",
+                short: "pcroland",
+                address:
+                  "42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL",
+              },
+              {
+                label:
+                  "Donate Monero to rainbaby (developer of truehdd and dee_shim)",
+                short: "rainbaby",
+                address:
+                  "47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U",
+              },
+            ].map(({ label, short, address }) => (
+              <div
+                key={short}
+                className="flex flex-col gap-2 border-b p-4 last:border-b-0"
+              >
+                <p className="flex items-start gap-2 text-sm font-medium">
+                  <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />
+                  {label}
+                </p>
+                <CopyBlock
+                  text={address}
+                  label={`${short} Monero address`}
+                  wrap
+                />
+              </div>
+            ))}
           </div>
         </section>
       </main>

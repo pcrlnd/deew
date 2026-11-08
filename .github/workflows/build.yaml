@@ -1,0 +1,577 @@
+name: Build
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      cli:
+        description: CLI
+        required: false
+        type: boolean
+        default: true
+      gui_web:
+        description: GUI/Web
+        required: false
+        type: boolean
+        default: true
+      macos:
+        description: macOS (universal Apple silicon + x86_64 binaries)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      cli: ${{ steps.setup.outputs.cli }}
+      gui_web: ${{ steps.setup.outputs.gui_web }}
+      macos: ${{ steps.setup.outputs.macos }}
+      version: ${{ steps.setup.outputs.version }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Resolve flags and version
+        id: setup
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IN_CLI: ${{ inputs.cli }}
+          IN_GUI_WEB: ${{ inputs.gui_web }}
+          IN_MACOS: ${{ inputs.macos }}
+        run: |
+          # The inputs are empty for repository_dispatch: build the CLI and GUI/Web, without macOS.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            cli="$IN_CLI"
+            gui_web="$IN_GUI_WEB"
+            macos="$IN_MACOS"
+          else
+            cli=true
+            gui_web=true
+            macos=false
+          fi
+
+          if [ "$cli" != "true" ] && [ "$gui_web" != "true" ]; then
+            echo "::error::Nothing to build: enable at least one of CLI and GUI/Web"
+            exit 1
+          fi
+
+          version=$(python3 -c "print(open('changelog.md', 'r').read().split('\n')[0].split(' ')[2].replace(':', ''))")
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from changelog.md"
+            exit 1
+          fi
+
+          if [ "$cli" = "true" ]; then
+            crate_version=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json, sys; print(json.load(sys.stdin)['packages'][0]['version'])")
+            echo "changelog.md: $version, Cargo.toml: $crate_version"
+            if [ "$version" != "$crate_version" ]; then
+              echo "::error::Cargo.toml version ($crate_version) doesn't match changelog.md ($version)"
+              exit 1
+            fi
+          fi
+
+          echo "cli=$cli, gui_web=$gui_web, macos=$macos, version=$version"
+          {
+            echo "cli=$cli"
+            echo "gui_web=$gui_web"
+            echo "macos=$macos"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify Telegram (build started)
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CH1: ${{ secrets.TG_CH1 }}
+          TG_CH2: ${{ secrets.TG_CH2 }}
+          VERSION: ${{ steps.setup.outputs.version }}
+          CLI: ${{ steps.setup.outputs.cli }}
+          GUI_WEB: ${{ steps.setup.outputs.gui_web }}
+          MACOS: ${{ steps.setup.outputs.macos }}
+        run: |
+          for chat in "$TG_CH1" "$TG_CH2"; do
+            [ -n "$chat" ] || continue
+            python3 dev_scripts/telegram.py start --token "$TG_TOKEN" --chat "$chat" \
+              --version "$VERSION" --cli "$CLI" --gui-web "$GUI_WEB" --macos "$MACOS" \
+              --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              || echo "::warning::Posting the build started message to Telegram failed"
+          done
+
+  cli-linux:
+    name: CLI Linux
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.cli == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Collect binaries
+        run: |
+          mkdir out
+          mv target/x86_64-unknown-linux-musl/release/deew out/deew
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-cli-linux
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  cli-windows:
+    name: CLI Windows
+    runs-on: windows-latest
+    needs: setup
+    if: needs.setup.outputs.cli == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Collect binaries
+        shell: bash
+        run: |
+          mkdir out
+          mv target/release/deew.exe out/deew.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-cli-windows
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  cli-macos:
+    name: CLI macOS
+    runs-on: macos-latest
+    needs: setup
+    if: needs.setup.outputs.cli == 'true' && needs.setup.outputs.macos == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          mkdir out
+          lipo -create -output out/deew-macos \
+            target/aarch64-apple-darwin/release/deew \
+            target/x86_64-apple-darwin/release/deew
+          lipo -info out/deew-macos
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-cli-macos
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  gui-linux:
+    name: GUI/Web Linux
+    runs-on: ubuntu-22.04
+    needs: setup
+    if: needs.setup.outputs.gui_web == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Install Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev musl-tools
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install npm dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Build deew-gui (also builds the frontend)
+        working-directory: gui
+        run: npm run tauri build -- --no-bundle
+
+      - name: Build deew-web (static musl binary)
+        working-directory: gui
+        run: cargo build -p deew-web --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Collect binaries
+        run: |
+          mkdir out
+          mv gui/target/release/deew-gui out/deew-gui
+          mv gui/target/x86_64-unknown-linux-musl/release/deew-web out/deew-web
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-gui-linux
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  gui-windows:
+    name: GUI/Web Windows
+    runs-on: windows-latest
+    needs: setup
+    if: needs.setup.outputs.gui_web == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install npm dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Build deew-gui (also builds the frontend)
+        working-directory: gui
+        run: npm run tauri build -- --no-bundle
+
+      - name: Build deew-web
+        working-directory: gui
+        run: cargo build -p deew-web --release --locked
+
+      - name: Collect binaries
+        shell: bash
+        run: |
+          mkdir out
+          mv gui/target/release/deew-gui.exe out/deew-gui.exe
+          mv gui/target/release/deew-web.exe out/deew-web.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-gui-windows
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  gui-macos:
+    name: GUI/Web macOS
+    runs-on: macos-latest
+    needs: setup
+    if: needs.setup.outputs.gui_web == 'true' && needs.setup.outputs.macos == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install npm dependencies
+        working-directory: gui
+        run: npm ci
+
+      # The sidecar script builds the deew CLI for both darwin targets and lipos them.
+      - name: Build deew-gui (universal, also builds the frontend)
+        working-directory: gui
+        run: npm run tauri build -- --no-bundle --target universal-apple-darwin
+
+      - name: Build deew-web (both targets)
+        working-directory: gui
+        run: |
+          cargo build -p deew-web --release --locked --target aarch64-apple-darwin
+          cargo build -p deew-web --release --locked --target x86_64-apple-darwin
+
+      - name: Collect binaries
+        run: |
+          mkdir out
+          mv gui/target/universal-apple-darwin/release/deew-gui out/deew-gui-macos
+          lipo -create -output out/deew-web-macos \
+            gui/target/aarch64-apple-darwin/release/deew-web \
+            gui/target/x86_64-apple-darwin/release/deew-web
+          lipo -info out/deew-web-macos
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-gui-macos
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: [setup, cli-linux, cli-windows, cli-macos, gui-linux, gui-windows, gui-macos]
+    # Skipped build jobs are fine; a failed or cancelled one is not.
+    if: ${{ !cancelled() && needs.setup.result == 'success' && !contains(needs.*.result, 'failure') }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*
+          path: dist
+          merge-multiple: true
+
+      - name: List built files
+        run: ls -l dist
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.setup.outputs.version }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          python3 -c "print('\n'.join(open('changelog.md', 'r').read().split('\n\n# deew')[0].split('\n')[1:]))" > changelog.txt
+          if gh release view "$TAG" --repo "$repo" > /dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$repo" --notes-file changelog.txt
+            echo "Updated the description of release $TAG from changelog.md"
+          else
+            gh release create "$TAG" --repo "$repo" --target "$GITHUB_SHA" --title "$TAG" --notes-file changelog.txt
+            echo "Created release $TAG"
+          fi
+
+      - name: Copy files that were not built from older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TO: ${{ needs.setup.outputs.version }}
+          CLI: ${{ needs.setup.outputs.cli }}
+          GUI_WEB: ${{ needs.setup.outputs.gui_web }}
+          MACOS: ${{ needs.setup.outputs.macos }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          to="$TO"
+          fail=0
+
+          # Names of the files in $2 that release $1 has.
+          wanted_assets() {
+            gh release view "$1" --repo "$repo" --json assets -q '.assets[].name' \
+              | grep -Fx $(printf -- '-e %s ' $2) || true
+          }
+
+          # copy_set REQUIRED OPTIONAL: copy these files from the newest other release that has any of them.
+          # Missing required files are an error, missing optional ones are not.
+          copy_set() {
+            local req="$1" opt="$2" all from tag assets have copy file
+            all="$req $opt"
+
+            # Releases are listed newest first: take the first other one that has the files.
+            from=""
+            for tag in $(gh release list --repo "$repo" --exclude-drafts --limit 100 --json tagName -q '.[].tagName'); do
+              if [ "$tag" != "$to" ] && [ -n "$(wanted_assets "$tag" "$all")" ]; then
+                from="$tag"
+                break
+              fi
+            done
+            if [ -z "$from" ]; then
+              if [ -n "$req" ]; then
+                echo "::error::No other release with $all found"
+                fail=1
+              else
+                echo "::notice::No other release with $all found, $to has no $all"
+              fi
+              return
+            fi
+
+            assets=$(wanted_assets "$from" "$all")
+            for file in $req; do
+              if ! echo "$assets" | grep -Fxq "$file"; then
+                echo "::error::Release $from has no $file"
+                fail=1
+              fi
+            done
+
+            # Never overwrite what the target release already has.
+            have=$(wanted_assets "$to" "$all")
+            copy=""
+            for file in $assets; do
+              if echo "$have" | grep -Fxq "$file"; then
+                echo "Release $to already has $file, skipping it"
+              else
+                copy="$copy $file"
+              fi
+            done
+            if [ -z "$copy" ]; then
+              echo "Nothing to copy to $to"
+              return
+            fi
+
+            echo "Copying from $from to $to:" $copy
+            rm -rf dl
+            mkdir dl
+            for file in $copy; do
+              gh release download "$from" --repo "$repo" --dir dl --pattern "$file"
+            done
+            gh release upload "$to" dl/* --repo "$repo"
+          }
+
+          # Built components only need their macOS files when macOS was not built.
+          if [ "$CLI" != "true" ]; then
+            copy_set "deew deew.exe" "deew-macos"
+          elif [ "$MACOS" != "true" ]; then
+            copy_set "" "deew-macos"
+          fi
+
+          if [ "$GUI_WEB" != "true" ]; then
+            copy_set "deew-gui deew-web deew-gui.exe deew-web.exe" "deew-gui-macos deew-web-macos"
+          elif [ "$MACOS" != "true" ]; then
+            copy_set "" "deew-gui-macos deew-web-macos"
+          fi
+
+          exit "$fail"
+
+      - name: Upload built files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.setup.outputs.version }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      # Posting is best effort: a failure is logged as a warning, the run stays green.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        continue-on-error: true
+        with:
+          python-version: '3.x'
+
+      - name: Install requests
+        run: python -m pip install requests || echo "::warning::Installing requests failed"
+
+      - name: Posting release to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CH1: ${{ secrets.TG_CH1 }}
+          TG_CH2: ${{ secrets.TG_CH2 }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.setup.outputs.version }}
+          CLI: ${{ needs.setup.outputs.cli }}
+          GUI_WEB: ${{ needs.setup.outputs.gui_web }}
+          MACOS: ${{ needs.setup.outputs.macos }}
+        run: |
+          # The duration is left out of the message when the start time is unknown.
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -q .run_started_at || true)
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' > assets.txt || true
+          for chat in "$TG_CH1" "$TG_CH2"; do
+            [ -n "$chat" ] || continue
+            python dev_scripts/telegram.py done --token "$TG_TOKEN" --chat "$chat" \
+              --version "$VERSION" --cli "$CLI" --gui-web "$GUI_WEB" --macos "$MACOS" \
+              --started-at "$started" --assets assets.txt --repo "$GITHUB_REPOSITORY" \
+              || echo "::warning::Posting the release to Telegram failed"
+          done
+
+      - name: Posting changelog to Doom9
+        env:
+          DOOM9_PASSWORD: ${{ secrets.DOOM9_PASSWORD }}
+        run: python dev_scripts/doom9.py "$DOOM9_PASSWORD" || echo "::warning::Posting changelog to Doom9 failed"
+
+      - name: Delete build artifacts of this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          for id in $(gh api --paginate "repos/$repo/actions/runs/$GITHUB_RUN_ID/artifacts" -q '.artifacts[].id'); do
+            gh api -X DELETE "repos/$repo/actions/artifacts/$id"
+            echo "Deleted artifact $id"
+          done
+
+  crates-io:
+    name: crates.io
+    runs-on: ubuntu-latest
+    needs: [setup, release]
+    if: needs.setup.outputs.cli == 'true'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check if already published
+        id: published
+        env:
+          CRATE_VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' -A 'deew release workflow (https://github.com/pcrlnd/deew)' "https://crates.io/api/v1/crates/deew/$CRATE_VERSION")
+          case "$status" in
+            200)
+              echo "deew $CRATE_VERSION is already on crates.io, skipping publish"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::crates.io returned HTTP $status"
+              exit 1
+              ;;
+          esac
+
+      - name: Publish
+        if: steps.published.outputs.exists == 'false'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}

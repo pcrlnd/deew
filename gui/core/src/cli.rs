@@ -1,6 +1,6 @@
 //! Discovery and version of the deew CLI that the GUI runs.
 
-use crate::settings::GuiSettings;
+use crate::settings::{GuiSettings, SettingsView};
 use std::path::{Path, PathBuf};
 
 /// File names under which the deew CLI is looked up next to the executable.
@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 /// without the target triple, so it is named `deew` (`deew.exe` on Windows).
 /// On other platforms the CLI release assets are also accepted, so that
 /// downloading the CLI and the GUI into one folder is enough:
-/// `deew-linux`, and `deew_linux` (the current release asset name).
+/// `deew-macos`, `deew-linux`, and `deew_linux`.
 pub fn sidecar_candidates(dir: &Path, windows: bool) -> Vec<PathBuf> {
     let names: &[&str] = if windows {
         &["deew.exe"]
     } else {
-        &["deew", "deew-linux", "deew_linux"]
+        &["deew", "deew-macos", "deew-linux", "deew_linux"]
     };
     names.iter().map(|name| dir.join(name)).collect()
 }
@@ -93,24 +93,27 @@ pub fn default_bitrates() -> std::collections::BTreeMap<String, i64> {
     crate::probe::default_bitrates(config_path().as_deref())
 }
 
-/// The `[gui]` settings of the config next to the CLI (defaults when missing).
-pub fn gui_settings() -> GuiSettings {
-    crate::settings::load(config_path().as_deref())
+/// The GUI settings of the config next to the CLI (defaults when missing).
+pub fn gui_settings() -> SettingsView {
+    let config = config_path();
+    SettingsView::new(crate::settings::load(config.as_deref()), config.as_deref())
 }
 
-/// Saves the `[gui]` settings into the config next to the CLI.
+/// Saves the GUI settings into the config next to the CLI.
 pub fn save_gui_settings(settings: &GuiSettings) -> Result<(), String> {
     crate::settings::save(config_path().as_deref(), settings)
 }
 
 /// Probes the inputs (directories are expanded like the CLI does) with the
-/// ffprobe that the deew config points to.
+/// ffprobe that deew uses (next to deew, else in the PATH).
 pub fn probe_inputs(
     inputs: &[String],
     track_index: u32,
 ) -> Result<crate::probe::ProbeResult, String> {
-    let config = config_path();
-    let ffprobe = crate::probe::resolve_ffprobe(config.as_deref())?;
+    let cli_dir = sidecar_path()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    let ffprobe = crate::probe::resolve_ffprobe(cli_dir.as_deref())?;
     Ok(crate::probe::probe_files(&ffprobe, inputs, track_index))
 }
 
@@ -142,6 +145,7 @@ mod tests {
             sidecar_candidates(dir, false),
             vec![
                 dir.join("deew"),
+                dir.join("deew-macos"),
                 dir.join("deew-linux"),
                 dir.join("deew_linux")
             ]
@@ -172,6 +176,17 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_falls_back_to_deew_macos() {
+        let tmp = tempfile::tempdir().unwrap();
+        touch(tmp.path(), "deew-macos");
+        touch(tmp.path(), "deew-linux");
+        assert_eq!(
+            find_sidecar(tmp.path(), false).unwrap(),
+            tmp.path().join("deew-macos")
+        );
+    }
+
+    #[test]
     fn sidecar_falls_back_to_deew_underscore_linux() {
         let tmp = tempfile::tempdir().unwrap();
         touch(tmp.path(), "deew_linux");
@@ -191,7 +206,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "the deew CLI was not found next to this program. Looked for:\n  {d}/deew\n  {d}/deew-linux\n  {d}/deew_linux"
+                "the deew CLI was not found next to this program. Looked for:\n  {d}/deew\n  {d}/deew-macos\n  {d}/deew-linux\n  {d}/deew_linux"
             )
         );
     }

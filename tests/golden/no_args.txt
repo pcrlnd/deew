@@ -1,51 +1,85 @@
-deew 3.6.5
+deew 5.0.0
 
-USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-f FORMAT]
-            [-b BITRATE] [-dm CHANNELS] [-d DELAY] [-r DRC] [-dn DIALNORM]
-            [-in INSTANCES] [-k] [-mo] [-fs] [-fb] [-lb] [-la] [-np] [-pl]
-            [-cl] [-c] [-gc]
+USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
+            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
+            [-dm CHANNELS] [-dl] [-d DELAY] [-r DRC] [-dn DIALNORM] [-in NUMBER]
+            [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
-  -h, --help                  show this help message.
-  -v, --version               show version.
-  -i, --input [INPUT ...]     audio file(s) or folder(s)
-  -ti, --track-index INDEX    default: 0
-                              select audio track index of input(s)
-  -o, --output DIRECTORY      default: current directory
-                              specifies output directory
-  -f, --format FORMAT         options: dd / ddp / ac4 / thd
-                              default: ddp
-  -b, --bitrate BITRATE       options: run -lb/--list-bitrates
-                              default: run -c/--config
-  -dm, --downmix CHANNELS     options: 1 / 2 / 6
-                              specifies downmix, only works for DD/DDP
-                              DD will be automatically downmixed to 5.1 in case of a 7.1 source
-  -d, --delay DELAY           examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
-                              default: 0ms or parsed from filename
-                              specifies delay as ms, s or frame@FPS
-                              FPS can be a number, division or ntsc / pal
-                              you have to specify negative values as -d=-0ms
-  -r, --drc DRC               options: film_light / film_standard / music_light / music_standard / speech
-                              default: music_light (this is the closest to the missing none preset)
-                              specifies drc profile
-  -dn, --dialnorm DIALNORM    options: between -31 and 0 (in case of 0 DEE's measurement will be used)
-                              default: 0
-                              applied dialnorm value between
-  -in, --instances INSTANCES  examples: 1, 4, 50%
-                              default: 50%
-                              specifies how many encodes can run at the same time
-                              50% means 4 on a cpu with 8 threads
-                              one DEE can use 2 threads so 50% can utilize all threads
-                              (this option overrides the config's number)
-  -k, --keeptemp              keep temp files
-  -mo, --measure-only         kills DEE when the dialnorm gets written to the progress bar
-                              this option overrides format with ddp
-  -fs, --force-standard       force standard profile for 7.1 DDP encoding (384-1024 kbps)
-  -fb, --force-bluray         force bluray profile for 7.1 DDP encoding (768-1664 kbps)
-  -lb, --list-bitrates        list bitrates that DEE can do for DD and DDP encoding
-  -la, --long-argument        print ffmpeg and DEE arguments for each input
-  -np, --no-prompt            skip confirmation questions, print them as notes and continue
-  -pl, --print-logos          show all logo variants you can set in the config
-  -cl, --changelog            show changelog
-  -c, --config                show config and config location
-  -gc, --generate-config      generate a new config
+  -h, --help                show this help message.
+  -v, --version             show version and the versions of the tools.
+  -i, --input [INPUT ...]   audio file(s) or folder(s)
+  -ti, --track-index INDEX  default: 0
+                            select audio track index of input(s)
+  -o, --output DIRECTORY    default: output path of the config, else the current
+                            directory
+                            specifies output directory
+  -oi, --output-to-input    save each output next to its input file
+                            overrides -o and the output path of the config
+  -f, --format FORMAT       options: dd / ddp / ddp-atmos / thd / thd-atmos /
+                            ac4 / ac4-atmos / aac
+                            default: ddp
+                            ddp-atmos and thd-atmos use truehdd and dee_shim,
+                            ac4-atmos uses truehdd
+  --ddp-mode MODE           options: standard / bluray
+                            default: run -c/--config
+                            profile of 7.1 DDP, 5.1 and below are not affected
+                            standard: E-AC-3 only, 384-1792 kbps
+                            bluray: AC-3 core + E-AC-3, 768-1664 kbps
+  --ddp-atmos-mode MODE     options: streaming / standard / bluray
+                            default: run -c/--config
+                            profile of ddp-atmos
+                            streaming: 5.1 with Atmos, 384-1024 kbps
+                            standard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
+                            bluray: 7.1 with Atmos, AC-3 core + E-AC-3,
+                            1152-1664 kbps
+  -b, --bitrate BITRATE     options: run -lb/--list-bitrates
+                            default: run -c/--config
+  -dm, --downmix CHANNELS   options: 1 / 2 / 6
+                            specifies downmix, only works for DD/DDP/AC4/AAC and
+                            TrueHD (2 / 6)
+                            DD and AC4 will be automatically downmixed to 5.1 in
+                            case of a 7.1 source
+                            AAC output is always 2.0
+  -dl, --disable-lfe        remove the LFE channel of 5.1 and 7.1 inputs
+                            DD and DDP get a real 5.0 or 7.0, the others keep a
+                            silent LFE
+                            5.0 and 7.0 inputs are supported, they have no LFE
+  -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
+                            default: 0ms or parsed from filename
+                            specifies delay as ms, s or frame@FPS
+                            FPS can be a number, division or ntsc / pal
+                            you have to specify negative values as -d=-0ms
+  -r, --drc DRC             options: none / film_light / film_standard /
+                            music_light / music_standard / speech
+                            default: none (music_light for AC4)
+                            specifies drc profile
+                            none uses dee_shim for TrueHD, not available for AC4
+  -dn, --dialnorm DIALNORM  options: between -31 and 0 (in case of 0 DEE's
+                            measurement will be used)
+                            default: 0
+                            applied dialnorm value, only works for DD/DDP/AC4
+  -in, --instances NUMBER   examples: 1, 4, 50%
+                            default: 50%
+                            specifies how many encodes can run at the same time
+                            50% means 4 on a cpu with 8 threads
+                            one DEE can use 2 threads so 50% can utilize all
+                            threads
+                            (this option overrides the config's number)
+  -k, --keeptemp            keep temp files
+  -kl, --keep-log           keep TrueHD's log and write a .deew-log.html report
+                            for each output
+  -mo, --measure-only       only measures the loudness with DEE, no encoding
+  -lb, --list-bitrates      list bitrates that DEE can do for each format
+  -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
+                            input
+  -np, --no-prompt          skip confirmation questions, print them as notes and
+                            continue
+  -pl, --print-logos        show all logo variants you can set in the config
+  -cl, --changelog          show changelog
+  -c, --config              show config and config location
+  -gc, --generate-config    generate a new config
+  -gt, --get-tools          download ffmpeg, ffprobe, truehdd and dee_shim next
+                            to deew
+
+blue: uses dee_shim

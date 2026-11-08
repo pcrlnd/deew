@@ -1,6 +1,6 @@
-//! Static data copied verbatim from the Python implementation.
+//! Static data: bitrate tables, logos and error messages.
 
-/// Allowed bitrates per output layout, in the order of `bitrates.py`.
+/// Allowed bitrates per output layout (kbps).
 pub const BITRATES: &[(&str, &[u32])] = &[
     (
         "dd_10",
@@ -39,17 +39,34 @@ pub const BITRATES: &[(&str, &[u32])] = &[
         ],
     ),
     (
-        "ddp_71_standard",
-        &[384, 448, 576, 640, 704, 768, 832, 896, 960, 1008, 1024],
-    ),
-    ("ddp_71_bluray", &[768, 1024, 1280, 1536, 1664]),
-    (
-        "ddp_71_combined",
+        "ddp_71",
         &[
-            384, 448, 576, 640, 704, 768, 832, 896, 960, 1008, 1024, 1280, 1536, 1664,
+            384, 448, 504, 576, 640, 704, 768, 832, 896, 960, 1008, 1024, 1152, 1280, 1408, 1512,
+            1536, 1664, 1792,
         ],
     ),
-    ("ac4_20", &[64, 72, 112, 144, 256, 320]),
+    ("ddp_71_bluray", &[768, 1024, 1280, 1536, 1664]),
+    ("ddp_atmos_streaming", &[384, 448, 576, 640, 768, 1024]),
+    (
+        "ddp_atmos_standard",
+        &[768, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 2048],
+    ),
+    ("ddp_atmos_bluray", &[1152, 1280, 1408, 1512, 1536, 1664]),
+    (
+        "ac4_20",
+        &[48, 64, 96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
+    ),
+    (
+        "ac4_51",
+        &[96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
+    ),
+    ("ac4_atmos", &[256, 320, 448, 768]),
+    (
+        "aac_20",
+        &[
+            56, 64, 80, 96, 112, 128, 144, 160, 192, 224, 256, 288, 320, 384, 448, 512, 576,
+        ],
+    ),
 ];
 
 pub fn allowed_bitrates(key: &str) -> &'static [u32] {
@@ -60,114 +77,37 @@ pub fn allowed_bitrates(key: &str) -> &'static [u32] {
         .unwrap_or_else(|| panic!("unknown bitrate key: {key}"))
 }
 
-/// Banner logos (rich markup): a new one first, then the ones of `logos.py` in order.
+/// Banner logos (rich markup), selected with the config's `logo` (1-based).
 pub const LOGOS: &[&str] = &[
     r#"┌─────────────────────────┐
 │ [blue]╺┳━━┓ ┏━━━╸ ┏━━━╸ ╻   ╻[/blue] │
 │ [blue] ┃  ┃ ┣━━╸  ┣━━╸  ┃ ╻ ┃[/blue] │
 │ [blue]╺┻━━┛ ┗━━━╸ ┗━━━╸ ┗━┻━┛[/blue] │
-│  Dolby Encoding Engine  │
-│   Wrapper by pcroland   │
+│  [bold color(231)]Dolby Encoding Engine[/bold color(231)]  │
+│   [bold color(231)]Wrapper by pcroland[/bold color(231)]   │
 └─────────────────────────┘"#,
-    r#"[yellow] ▄▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄  ▄▄
+    r#"[blue] ▄▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄  ▄▄
  ██  ██ ██▄▄  ██▄▄  ██  ██  ██
- ██  ██ ██    ██    ██  ██  ██
- ▀▀▀▀▀  ▀▀▀▀▀ ▀▀▀▀▀  ▀▀▀▀▀▀▀▀[/yellow]
- [bold color(231)]Dolby Encoding Engine Wrapper[/bold color(231)]
-"#,
-    r#" ┌───────────────────────────────┐
- │ [yellow]▄▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄  ▄▄[/yellow] │
- │ [yellow]██  ██ ██▄▄  ██▄▄  ██  ██  ██[/yellow] │
- │ [yellow]██  ██ ██    ██    ██  ██  ██[/yellow] │
- │ [yellow]▀▀▀▀▀  ▀▀▀▀▀ ▀▀▀▀▀  ▀▀▀▀▀▀▀▀ [/yellow] │
- │ [bold color(231)]Dolby Encoding Engine Wrapper[/bold color(231)] │
- └───────────────────────────────┘
-"#,
-    r#"[blue]
- ██▀▀█▄ ██▀▀▀ ██▀▀▀ ██  ██  ██
- ██  ██ ██    ██    ██  ██  ██
- ██  ██ ██▀▀  ██▀▀  ██  ██  ██
  ██  ██ ██    ██    ██  ██  ██
  ▀▀▀▀▀  ▀▀▀▀▀ ▀▀▀▀▀  ▀▀▀▀▀▀▀▀[/blue]
  [bold color(231)]Dolby Encoding Engine Wrapper[/bold color(231)]
 "#,
-    r#"
- ▄███████████████████████████████▄
- ██  ▄▄ ▀█  ▄▄▄█  ▄▄▄█  ██  ██  ██
- ██  ██  █  ████  ████  ██  ██  ██
- ██  ██  █  ▄▄██  ▄▄██  ██  ██  ██
- ██  ██  █  ████  ████  ██  ██  ██
- ██▄▄▄▄▄██▄▄▄▄▄█▄▄▄▄▄██▄▄▄▄▄▄▄▄███
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-   [bold green]Dolby Encoding Engine Wrapper[/bold green]
-"#,
-    r#"[yellow] ▄▄▄▄▄▄▄   ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄  ▄▄▄  ▄▄▄  ▄▄▄
- ███  ███  ███      ███      ███  ███  ███
- ███  ███  ███      ███      ███  ███  ███
- ███  ███  ███▄▄▄   ███▄▄▄   ███  ███  ███
- █▓█  ███  █▓█      █▓█      █▓█  █▓█  █▓█
- █▒█  █▓█  █▒█      █▒█      █▒█  █▒█  █▒█
- █░█  █░█  █░█      █░█      █░█  █░█  █░█
- ▀▀▀▀▀▀▀   ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀   ▀▀▀▀▀▀▀▀▀▀▀[/yellow]
-       [bold color(231)]Dolby Encoding Engine Wrapper[/bold color(231)]
-"#,
-    r#" [yellow]┌───────────────────────────────────────────────┐[/yellow]
- [yellow]│[/yellow]                                               [yellow]│[/yellow]
- [yellow]:[/yellow]   ▄▄▄▄▄▄▄   ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄  ▄▄▄  ▄▄▄  ▄▄▄   [yellow]:[/yellow]
- [yellow].[/yellow]   ███  ███  ███      ███      ███  ███  ███   [yellow].[/yellow]
- [yellow].[/yellow]   ███  ███  ███      ███      ███  ███  ███   [yellow].[/yellow]
- [yellow] [/yellow]   ███  ███  ███▄▄▄   ███▄▄▄   ███  ███  ███
- [yellow] [/yellow]   █▓█  ███  █▓█      █▓█      █▓█  █▓█  █▓█
- [yellow].[/yellow]   █▒█  █▓█  █▒█      █▒█      █▒█  █▒█  █▒█   [yellow].[/yellow]
- [yellow].[/yellow]   █░█  █░█  █░█      █░█      █░█  █░█  █░█   [yellow].[/yellow]
- [yellow]:[/yellow]   ▀▀▀▀▀▀▀   ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀   ▀▀▀▀▀▀▀▀▀▀▀    [yellow]:[/yellow]
- [yellow]│[/yellow]                                               [yellow]│[/yellow]
- [yellow]└───────■[/yellow] [bold color(231)]Dolby Encoding Engine Wrapper[/bold color(231)] [yellow]■───────┘[/yellow]
-"#,
-    r#"  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ███▀▀▀▀▀▀▀███▀▀▀▀▀▀▀██▀▀▀▀▀▀▀██▀▀▀██▀▀▀██▀▀▀███
- ███   ██   ██   ██████   ██████   ██   ██   ███
- ███   ██   ██   ██████   ██████   ██   ██   ███
- ███   ██   ██   ▀▀▀███   ▀▀▀███   ██   ██   ███
- ███ ░ ██ ░ ██ ░ ██████ ░ ██████ ░ ██ ░ ██ ░ ███
- ███ ▒ ██ ▒ ██ ▒ ██████ ▒ ██████ ▒ ██ ▒ ██ ▒ ███
- ███ ▓ ██ ▓ ██ ▓ ██████ ▓ ██████ ▓ ██ ▓ ██ ▓ ███
- ███▄▄▄▄▄▄▄███▄▄▄▄▄▄▄██▄▄▄▄▄▄▄███▄▄▄▄▄▄▄▄▄▄▄████
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-          [green]Dolby Encoding Engine Wrapper[/green]
-"#,
-    r#"  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ███▀▀▀▀▀▀▀███▀▀▀▀▀▀▀██▀▀▀▀▀▀▀██▀▀▀██▀▀▀██▀▀▀███
- ███   ██   ██   ██████   ██████   ██   ██   ███
- ███   ██   ██   ██████   ██████   ██   ██   ███
- ███   ██   ██   ▀▀▀███   ▀▀▀███   ██   ██   ███
- ███ ░ ██ ░ ██ ░ ██████ ░ ██████ ░ ██ ░ ██ ░ ███
- ███ ▒ ██ ▒ ██ ▒ ██████ ▒ ██████ ▒ ██ ▒ ██ ▒ ███
- ███ ▓ ██ ▓ ██ ▓ ██████ ▓ ██████ ▓ ██ ▓ ██ ▓ ███
- ███▄▄▄▄▄▄▄███▄▄▄▄▄▄▄██▄▄▄▄▄▄▄███▄▄▄▄▄▄▄▄▄▄▄████
- ████████▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀████████
- ████████ [green]Dolby Encoding Engine Wrapper[/green] ████████
- ████████▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄████████
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"#,
-    r#"
-     ▄████▄   ▄█████▀  ▄█████▀ ▄█▀ ▄█▀ ▄█▀
-    ▄█▀ ▐█▀  ▄█▀      ▄█▀     ▄█▀ ▄█▀ ▄█▀
-   ▄█▀ ▄█▀  ▄███▀    ▄███▀   ▄█▀ ▄█▀ ▄█▀
-  ▄█▀ ▄█▀  ▄█▀      ▄█▀     ▄█▀ ▄█▀ ▄█▀
- ▄████▀   ▄█████▀  ▄█████▀  ▐███▀▐██▀
-
-      [green]Dolby Encoding Engine Wrapper[/green]
-"#,
-    r#"▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-█████▀    ▀███▀     ▄██▀     ▄█▀ ▄█▀ ▄█▀ ▄█
-████▀ ▄█▌ ▄██▀ ▄██████▀ ▄█████▀ ▄█▀ ▄█▀ ▄██
-███▀ ▄█▀ ▄██▀   ▄████▀   ▄███▀ ▄█▀ ▄█▀ ▄███
-██▀ ▄█▀ ▄██▀ ▄██████▀ ▄█████▀ ▄█▀ ▄█▀ ▄████
-█▀    ▄███▀     ▄██▀     ▄██▌   ▄▌  ▄██████
-█████▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀███████
-█████ [green]Dolby Encoding Engine Wrapper[/green] ███████
-█████▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄███████
-"#,
+    r#"                 [color(231)]■           [/][color(159)]▄       [/][color(229)]▄▄▄▄▄             [/][color(231)]■[/]
+              [color(213)]▀     ▄            [/][color(227)]▄[/][color(228) on color(227)]▀▀▀▀▀▀▀▀▀▀[/][color(227)]▄▄            [/][color(213)]▄[/]
+ [color(159)]■         [/][color(231)]███                 [/][color(220)]▄[/][color(226) on color(220)]▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀[/][color(220)]▄[/]
+           [color(195) on color(159)]▀▀▀[/]                [color(214)]▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄          [/][color(213)]▀[/]
+      [color(117)]▄▄▄▄▄[/][color(123) on color(117)]▀▀▀[/]     [color(117)]▄▄▄▄▄      [/][color(208)]▀ [/][color(117)]▄▄▄▄▄ [/][color(208)]▀▀▀ [/][color(117)]▄▄▄ [/][color(208)]▀▀▀     [/][color(117)]▄▄▄[/]
+    [color(69)]▄[/][color(75) on color(69)]▀▀▀▀▀[/][color(75) on color(199)]▀▀▀▀[/][color(199)]▄▄ [/][color(69)]▄[/][color(75) on color(69)]▀▀▀▀▀▀▀▀[/]    [color(69)]▄[/][color(75) on color(69)]▀▀▀▀[/][color(75) on color(199)]▀▀▀▀[/][color(199)]▄▄ [/][color(75) on color(69)]▀▀▀[/] [color(197)]▄       [/][color(75) on color(69)]▀▀▀[/]
+   [color(63)]██[/][color(63) on color(199)]▀[/][color(199)]▄▄▀▀ [/][color(63)]███  [/][color(199) on color(63)]▀▀▀[/][color(199)]▄▄   [/][color(63)]▓██  ▓[/][color(63) on color(199)]▀▀[/][color(199)]▄▀▀  [/][color(63)]▓██ [/][color(199)]▀[/][color(199) on color(63)]▀▀[/][color(63) on color(199)]▀[/][color(199)]▄  [/][color(63)]▓██   ▓[/][color(63) on color(199)]▀▀[/][color(199)]▄▀▀[/]
+[color(199)]▄▀▀[/][color(199) on color(171)]▀▀[/][color(135) on color(171)]▀[/]     [color(135) on color(171)]▀▀▀[/]  [color(135) on color(171)]▀▀▀▀▀[/][color(199) on color(171)]▀▀▀[/][color(199)]▀▄▄▀▀[/][color(199) on color(171)]▀[/][color(171)]▄[/][color(135) on color(171)]▀▀▀▀▀▀▀▀[/][color(135)]▀  [/][color(135) on color(171)]▀▀▀[/] [color(163)]▀[/][color(199)]▀[/][color(199) on color(171)]▀[/][color(199)]▀▄▄▀▀[/][color(199) on color(171)]▀[/][color(171)]▄[/][color(135) on color(171)]▀[/]
+   [color(207)]▀[/][color(207) on color(213)]▀▀▀[/][color(213)]▄▄▄▄[/][color(207) on color(213)]▀▀▀[/]  [color(207)]▀[/][color(207) on color(213)]▀▀▀[/][color(213)]▄▄▄      [/][color(207)]▀[/][color(207) on color(213)]▀▀▀[/][color(213)]▄▄▄   [/][color(163)]▄▄ [/][color(207) on color(213)]▀▀▀[/][color(213)]▄▄[/][color(207) on color(213)]▀▀▀▀[/][color(213)]▄▄[/][color(207) on color(213)]▀▀▀[/][color(207)]▀[/]
+     [color(225)]▀[/][color(225) on color(231)]▀▀▀▀▀▀▀▀[/]    [color(225)]▀[/][color(225) on color(231)]▀▀▀▀▀[/][color(225)]▀      ▀[/][color(225) on color(231)]▀▀▀▀▀[/][color(225)]▀     ▀[/][color(225) on color(231)]▀▀▀▀[/][color(225)]▀▀[/][color(225) on color(231)]▀▀▀▀[/][color(225)]▀[/]
+                                                        [color(241)]pcR[/]
+     [color(141)]▀▀▀▀▀▀▀▀▀    ▀▀▀▀▀▀▀      ▀▀▀▀▀▀▀     ▀▀▀▀▀▀▀▀▀▀▀▀[/]
+    [color(98)]▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀      ▀▀▀▀▀▀▀      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀[/]
+[color(97)]■ [/][color(61)]▀▀▀     ▀▀▀  ▀▀▀▀▀   ▀▀▀  ▀ ▀▀▀▀▀▀▀▀▀  ▀▀▀   ▀▀▀   ▀ ▀[/]
+      [color(55)]░ ░ ░ ░ ░     ░ ░ ░ ░     ░ ░ ░ ░     ░           ░  [/][color(97)]■[/]
+ [color(252)]D O L B Y   E N C O D I N G   E N G I N E   W R A P P E R[/]"#,
 ];
 
 /// Error messages; `🤠` is the placeholder for the inserted value.
@@ -175,23 +115,37 @@ pub const LOGOS: &[&str] = &[
 pub enum ErrorKind {
     Changelog,
     Delay,
-    WslPath,
     CreateDir,
     Format,
     Downmix,
     DownmixMismatch,
-    ThdDownmix,
+    FormatDownmix,
+    ThdDownmixMono,
+    DownmixValue,
+    DialnormFormat,
+    MeasureAtmos,
+    Ac4Drc,
+    AtmosInput,
+    AtmosNoAtmos,
+    MeasureChannels,
+    InputLayout,
+    AacInput,
+    ShimAtmos,
+    ShimThd,
+    ShimDdp71,
+    ShimDdp70,
     ThdMonoInput,
     Drc,
-    LinuxThd,
+    LinuxDthd,
     Path,
-    Ffprobe,
     SampleMismatch,
     ChannelMismatch,
     Channels,
     BinaryExist,
     ConfigKey,
     Ac4InputChannels,
+    DdpMode,
+    DdpAtmosMode,
 }
 
 impl ErrorKind {
@@ -199,10 +153,9 @@ impl ErrorKind {
         match self {
             Self::Changelog => "couldn't fetch changelog from GitHub.",
             Self::Delay => "unsupported delay value.",
-            Self::WslPath => "WSL path conversion doesn't work with [bold yellow]🤠[/bold yellow].",
             Self::CreateDir => "failed to create [bold yellow]🤠[/bold yellow].",
             Self::Format => {
-                "[bold yellow]-f[/bold yellow]/[bold yellow]--format[/bold yellow] can only be [bold yellow]dd[/bold yellow], [bold yellow]ddp[/bold yellow], [bold yellow]ac4[/bold yellow] or [bold yellow]thd[/bold yellow]."
+                "[bold yellow]-f[/bold yellow]/[bold yellow]--format[/bold yellow] can only be [bold yellow]dd[/bold yellow], [bold yellow]ddp[/bold yellow], [bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd[/bold yellow], [bold yellow]thd-atmos[/bold yellow], [bold yellow]ac4[/bold yellow], [bold yellow]ac4-atmos[/bold yellow] or [bold yellow]aac[/bold yellow]."
             }
             Self::Downmix => {
                 "[bold yellow]-dm[/bold yellow]/[bold yellow]--downmix[/bold yellow] can only be [bold yellow]1[/bold yellow], [bold yellow]2[/bold yellow] or [bold yellow]6[/bold yellow]."
@@ -210,39 +163,82 @@ impl ErrorKind {
             Self::DownmixMismatch => {
                 "downmix value has to be lower than the number of input channels."
             }
-            Self::ThdDownmix => {
-                "[bold yellow]-m[/bold yellow]/[bold yellow]--mix[/bold yellow] can only be used for [bold yellow]DD[/bold yellow]/[bold yellow]DDP[/bold yellow] encoding."
+            Self::FormatDownmix => {
+                "[bold yellow]-dm[/bold yellow]/[bold yellow]--downmix[/bold yellow] only works for [bold yellow]DD[/bold yellow]/[bold yellow]DDP[/bold yellow]/[bold yellow]AC4[/bold yellow]/[bold yellow]AAC[/bold yellow] encoding and for [bold yellow]TrueHD[/bold yellow] ([bold yellow]2[/bold yellow] or [bold yellow]6[/bold yellow]), not for the Atmos formats."
+            }
+            Self::ThdDownmixMono => {
+                "[bold yellow]-dm 1[/bold yellow] doesn't work for [bold yellow]TrueHD[/bold yellow], it has no mono (2.0, 5.1 and 7.1 only)."
+            }
+            Self::DownmixValue => {
+                "[bold yellow]-dm[/bold yellow]/[bold yellow]--downmix[/bold yellow] can only be [bold yellow]2[/bold yellow] or [bold yellow]6[/bold yellow] for AC4 and [bold yellow]2[/bold yellow] for AAC."
+            }
+            Self::DialnormFormat => {
+                "custom dialnorm is only supported for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]AC4[/bold yellow] encoding."
+            }
+            Self::MeasureAtmos => {
+                "[bold yellow]-mo[/bold yellow]/[bold yellow]--measure-only[/bold yellow] can't be used with the Atmos formats."
+            }
+            Self::Ac4Drc => {
+                "DRC [bold yellow]none[/bold yellow] is not supported for AC4 encoding."
+            }
+            Self::ShimAtmos => {
+                "dee_shim is required for [bold yellow]🤠[/bold yellow], put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
+            }
+            Self::ShimThd => {
+                "dee_shim is required for TrueHD with DRC [bold yellow]none[/bold yellow] (the default), put dee_shim next to deew or in your PATH, or use [bold yellow]-r[/bold yellow] with another profile"
+            }
+            Self::ShimDdp71 => {
+                "dee_shim is required for 7.1 DDP with the standard profile, put dee_shim next to deew or in your PATH, or use [bold yellow]--ddp-mode bluray[/bold yellow] (768-1664 kbps)"
+            }
+            Self::ShimDdp70 => {
+                "dee_shim is required for 7.0 DDP, put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
+            }
+            Self::MeasureChannels => {
+                "loudness measurement ([bold yellow]-mo[/bold yellow] and [bold yellow]-dn[/bold yellow]) doesn't work with 7.1 input."
+            }
+            Self::AacInput => {
+                "AAC needs a 2.0, 5.1 or 7.1 input (DEE's AAC encoder always outputs 2.0)"
+            }
+            Self::InputLayout => {
+                "the channel layout [bold yellow]🤠[/bold yellow] is not supported, 5 channels have to be 5.0 and 7 channels 7.0 (no LFE)."
+            }
+            Self::AtmosInput => {
+                "[bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow] and [bold yellow]ac4-atmos[/bold yellow] need a TrueHD input with an Atmos presentation, [bold yellow]🤠[/bold yellow] is not a TrueHD file."
+            }
+            Self::AtmosNoAtmos => {
+                "[bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow] and [bold yellow]ac4-atmos[/bold yellow] need a TrueHD input with an Atmos presentation, [bold yellow]🤠[/bold yellow] has no Atmos."
             }
             Self::ThdMonoInput => {
                 "input channels for TrueHD encoding can only be [bold yellow]2[/bold yellow]/[bold yellow]6[/bold yellow]/[bold yellow]8[/bold yellow]. "
             }
             Self::Drc => {
-                "allowed DRC values: [bold yellow]film_light[/bold yellow], [bold yellow]film_standard[/bold yellow], [bold yellow]music_light[/bold yellow], [bold yellow]music_standard[/bold yellow], [bold yellow]speech[/bold yellow]."
+                "allowed DRC values: [bold yellow]none[/bold yellow], [bold yellow]film_light[/bold yellow], [bold yellow]film_standard[/bold yellow], [bold yellow]music_light[/bold yellow], [bold yellow]music_standard[/bold yellow], [bold yellow]speech[/bold yellow]."
             }
-            Self::LinuxThd => "Linux version of DEE does not support TrueHD encoding.",
+            Self::LinuxDthd => {
+                "[bold yellow]🤠[/bold yellow] does not exist. The Linux DEE has no TrueHD encoder, build it with https://github.com/truehdd/dthd-mac2linux"
+            }
             Self::Path => "path [bold yellow]🤠[/bold yellow] does not exist.",
-            Self::Ffprobe => {
-                "input file couldn't be parsed by ffprobe, try to extract/remux it with ffmpeg or mkvmerge."
-            }
             Self::SampleMismatch => "each input has to have the same sample rate:\n🤠",
             Self::ChannelMismatch => "each input has to have the same channel count:\n🤠",
             Self::Channels => {
-                "number of input channels can only be [bold yellow]1[/bold yellow], [bold yellow]2[/bold yellow], [bold yellow]6[/bold yellow] or [bold yellow]8[/bold yellow]."
+                "number of input channels can only be [bold yellow]1[/bold yellow], [bold yellow]2[/bold yellow], [bold yellow]5[/bold yellow], [bold yellow]6[/bold yellow], [bold yellow]7[/bold yellow] or [bold yellow]8[/bold yellow]."
             }
             Self::BinaryExist => "[bold yellow]🤠[/bold yellow] does not exist.",
             Self::ConfigKey => {
                 "the following keys are missing from your config file: 🤠.\nUpdate your config file."
             }
             Self::Ac4InputChannels => {
-                "input channels for AC4 encoding can only be [bold yellow]6[/bold yellow]."
+                "input channels for AC4 encoding can only be [bold yellow]2[/bold yellow]/[bold yellow]6[/bold yellow]/[bold yellow]8[/bold yellow]."
+            }
+            Self::DdpMode => {
+                "[bold yellow]--ddp-mode[/bold yellow] can only be [bold yellow]standard[/bold yellow] or [bold yellow]bluray[/bold yellow]."
+            }
+            Self::DdpAtmosMode => {
+                "[bold yellow]--ddp-atmos-mode[/bold yellow] can only be [bold yellow]streaming[/bold yellow], [bold yellow]standard[/bold yellow] or [bold yellow]bluray[/bold yellow]."
             }
         }
     }
 }
-
-pub const XML_DD_DDP: &str = include_str!("templates/dd_ddp.xml");
-pub const XML_THD: &str = include_str!("templates/thd.xml");
-pub const XML_AC4: &str = include_str!("templates/ac4.xml");
 
 #[cfg(test)]
 mod tests {
@@ -250,19 +246,36 @@ mod tests {
 
     #[test]
     fn bitrates() {
-        assert_eq!(BITRATES.len(), 10);
-        assert_eq!(allowed_bitrates("ac4_20"), &[64, 72, 112, 144, 256, 320]);
+        assert_eq!(BITRATES.len(), 15);
+        assert_eq!(allowed_bitrates("ac4_atmos"), &[256, 320, 448, 768]);
+        assert_eq!(allowed_bitrates("ddp_71").last(), Some(&1792));
+        assert_eq!(allowed_bitrates("ddp_71").len(), 19);
         assert_eq!(allowed_bitrates("ddp_71_bluray").last(), Some(&1664));
+        assert_eq!(allowed_bitrates("ddp_atmos_streaming").first(), Some(&384));
+        assert_eq!(allowed_bitrates("ddp_atmos_standard").last(), Some(&2048));
+        assert_eq!(allowed_bitrates("ddp_atmos_bluray").first(), Some(&1152));
+        for (key, list) in BITRATES {
+            assert!(list.windows(2).all(|w| w[0] < w[1]), "{key} is not sorted");
+        }
     }
 
     #[test]
     fn logos() {
-        assert_eq!(LOGOS.len(), 11);
-        assert!(
-            LOGOS
-                .iter()
-                .all(|l| l.contains("Dolby Encoding Engine") && l.contains("Wrapper"))
-        );
+        assert_eq!(LOGOS.len(), 3);
+        for l in &LOGOS[..2] {
+            assert!(l.contains("Dolby Encoding Engine") && l.contains("Wrapper"));
+        }
+        assert!(LOGOS[2].contains("E N G I N E   W R A P P E R"));
+    }
+
+    #[test]
+    fn logos_render() {
+        for l in LOGOS {
+            let out = crate::markup::render(l, true);
+            for bad in ["[color(", "[/]", "[bold", "[blue"] {
+                assert!(!out.contains(bad), "unparsed {bad}");
+            }
+        }
     }
 
     #[test]
@@ -278,13 +291,5 @@ mod tests {
                 .message()
                 .ends_with("Update your config file.")
         );
-    }
-
-    #[test]
-    fn templates() {
-        for t in [XML_DD_DDP, XML_THD, XML_AC4] {
-            assert!(t.starts_with("<?xml"));
-            assert!(t.ends_with("</job_config>"));
-        }
     }
 }

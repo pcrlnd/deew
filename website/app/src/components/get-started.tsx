@@ -1,7 +1,7 @@
 import { DownloadIcon, HammerIcon, PackageIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
-import { LinuxIcon, WindowsIcon } from "@/components/brand-icons"
+import { AppleIcon, LinuxIcon, WindowsIcon } from "@/components/brand-icons"
 import { CopyBlock } from "@/components/copy-block"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
@@ -74,7 +74,11 @@ function Code({ children }: { children: ReactNode }) {
 
 export function GetStarted({ platform }: { platform: Platform }) {
   return (
-    <Tabs defaultValue={platform === "linux" ? "linux" : "windows"}>
+    <Tabs
+      defaultValue={
+        platform === "linux" || platform === "macos" ? platform : "windows"
+      }
+    >
       <TabsList
         aria-label="Platform"
         className="h-auto! w-full max-w-full sm:w-fit"
@@ -84,6 +88,9 @@ export function GetStarted({ platform }: { platform: Platform }) {
         </TabsTrigger>
         <TabsTrigger value="linux" className="h-8 px-3">
           <LinuxIcon className="size-4" /> Linux
+        </TabsTrigger>
+        <TabsTrigger value="macos" className="h-8 px-3">
+          <AppleIcon className="size-4" /> macOS
         </TabsTrigger>
         <TabsTrigger value="source" className="h-8 px-3">
           <HammerIcon /> <span className="sm:hidden">Source</span>
@@ -127,6 +134,11 @@ export function GetStarted({ platform }: { platform: Platform }) {
             </div>
             <Badge variant="secondary">WIP</Badge>
           </div>
+          <Note>
+            Run <Code>deew.exe -gt</Code> (<Code>--get-tools</Code>) to download ffmpeg,
+            ffprobe, truehdd and dee_shim next to deew. It downloads everything
+            except DEE.
+          </Note>
         </Panel>
       </TabsContent>
 
@@ -158,6 +170,46 @@ export function GetStarted({ platform }: { platform: Platform }) {
             <Code>libwebkit2gtk-4.1-0</Code> on Debian/Ubuntu,{" "}
             <Code>webkit2gtk4.1</Code> on Fedora, <Code>webkit2gtk-4.1</Code> on
             Arch.
+          </Note>
+          <Note>
+            Run <Code>deew -gt</Code> (<Code>--get-tools</Code>) to download ffmpeg,
+            ffprobe, truehdd and dee_shim next to deew. It downloads everything
+            except DEE.
+          </Note>
+        </Panel>
+      </TabsContent>
+
+      <TabsContent value="macos">
+        <Panel
+          title="macOS"
+          desc="Universal binaries for Apple silicon and Intel."
+        >
+          <DownloadRow
+            primary
+            title="CLI"
+            desc="The command line tool."
+            file="deew-macos"
+          />
+          <DownloadRow
+            title="GUI"
+            desc="The desktop app. Put it in the same folder as the CLI."
+            file="deew-gui-macos"
+          />
+          <DownloadRow
+            title="Web UI"
+            desc="The GUI in your browser. Put it in the same folder as the CLI."
+            file="deew-web-macos"
+          />
+          <Note>Make the downloads executable:</Note>
+          <CopyBlock
+            text="chmod +x deew-macos deew-gui-macos deew-web-macos"
+            label="chmod command"
+          />
+          <Note>On Apple silicon the macOS DEE tools need Rosetta 2.</Note>
+          <Note>
+            Run <Code>deew-macos -gt</Code> (<Code>--get-tools</Code>) to download ffmpeg,
+            ffprobe, truehdd and dee_shim next to deew. It downloads everything
+            except DEE.
           </Note>
         </Panel>
       </TabsContent>

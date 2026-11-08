@@ -1,40 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark" style="color-scheme: dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>deew - Dolby Encoding Engine Wrapper</title>
-    <link rel="canonical" href="https://deew.dev/" />
+    <link rel="canonical" href="https://deew.app/" />
     <meta
       name="description"
-      content="A fast CLI and GUI that wraps ffmpeg, ffprobe and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
+      content="A fast CLI and GUI for Dolby Encoding Engine. deew prepares your audio with ffmpeg and truehdd and encodes it to DD, DDP, TrueHD, AC4 and AAC, including Atmos."
     />
     <meta name="theme-color" content="#223f8b" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="dark" />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://deew.dev/" />
+    <meta property="og:url" content="https://deew.app/" />
     <meta property="og:title" content="Dolby Encoding Engine Wrapper" />
     <meta
       property="og:description"
-      content="A fast CLI and GUI that wraps ffmpeg, ffprobe and Dolby Encoding Engine for Dolby-certified audio encoding (DD, DDP, AC4, TrueHD)."
+      content="A fast CLI and GUI for Dolby Encoding Engine. deew prepares your audio with ffmpeg and truehdd and encodes it to DD, DDP, TrueHD, AC4 and AAC, including Atmos."
     />
-    <meta property="og:image" content="https://deew.dev/deew_dark.png" />
+    <meta property="og:image" content="https://deew.app/deew_dark.png" />
     <meta property="og:image:width" content="1080" />
     <meta property="og:image:height" content="1080" />
     <link rel="icon" type="image/png" href="icon.png" />
-    <script>
-      ;(function () {
-        var mq = window.matchMedia("(prefers-color-scheme: dark)")
-        function apply() {
-          var el = document.documentElement
-          el.classList.toggle("dark", mq.matches)
-          el.style.colorScheme = mq.matches ? "dark" : "light"
-        }
-        apply()
-        if (mq.addEventListener) mq.addEventListener("change", apply)
-        else if (mq.addListener) mq.addListener(apply)
-      })()
-    </script>
   </head>
   <body>
     <div id="root"></div>

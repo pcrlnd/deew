@@ -1,3 +1,4 @@
+import { ShimBadge } from "@/components/shim-badge"
 import {
   Select,
   SelectContent,
@@ -9,6 +10,8 @@ import {
 export interface SelectChoice {
   value: string
   label: string
+  /** Only possible with dee_shim: shown with a puzzle icon. */
+  shim?: boolean
 }
 
 export function SimpleSelect({
@@ -34,12 +37,23 @@ export function SimpleSelect({
       disabled={disabled}
     >
       <SelectTrigger id={id} size="sm" className="w-full">
-        <SelectValue />
+        <SelectValue className="min-w-0 overflow-hidden">
+          {(v: string | null) => {
+            const choice = choices.find((c) => c.value === v)
+            return (
+              <span className="flex w-full min-w-0 items-center gap-2">
+                <span className="min-w-0 truncate">{choice?.label ?? v}</span>
+                {choice?.shim && <ShimBadge />}
+              </span>
+            )
+          }}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false}>
         {choices.map((c) => (
           <SelectItem key={c.value} value={c.value}>
             {c.label}
+            {c.shim && <ShimBadge />}
           </SelectItem>
         ))}
       </SelectContent>

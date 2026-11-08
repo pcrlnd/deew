@@ -33,7 +33,10 @@ function cargoBuild(triple) {
 
 function builtBinary(triple) {
   const exe = (triple ?? hostTriple()).includes("windows") ? "deew.exe" : "deew"
-  const base = join(dirname(manifest), "target")
+  // cargo honours CARGO_TARGET_DIR (relative to the working directory).
+  const base = process.env.CARGO_TARGET_DIR
+    ? resolve(process.cwd(), process.env.CARGO_TARGET_DIR)
+    : join(dirname(manifest), "target")
   return join(base, ...(triple ? [triple] : []), "release", exe)
 }
 

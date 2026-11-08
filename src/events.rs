@@ -15,6 +15,7 @@ static SINK: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 pub enum Stage {
     Starting,
     Ffmpeg,
+    Decode,
     Measure,
     Encode,
 }
@@ -156,6 +157,10 @@ mod tests {
         assert_eq!(
             progress_value(0, Stage::Measure, Some(100.0), None)["stage"],
             "measure"
+        );
+        assert_eq!(
+            progress_value(0, Stage::Decode, Some(50.0), None)["stage"],
+            "decode"
         );
     }
 

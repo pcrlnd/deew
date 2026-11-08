@@ -49,6 +49,17 @@ describe("parseProgressEvent", () => {
     })
     expect(
       parseProgressEvent(
+        '{"type":"progress","job":2,"stage":"decode","percent":40,"db":null}'
+      )
+    ).toEqual({
+      type: "progress",
+      job: 2,
+      stage: "decode",
+      percent: 40,
+      db: null,
+    })
+    expect(
+      parseProgressEvent(
         '{"type":"progress","job":0,"stage":"ffmpeg","percent":null,"db":null}'
       )
     ).toEqual({
@@ -102,6 +113,20 @@ describe("parseProgressEvent", () => {
 describe("reduceProgress", () => {
   const apply = (events: ProgressEvent[], from = EMPTY_PROGRESS) =>
     events.reduce(reduceProgress, from)
+
+  it("follows a decode stage followed by the encode stage", () => {
+    const state = apply([
+      { type: "jobs", files: ["a.thd"] },
+      { type: "progress", job: 0, stage: "decode", percent: 50, db: null },
+    ])
+    expect(stageLabel(state.jobs[0])).toBe("truehdd decode")
+    const next = apply(
+      [{ type: "progress", job: 0, stage: "encode", percent: 10, db: null }],
+      state
+    )
+    expect(next.jobs[0]).toMatchObject({ stage: "encode", percent: 10 })
+    expect(stageLabel(next.jobs[0])).toBe("DEE encode")
+  })
 
   it("follows a run", () => {
     const state = apply([
@@ -157,6 +182,11 @@ describe("reduceProgress", () => {
     expect(state.prompt).toBeNull()
   })
 
+  it("shows deew's 'interrupted' error as a warning", () => {
+    const state = apply([{ type: "error", text: "interrupted" }])
+    expect(state.notes).toEqual([{ tone: "warning", text: "interrupted" }])
+  })
+
   it("never mutates its input", () => {
     const base: ProgressState = {
       jobs: [job({ file: "a" })],
@@ -191,10 +221,11 @@ describe("stageLabel", () => {
   it("names the stages and appends the loudness", () => {
     expect(stageLabel(job())).toBe("waiting")
     expect(stageLabel(job({ stage: "starting" }))).toBe("starting")
-    expect(stageLabel(job({ stage: "ffmpeg" }))).toBe("ffmpeg")
-    expect(stageLabel(job({ stage: "measure" }))).toBe("DEE: measure")
+    expect(stageLabel(job({ stage: "ffmpeg" }))).toBe("ffmpeg decode")
+    expect(stageLabel(job({ stage: "decode" }))).toBe("truehdd decode")
+    expect(stageLabel(job({ stage: "measure" }))).toBe("DEE measure")
     expect(stageLabel(job({ stage: "encode", db: -3.5 }))).toBe(
-      "DEE: encode (-3.5 dB)"
+      "DEE encode (-3.5 dB)"
     )
   })
 })

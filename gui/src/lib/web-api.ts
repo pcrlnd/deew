@@ -66,10 +66,16 @@ export async function requestJson<T>(
 export const getSession = (): Promise<SessionInfo> =>
   requestJson("/api/session", { notify401: false })
 
-export const login = (user: string, pass: string): Promise<void> =>
+export type Remember = "session" | "1d" | "7d" | "30d"
+
+export const login = (
+  user: string,
+  pass: string,
+  remember?: Remember
+): Promise<void> =>
   requestJson("/api/login", {
     method: "POST",
-    body: { user, pass },
+    body: remember === undefined ? { user, pass } : { user, pass, remember },
     notify401: false,
   })
 

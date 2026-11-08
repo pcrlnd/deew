@@ -1,17 +1,15 @@
-# These are required.
-# If only name is specified, it will look in your system PATH variable, which includes the current directory on Windows.
-# Setup instructions: https://github.com/pcrlnd/deew#setup-system-path-variable
-# If full path is specified, that will be used.
-ffmpeg_path = 'ffmpeg'
-ffprobe_path = 'ffprobe'
-dee_path = 'dee.exe'
+# deew looks for the programs next to the deew executable first, then in your system PATH:
+# - ffmpeg, ffprobe
+# - the 'dee' folder of the DEE 6.7 tools (dee_ddp_encoder, dee_ddpjoc_encoder, ...)
+# - truehdd for ddp-atmos, thd-atmos and ac4-atmos (https://github.com/truehdd/truehdd)
+# - dee_shim for ddp-atmos, thd-atmos, TrueHD with DRC none, 7.0 DDP and 7.1 DDP with the standard profile (https://github.com/truehdd/dee-shim)
+# Setup instructions: https://github.com/pcrlnd/deew#where-deew-looks-for-the-programs
 
 # If this is empty, 'temp' next to the binary will be used.
-# On WSL with dee.exe, if the binary isn't on a Windows drive (/mnt/c etc.), the Windows temp directory will be used instead.
 # You can also specify an absolute path or a path relative to the current directory.
 temp_path = ''
 
-# Set between 1 and 11, use the -pl/--print-logos option to see the available logos, set to 0 to disable logo.
+# Set between 1 and 3, use the -pl/--print-logos option to see the available logos, set to 0 to disable logo.
 logo = 1
 
 # Specifies how many encodes can run at the same time.
@@ -19,9 +17,17 @@ logo = 1
 # One DEE can use 2 threads so setting '50%' can utilize all threads.
 # You can override this setting with -in/--instances.
 # The number will be clamped between 1 and cpu_count().
-# With the Windows version of DEE the max will be cpu_count() - 2 or 6 due to a limitation.
 # examples: 1, 4, '50%'
 max_instances = '50%'
+
+# Where the encoded files are saved.
+# path: the output directory, empty uses the current directory.
+#   You can override it with -o/--output.
+# to_input: save each output next to its input file, this overrides path.
+#   You can turn it on with -oi/--output-to-input.
+[output]
+    path = ''
+    to_input = false
 
 [default_bitrates]
     dd_1_0 = 128
@@ -30,8 +36,29 @@ max_instances = '50%'
     ddp_1_0 = 128
     ddp_2_0 = 256
     ddp_5_1 = 1024
-    ddp_7_1 = 1536
-    ac4_2_0 = 320
+    ddp_7_1_standard = 1536
+    ddp_7_1_bluray = 1536
+    ddp_atmos_streaming = 1024
+    ddp_atmos_standard = 1536
+    ddp_atmos_bluray = 1536
+    ac4_2_0 = 256
+    ac4_5_1 = 448
+    ac4_atmos = 448
+    aac_2_0 = 256
+
+# The profile used for 7.1 DDP and for DDP Atmos.
+# You can override these settings with --ddp-mode and --ddp-atmos-mode.
+# ddp (7.1 only, 5.1 and below are not affected):
+#   standard: E-AC-3 only, 384-1792 kbps, needs dee_shim
+#   bluray: AC-3 core + E-AC-3, 768-1664 kbps, also plays on AC-3 only devices
+# ddp_atmos (needs truehdd and dee_shim):
+#   streaming: 5.1 with Atmos, 384-1024 kbps, the format of streaming services, best device support
+#   standard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
+#   bluray: 7.1 with Atmos, AC-3 core + E-AC-3, 1152-1664 kbps
+# Use -lb/--list-bitrates to see the exact bitrates of each profile.
+[default_modes]
+    ddp = 'standard' # standard/bluray
+    ddp_atmos = 'streaming' # streaming/standard/bluray
 
 # You can toggle what sections you would like to see in the encoding summary
 [summary_sections]
@@ -48,7 +75,7 @@ max_instances = '50%'
     user = ''
     pass = ''
 
-# Output of deew-gui and deew-web: 'cli' shows the terminal output of the CLI,
-# 'native' shows progress bars, warnings and pop-up prompts in the window.
+# Settings of deew-gui and deew-web:
+# progress: 'cli' shows the terminal output of the CLI, 'native' shows progress bars, warnings and pop-up prompts in the window.
 [gui]
     progress = 'cli'

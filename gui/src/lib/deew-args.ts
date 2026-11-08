@@ -1,13 +1,77 @@
 // Pure helpers that turn the GUI option state into a deew argv and into a
 // shell-quoted command line for display. No Tauri / DOM dependencies.
 
-export const FORMATS = ["dd", "ddp", "ac4", "thd"] as const
+import { shimBitratesDdp71 } from "@/lib/shim"
+
+export const FORMATS = [
+  "dd",
+  "ddp",
+  "ddp-atmos",
+  "thd",
+  "thd-atmos",
+  "ac4",
+  "ac4-atmos",
+  "aac",
+] as const
 export type Format = (typeof FORMATS)[number]
+
+/**
+ * The format as it is spelled in the bitrate tables and in the config's
+ * `[default_bitrates]` keys: underscores (`ddp_atmos`), unlike the `-f` value.
+ */
+export function tomlKey(format: Format): string {
+  return format.replaceAll("-", "_")
+}
+
+/** Labels of the format dropdown. */
+export const FORMAT_LABELS: Readonly<Record<Format, string>> = {
+  dd: "DD",
+  ddp: "DDP",
+  "ddp-atmos": "DDP Atmos",
+  thd: "TrueHD",
+  "thd-atmos": "TrueHD Atmos",
+  ac4: "AC4",
+  "ac4-atmos": "AC4 Atmos",
+  aac: "AAC",
+}
+
+/** Formats that are encoded from a TrueHD Atmos input with truehdd. */
+export function isAtmos(format: Format): boolean {
+  return (
+    format === "ddp-atmos" || format === "ac4-atmos" || format === "thd-atmos"
+  )
+}
+
+/** Whether `-dn` works: DD, DDP and AC4 only. */
+export function supportsDialnorm(format: Format): boolean {
+  return format === "dd" || format === "ddp" || format === "ac4"
+}
+
+/** Whether `-r` has an effect (AAC has no DRC). */
+export function supportsDrc(format: Format): boolean {
+  return format !== "aac"
+}
+
+/** Whether `-r none` works (not for AC4 and AC4 Atmos). */
+export function supportsDrcNone(format: Format): boolean {
+  return format !== "ac4" && format !== "ac4-atmos"
+}
+
+/** The DRC values offered for `format`. */
+export function drcChoices(format: Format): Drc[] {
+  return DRC_VALUES.filter((d) => d !== "none" || supportsDrcNone(format))
+}
+
+/** Whether `-mo` works (not for the Atmos formats). */
+export function supportsMeasureOnly(format: Format): boolean {
+  return !isAtmos(format)
+}
 
 export const DOWNMIX_VALUES = ["none", "1", "2", "6"] as const
 export type Downmix = (typeof DOWNMIX_VALUES)[number]
 
 export const DRC_VALUES = [
+  "none",
   "film_light",
   "film_standard",
   "music_light",
@@ -17,6 +81,61 @@ export const DRC_VALUES = [
 export type Drc = (typeof DRC_VALUES)[number]
 
 export const DEFAULT_BITRATE = "default"
+
+/** `--ddp-mode` values (7.1 DDP). */
+export const DDP_MODES = ["standard", "bluray"] as const
+export type DdpMode = (typeof DDP_MODES)[number]
+
+/** `--ddp-atmos-mode` values (DDP Atmos). */
+export const DDP_ATMOS_MODES = ["streaming", "standard", "bluray"] as const
+export type DdpAtmosMode = (typeof DDP_ATMOS_MODES)[number]
+
+/**
+ * A mode select value: `DEFAULT_MODE` is the mode of the config's
+ * `[default_modes]` (nothing is passed to the CLI), or an explicit mode.
+ */
+export const DEFAULT_MODE = "default"
+export type DdpModeChoice = typeof DEFAULT_MODE | DdpMode
+export type DdpAtmosModeChoice = typeof DEFAULT_MODE | DdpAtmosMode
+
+/** The config's `[default_modes]` (program defaults when unknown). */
+export interface DefaultModes {
+  ddp: DdpMode
+  ddpAtmos: DdpAtmosMode
+}
+
+export const PROGRAM_DEFAULT_MODES: Readonly<DefaultModes> = {
+  ddp: "standard",
+  ddpAtmos: "streaming",
+}
+
+/** Modes from the settings answer; anything unknown is the program default. */
+export function parseDefaultModes(
+  ddp: unknown,
+  ddpAtmos: unknown
+): DefaultModes {
+  return {
+    ddp: DDP_MODES.find((m) => m === ddp) ?? PROGRAM_DEFAULT_MODES.ddp,
+    ddpAtmos:
+      DDP_ATMOS_MODES.find((m) => m === ddpAtmos) ??
+      PROGRAM_DEFAULT_MODES.ddpAtmos,
+  }
+}
+
+/** The mode a choice stands for. */
+export function effectiveDdpMode(
+  choice: DdpModeChoice,
+  defaults: DefaultModes
+): DdpMode {
+  return choice === DEFAULT_MODE ? defaults.ddp : choice
+}
+
+export function effectiveDdpAtmosMode(
+  choice: DdpAtmosModeChoice,
+  defaults: DefaultModes
+): DdpAtmosMode {
+  return choice === DEFAULT_MODE ? defaults.ddpAtmos : choice
+}
 
 export interface DeewOptions {
   inputs: string[]
@@ -32,10 +151,17 @@ export interface DeewOptions {
   /** Integer text between -31 and 0. */
   dialnorm: string
   instances: string
+  /** `-oi`: write each output next to its input; `output` is then unused. */
+  outputToInput: boolean
+  /** `--ddp-mode`: profile of a 7.1 DDP output. */
+  ddpMode: DdpModeChoice
+  /** `--ddp-atmos-mode`: profile of DDP Atmos. */
+  ddpAtmosMode: DdpAtmosModeChoice
+  /** `-dl`: remove the LFE channel. */
+  disableLfe: boolean
   keepTemp: boolean
+  keepLog: boolean
   measureOnly: boolean
-  forceStandard: boolean
-  forceBluray: boolean
   longArgument: boolean
   noPrompt: boolean
 }
@@ -48,22 +174,25 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
   bitrate: DEFAULT_BITRATE,
   downmix: "none",
   delay: "",
-  drc: "music_light",
+  drc: "none",
   dialnorm: "0",
   instances: "",
+  outputToInput: false,
+  ddpMode: DEFAULT_MODE,
+  ddpAtmosMode: DEFAULT_MODE,
+  disableLfe: false,
   keepTemp: false,
+  keepLog: false,
   measureOnly: false,
-  forceStandard: false,
-  forceBluray: false,
   longArgument: false,
   noPrompt: false,
 }
 
 export type BooleanOption =
+  | "disableLfe"
   | "keepTemp"
+  | "keepLog"
   | "measureOnly"
-  | "forceStandard"
-  | "forceBluray"
   | "longArgument"
   | "noPrompt"
 
@@ -79,6 +208,7 @@ export const INFO_COMMANDS = [
   { flag: "-pl", label: "Print logos", group: 1 },
   { flag: "-c", label: "Show config", group: 2 },
   { flag: "-gc", label: "Generate config", group: 2 },
+  { flag: "-gt", label: "Download tools", group: 3 },
 ] as const
 export type InfoFlag = (typeof INFO_COMMANDS)[number]["flag"]
 
@@ -105,19 +235,38 @@ export const BITRATE_TABLE: Readonly<Record<string, readonly number[]>> = {
     192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320, 336, 352,
     368, 384, 400, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1008, 1024,
   ],
-  ddp_71_standard: [384, 448, 576, 640, 704, 768, 832, 896, 960, 1008, 1024],
-  ddp_71_bluray: [768, 1024, 1280, 1536, 1664],
-  ddp_71_combined: [
-    384, 448, 576, 640, 704, 768, 832, 896, 960, 1008, 1024, 1280, 1536, 1664,
+  // 7.1 DDP: the standard profile (uses dee_shim) and the Blu-ray profile.
+  ddp_71: [
+    384, 448, 504, 576, 640, 704, 768, 832, 896, 960, 1008, 1024, 1152, 1280,
+    1408, 1512, 1536, 1664, 1792,
   ],
-  ac4_20: [64, 72, 112, 144, 256, 320],
+  ddp_71_bluray: [768, 1024, 1280, 1536, 1664],
+  // DDP Atmos: streaming (5.1), standard (7.1, E-AC-3 only) and Blu-ray (7.1).
+  ddp_atmos_streaming: [384, 448, 576, 640, 768, 1024],
+  ddp_atmos_standard: [768, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 2048],
+  ddp_atmos_bluray: [1152, 1280, 1408, 1512, 1536, 1664],
+  ac4_20: [48, 64, 96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
+  ac4_51: [96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
+  ac4_atmos: [256, 320, 448, 768],
+  aac_20: [
+    56, 64, 80, 96, 112, 128, 144, 160, 192, 224, 256, 288, 320, 384, 448, 512,
+    576,
+  ],
 }
 
 const FORMAT_BITRATE_KEYS: Readonly<Record<Format, readonly string[]>> = {
   dd: ["dd_10", "dd_20", "dd_51"],
-  ddp: ["ddp_10", "ddp_20", "ddp_51", "ddp_71_combined"],
-  ac4: ["ac4_20"],
+  ddp: ["ddp_10", "ddp_20", "ddp_51", "ddp_71"],
+  "ddp-atmos": [
+    "ddp_atmos_streaming",
+    "ddp_atmos_standard",
+    "ddp_atmos_bluray",
+  ],
+  ac4: ["ac4_20", "ac4_51"],
+  "ac4-atmos": ["ac4_atmos"],
+  aac: ["aac_20"],
   thd: [],
+  "thd-atmos": [],
 }
 
 /** Union of the allowed bitrates of every layout of `format`, ascending. */
@@ -134,8 +283,25 @@ export interface BitrateContext {
   /** Channel count common to all probed inputs, `null` if unknown. */
   channels: number | null
   downmix: Downmix
-  forceStandard: boolean
-  forceBluray: boolean
+  /** `--ddp-mode`; only has an effect on a 7.1 DDP output (standard if unset). */
+  ddpMode?: DdpMode
+  /** `--ddp-atmos-mode` (streaming if unset). */
+  atmosMode?: DdpAtmosMode
+  /**
+   * The distinct ffprobe codec names of the probed inputs (empty if unknown),
+   * for the Atmos formats that need TrueHD.
+   */
+  codecs?: readonly string[]
+  /**
+   * The distinct (codec, Atmos) kinds of the probed inputs; more precise than
+   * `codecs` when given.
+   */
+  inputs?: readonly InputKind[]
+}
+
+export interface InputKind {
+  codec: string
+  atmos: boolean
 }
 
 export interface BitrateInfo {
@@ -155,10 +321,46 @@ export interface BitrateInfo {
    * `dd_5_1`); unset when the layout is unknown, TrueHD or invalid.
    */
   defaultKey?: string
+  /** The output is 7.1 DDP, so `--ddp-mode` applies. */
+  ddp71?: boolean
+  /** Bitrates of `bitrates` that only work with dee_shim. */
+  shimBitrates?: number[]
+}
+
+export const ATMOS_INPUT_WARNING =
+  "The Atmos formats need a TrueHD Atmos input."
+export const DDP_ATMOS_INPUT_WARNING =
+  "DDP Atmos input: the Atmos formats need a TrueHD Atmos input."
+export const THD_NO_ATMOS_INPUT_WARNING =
+  "TrueHD input without Atmos: the Atmos formats need a TrueHD Atmos input."
+
+/** One warning per kind of unsuitable input for the Atmos formats. */
+export function atmosInputWarnings(
+  inputs: readonly InputKind[] | undefined,
+  codecs: readonly string[] | undefined
+): string[] {
+  if (inputs === undefined) {
+    return codecs?.some((codec) => codec !== "truehd")
+      ? [ATMOS_INPUT_WARNING]
+      : []
+  }
+  const warnings: string[] = []
+  if (inputs.some((i) => i.codec === "eac3" && i.atmos)) {
+    warnings.push(DDP_ATMOS_INPUT_WARNING)
+  }
+  if (inputs.some((i) => i.codec === "truehd" && !i.atmos)) {
+    warnings.push(THD_NO_ATMOS_INPUT_WARNING)
+  }
+  if (
+    inputs.some((i) => i.codec !== "truehd" && !(i.codec === "eac3" && i.atmos))
+  ) {
+    warnings.push(ATMOS_INPUT_WARNING)
+  }
+  return warnings
 }
 
 export const CHANNELS_WARNING =
-  "Input channels can only be 1, 2, 6 or 8 (1.0, 2.0, 5.1 or 7.1)."
+  "Input channels can only be 1, 2, 5, 6, 7 or 8 (1.0, 2.0, 5.0, 5.1, 7.0 or 7.1)."
 
 /**
  * The bitrates deew accepts for the probed channel layout, mirroring
@@ -166,9 +368,46 @@ export const CHANNELS_WARNING =
  */
 export function relevantBitrates(c: BitrateContext): BitrateInfo {
   const warnings: string[] = []
+  if (isAtmos(c.format)) {
+    // Atmos inputs have no usable channel layout; the encode needs TrueHD.
+    warnings.push(...atmosInputWarnings(c.inputs, c.codecs))
+    if (c.downmix !== "none") {
+      warnings.push("Downmix is not supported for Atmos formats.")
+    }
+    if (c.format === "thd-atmos") {
+      // Lossless, like TrueHD: no bitrate.
+      return {
+        status: "na",
+        bitrates: [],
+        placeholder: "N/A for TrueHD",
+        warnings,
+      }
+    }
+    const key =
+      c.format === "ddp-atmos"
+        ? `ddp_atmos_${c.atmosMode ?? PROGRAM_DEFAULT_MODES.ddpAtmos}`
+        : tomlKey(c.format)
+    const bitrates = [...BITRATE_TABLE[key]]
+    return {
+      status: "ok",
+      bitrates,
+      warnings,
+      defaultKey: key,
+      // Every DDP Atmos bitrate goes through dee_shim; AC4 Atmos does not.
+      shimBitrates: c.format === "ddp-atmos" ? [...bitrates] : [],
+    }
+  }
   if (c.format === "thd") {
     if (c.channels === 1) {
       warnings.push("Input channels for TrueHD can only be 2, 6 or 8.")
+    }
+    // TrueHD is downmixed by ffmpeg, to 2.0 or 5.1 (it has no mono).
+    if (c.downmix !== "none") {
+      if (c.channels !== null && Number(c.downmix) >= c.channels) {
+        warnings.push("Downmix has to be lower than the input channels.")
+      } else if (!downmixValues("thd").includes(c.downmix)) {
+        warnings.push(`Downmix ${c.downmix} is not supported for this format.`)
+      }
     }
     return {
       status: "na",
@@ -184,7 +423,7 @@ export function relevantBitrates(c: BitrateContext): BitrateInfo {
       warnings,
     }
   }
-  if (![1, 2, 6, 8].includes(c.channels)) {
+  if (![1, 2, 5, 6, 7, 8].includes(c.channels)) {
     return {
       status: "invalid",
       bitrates: [],
@@ -192,52 +431,67 @@ export function relevantBitrates(c: BitrateContext): BitrateInfo {
       warnings: [CHANNELS_WARNING],
     }
   }
+  if (c.format === "ac4" && c.channels === 1) {
+    return {
+      status: "invalid",
+      bitrates: [],
+      placeholder: "AC4 needs 2.0+ input",
+      warnings: ["Input channels for AC4 can only be 2, 5, 6, 7 or 8."],
+    }
+  }
+  if (c.format === "aac" && c.channels === 1) {
+    return {
+      status: "invalid",
+      bitrates: [],
+      placeholder: "AAC needs 2.0+ input",
+      warnings: ["Input channels for AAC can only be 2, 5, 6, 7 or 8."],
+    }
+  }
   const downmix = c.downmix === "none" ? null : Number(c.downmix)
-  let outchannels = c.channels
+  // 5.0 / 7.0 are treated like 5.1 / 7.1 for the output layout and rates.
+  const layoutChannels =
+    ({ 5: 6, 7: 8 } as Record<number, number>)[c.channels] ?? c.channels
+  let outchannels = layoutChannels
   if (downmix !== null) {
     if (downmix >= c.channels) {
       warnings.push("Downmix has to be lower than the input channels.")
+    } else if (!downmixValues(c.format).includes(c.downmix)) {
+      warnings.push(`Downmix ${c.downmix} is not supported for this format.`)
     } else {
       outchannels = downmix
     }
-  } else if (c.format === "dd" && c.channels === 8) {
-    outchannels = 6
   }
-  if (c.format === "ac4") {
-    if (c.channels !== 6) {
-      return {
-        status: "invalid",
-        bitrates: [],
-        placeholder: "AC4 needs 5.1 input",
-        warnings: [...warnings, "Input channels for AC4 can only be 6 (5.1)."],
-      }
-    }
-    return {
-      status: "ok",
-      bitrates: [...BITRATE_TABLE.ac4_20],
-      warnings,
-      defaultKey: "ac4_2_0",
+  if (downmix === null || outchannels === layoutChannels) {
+    // No (usable) downmix: DD and AC4 reduce 7.1 to 5.1 themselves, and AAC
+    // is always stereo.
+    if ((c.format === "dd" || c.format === "ac4") && layoutChannels === 8) {
+      outchannels = 6
+    } else if (c.format === "aac") {
+      outchannels = 2
     }
   }
+  const ddp71 = c.format === "ddp" && outchannels === 8
+  const bluray = c.ddpMode === "bluray"
   let key: string
-  if (c.format === "ddp" && outchannels === 8) {
-    key = c.forceStandard
-      ? "ddp_71_standard"
-      : c.forceBluray
-        ? "ddp_71_bluray"
-        : "ddp_71_combined"
+  let defaultKey: string
+  if (ddp71) {
+    key = bluray ? "ddp_71_bluray" : "ddp_71"
+    defaultKey = bluray ? "ddp_7_1_bluray" : "ddp_7_1_standard"
   } else {
     const layout = { 1: "10", 2: "20", 6: "51" }[outchannels as 1 | 2 | 6]
-    key = `${c.format}_${layout}`
+    key = `${tomlKey(c.format)}_${layout}`
+    const defaultLayout = { 1: "1_0", 2: "2_0", 6: "5_1" }[
+      outchannels as 1 | 2 | 6
+    ]
+    defaultKey = `${tomlKey(c.format)}_${defaultLayout}`
   }
-  const defaultLayout = { 1: "1_0", 2: "2_0", 6: "5_1", 8: "7_1" }[
-    outchannels as 1 | 2 | 6 | 8
-  ]
   return {
     status: "ok",
     bitrates: [...BITRATE_TABLE[key]],
     warnings,
-    defaultKey: `${c.format}_${defaultLayout}`,
+    defaultKey,
+    ddp71,
+    shimBitrates: ddp71 ? shimBitratesDdp71(bluray) : [],
   }
 }
 
@@ -249,8 +503,15 @@ export const TEMPLATE_DEFAULT_BITRATES: Readonly<Record<string, number>> = {
   ddp_1_0: 128,
   ddp_2_0: 256,
   ddp_5_1: 1024,
-  ddp_7_1: 1536,
-  ac4_2_0: 320,
+  ddp_7_1_standard: 1536,
+  ddp_7_1_bluray: 1536,
+  ddp_atmos_streaming: 1024,
+  ddp_atmos_standard: 1536,
+  ddp_atmos_bluray: 1536,
+  ac4_2_0: 256,
+  ac4_5_1: 448,
+  ac4_atmos: 448,
+  aac_2_0: 256,
 }
 
 /** `find_closest_allowed` of src/util.rs: the first closest value wins. */
@@ -267,6 +528,8 @@ export function closestAllowed(value: number, allowed: readonly number[]) {
 export interface BitrateChoice {
   value: string
   label: string
+  /** Only possible with dee_shim. */
+  shim?: boolean
 }
 
 /**
@@ -302,42 +565,108 @@ export function bitrateChoices(
     ]
   }
   const suffix = fromConfig === undefined ? "default" : "default from config"
+  const shim = (b: number) => info.shimBitrates?.includes(b) === true
   return info.bitrates.map((b) =>
     b === picked
-      ? { value: DEFAULT_BITRATE, label: `${b} kbps (${suffix})` }
-      : { value: String(b), label: `${b} kbps` }
+      ? {
+          value: DEFAULT_BITRATE,
+          label: `${b} kbps (${suffix})`,
+          shim: shim(b),
+        }
+      : { value: String(b), label: `${b} kbps`, shim: shim(b) }
   )
 }
 
-/**
- * The downmix choices that make sense for the probed input channel count
- * (a downmix has to be lower than the input); all when it is unknown.
- */
-export function relevantDownmixes(channels: number | null): Downmix[] {
-  if (channels === null) return [...DOWNMIX_VALUES]
-  return DOWNMIX_VALUES.filter((d) => d === "none" || Number(d) < channels)
+/** The `-dm` values a format accepts (besides keeping the layout). */
+function downmixValues(format: Format): readonly Downmix[] {
+  switch (format) {
+    case "dd":
+    case "ddp":
+      return ["1", "2", "6"]
+    case "ac4":
+      return ["2", "6"]
+    case "aac":
+      return ["2"]
+    case "thd":
+      return ["2", "6"]
+    default:
+      return []
+  }
 }
 
-/** Changes the format and drops a bitrate the new format cannot do. */
+/**
+ * The downmix choices that make sense for the format and the probed input
+ * channel count (a downmix has to be lower than the input); all the format
+ * accepts when the channels are unknown.
+ */
+export function relevantDownmixes(
+  format: Format,
+  channels: number | null
+): Downmix[] {
+  return [
+    "none" as const,
+    ...downmixValues(format).filter(
+      (d) => channels === null || Number(d) < channels
+    ),
+  ]
+}
+
+/**
+ * Whether the "DDP mode" select is shown: DDP, and the output is 7.1 or not
+ * known yet (no probed input). A known 5.1 or smaller output hides it.
+ */
+export function ddpModeApplies(format: Format, info: BitrateInfo): boolean {
+  return format === "ddp" && (info.ddp71 === true || info.status === "fallback")
+}
+
+/** Whether the "DDP Atmos mode" select is shown. */
+export function ddpAtmosModeApplies(format: Format): boolean {
+  return format === "ddp-atmos"
+}
+
+/**
+ * Whether `-dl` is enabled: a probed 5.1 or 7.1 input, not an Atmos format,
+ * not AAC (always 2.0), and no downmix to mono or stereo.
+ */
+export function disableLfeApplies(
+  format: Format,
+  channels: number | null | undefined,
+  downmix: Downmix
+): boolean {
+  return (
+    !isAtmos(format) &&
+    format !== "aac" &&
+    (channels === 6 || channels === 8) &&
+    downmix !== "1" &&
+    downmix !== "2"
+  )
+}
+
+/** Changes the format and resets what the new format cannot do. */
 export function setFormat(o: DeewOptions, format: Format): DeewOptions {
   const bitrate =
     o.bitrate !== DEFAULT_BITRATE &&
     !bitrateOptions(format).includes(Number(o.bitrate))
       ? DEFAULT_BITRATE
       : o.bitrate
-  return { ...o, format, bitrate }
+  return {
+    ...o,
+    format,
+    bitrate,
+    downmix: downmixValues(format).includes(o.downmix) ? o.downmix : "none",
+    drc: o.drc === "none" && !supportsDrcNone(format) ? "music_light" : o.drc,
+    dialnorm: supportsDialnorm(format) ? o.dialnorm : "0",
+    measureOnly: supportsMeasureOnly(format) ? o.measureOnly : false,
+  }
 }
 
-/** Sets a checkbox; -fs and -fb exclude each other. */
+/** Sets a checkbox. */
 export function setFlag(
   o: DeewOptions,
   key: BooleanOption,
   value: boolean
 ): DeewOptions {
-  const next = { ...o, [key]: value }
-  if (value && key === "forceStandard") next.forceBluray = false
-  if (value && key === "forceBluray") next.forceStandard = false
-  return next
+  return { ...o, [key]: value }
 }
 
 const INT_RE = /^[+-]?\d+$/
@@ -355,6 +684,14 @@ export function validate(o: DeewOptions): string[] {
   const dn = parseInteger(o.dialnorm)
   if (dn === null || dn < -31 || dn > 0) {
     problems.push("Dialnorm must be between -31 and 0.")
+  } else if (dn !== 0 && !supportsDialnorm(o.format)) {
+    problems.push("Dialnorm only works for DD, DDP and AC4.")
+  }
+  if (o.drc === "none" && !supportsDrcNone(o.format)) {
+    problems.push("DRC none is not supported for AC4.")
+  }
+  if (o.measureOnly && !supportsMeasureOnly(o.format)) {
+    problems.push("Measure only does not work for the Atmos formats.")
   }
   return problems
 }
@@ -364,14 +701,40 @@ export function validate(o: DeewOptions): string[] {
  * differ from the defaults are included. The delay always uses the `-d=`
  * form, since the CLI cannot take a negative value as a separate argument.
  */
-export function buildArgs(o: DeewOptions): string[] {
+export function buildArgs(
+  o: DeewOptions,
+  layout: {
+    ddp71?: boolean
+    channels?: number | null
+    /** The config's `[default_modes]`; a mode equal to it is not passed. */
+    defaultModes?: DefaultModes
+  } = {}
+): string[] {
+  const defaultModes = layout.defaultModes ?? PROGRAM_DEFAULT_MODES
   const args: string[] = []
   if (o.inputs.length > 0) args.push("-i", ...o.inputs)
 
   const ti = parseInteger(o.trackIndex)
   if (ti !== null && ti !== 0) args.push("-ti", String(ti))
-  if (o.output.trim() !== "") args.push("-o", o.output.trim())
+  // -oi overrides -o, so the (greyed out) directory is not passed with it.
+  if (o.outputToInput) args.push("-oi")
+  else if (o.output.trim() !== "") args.push("-o", o.output.trim())
   if (o.format !== DEFAULT_OPTIONS.format) args.push("-f", o.format)
+  if (
+    o.format === "ddp" &&
+    layout.ddp71 === true &&
+    o.ddpMode !== DEFAULT_MODE &&
+    o.ddpMode !== defaultModes.ddp
+  ) {
+    args.push("--ddp-mode", o.ddpMode)
+  }
+  if (
+    ddpAtmosModeApplies(o.format) &&
+    o.ddpAtmosMode !== DEFAULT_MODE &&
+    o.ddpAtmosMode !== defaultModes.ddpAtmos
+  ) {
+    args.push("--ddp-atmos-mode", o.ddpAtmosMode)
+  }
   if (o.bitrate !== DEFAULT_BITRATE && o.bitrate.trim() !== "") {
     args.push("-b", o.bitrate.trim())
   }
@@ -382,10 +745,12 @@ export function buildArgs(o: DeewOptions): string[] {
   if (dn !== null && dn !== 0) args.push("-dn", String(dn))
   if (o.instances.trim() !== "") args.push("-in", o.instances.trim())
 
+  if (o.disableLfe && disableLfeApplies(o.format, layout.channels, o.downmix)) {
+    args.push("-dl")
+  }
   if (o.keepTemp) args.push("-k")
+  if (o.keepLog) args.push("-kl")
   if (o.measureOnly) args.push("-mo")
-  if (o.forceStandard) args.push("-fs")
-  if (o.forceBluray) args.push("-fb")
   if (o.longArgument) args.push("-la")
   if (o.noPrompt) args.push("-np")
   return args

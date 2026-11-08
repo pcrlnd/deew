@@ -1,1 +1,6 @@
-deew 3.6.5
+deew 5.0.0
+DEE      not found
+truehdd  not found
+dee_shim not found
+ffmpeg   not found
+ffprobe  not found

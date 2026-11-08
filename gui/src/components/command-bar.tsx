@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react"
 import {
   ChartNoAxesGantt,
   Copy,
+  LoaderCircle,
   Play,
   Square,
   SquareTerminal,
@@ -17,6 +18,8 @@ interface CommandBarProps {
   command: string
   problems: string[]
   running: boolean
+  /** Stop was pressed and the job hasn't ended yet. */
+  stopping: boolean
   /** Drives the Run button colour. */
   runState: "idle" | "running" | "success" | "failure"
   /** Changes every time a job ends, so two equal outcomes both flash. */
@@ -48,6 +51,7 @@ export function CommandBar({
   command,
   problems,
   running,
+  stopping,
   runState,
   endCount,
   canRun,
@@ -92,9 +96,25 @@ export function CommandBar({
     return clearRunFlash
   }, [endCount, running, startRunFlash, clearRunFlash])
 
-  const runClass = running
-    ? "bg-amber-400 text-black hover:bg-amber-400 disabled:opacity-100 dark:bg-amber-400 dark:text-black"
-    : flashClass(runPhase, runKind)
+  // Ignore Stop clicks right after a run starts, so a double-click on Run
+  // doesn't stop the job it just started.
+  const runningSinceRef = useRef(0)
+  useEffect(() => {
+    if (running) runningSinceRef.current = performance.now()
+  }, [running])
+
+  const state = !running ? "idle" : stopping ? "stopping" : "running"
+  const click = () => {
+    if (state === "idle") onRun()
+    else if (
+      state === "running" &&
+      performance.now() - runningSinceRef.current >= 500
+    )
+      onStop()
+  }
+  const runClass = state === "idle" ? flashClass(runPhase, runKind) : ""
+  const item = "col-start-1 row-start-1 flex items-center justify-center gap-1"
+  const hide = (active: boolean) => (active ? "" : "invisible")
 
   return (
     <div className="@container flex flex-col gap-1">
@@ -128,25 +148,41 @@ export function CommandBar({
           <Button
             ref={attachRun}
             size="sm"
+            variant={state === "idle" ? "default" : "destructive"}
             className={cn(
               "flex-1 @min-[520px]:h-auto @min-[520px]:flex-none",
+              state === "stopping" && "disabled:opacity-100",
               runClass
             )}
-            onClick={onRun}
-            disabled={!canRun || running}
+            onClick={click}
+            disabled={state === "idle" ? !canRun : state === "stopping"}
           >
-            <Play data-icon="inline-start" />
-            Run
-          </Button>
-          <Button
-            size="sm"
-            className="flex-1 @min-[520px]:h-auto @min-[520px]:flex-none"
-            variant="destructive"
-            onClick={onStop}
-            disabled={!running}
-          >
-            <Square data-icon="inline-start" />
-            Stop
+            <span className="grid">
+              <span
+                className={cn(item, hide(state === "idle"))}
+                aria-hidden={state !== "idle"}
+              >
+                <Play data-icon="inline-start" />
+                Run
+              </span>
+              <span
+                className={cn(item, hide(state === "running"))}
+                aria-hidden={state !== "running"}
+              >
+                <Square data-icon="inline-start" />
+                Stop
+              </span>
+              <span
+                className={cn(item, hide(state === "stopping"))}
+                aria-hidden={state !== "stopping"}
+              >
+                <LoaderCircle
+                  data-icon="inline-start"
+                  className="animate-spin"
+                />
+                Stopping...
+              </span>
+            </span>
           </Button>
           <div
             role="group"

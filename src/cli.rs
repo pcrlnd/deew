@@ -4,30 +4,35 @@
 //! the usual Rust parsers cannot express, so the (small) subset of argparse
 //! behaviour that deew relies on is reimplemented here.
 
-use crate::help::HELP;
+use crate::help::{HELP, wrap_help};
 use crate::rprintln;
+use crate::term::console_width;
 
 #[derive(Debug, Clone)]
 pub struct Args {
     pub input: Option<Vec<String>>, // None if -i/--input never given
     pub track_index: i64,           // default 0
     pub output: Option<String>,
+    pub ddp_mode: Option<String>,
+    pub ddp_atmos_mode: Option<String>,
     pub format: String, // default "ddp" (raw, not lowercased)
     pub bitrate: Option<i64>,
     pub downmix: Option<i64>,
     pub delay: Option<String>,
-    pub drc: String,   // default "music_light"
-    pub dialnorm: i64, // default 0
+    pub drc: Option<String>, // None: the default of the format
+    pub dialnorm: i64,       // default 0
     pub instances: Option<String>,
     pub keeptemp: bool,
+    pub keep_log: bool,
+    pub output_to_input: bool,
+    pub disable_lfe: bool,
     pub measure_only: bool,
-    pub force_standard: bool,
-    pub force_bluray: bool,
     pub list_bitrates: bool,
     pub long_argument: bool,
     pub no_prompt: bool,
     pub print_logos: bool,
     pub changelog: bool,
+    pub get_tools: bool,
     pub config: bool,
     pub generate_config: bool,
 }
@@ -38,22 +43,26 @@ impl Default for Args {
             input: None,
             track_index: 0,
             output: None,
+            ddp_mode: None,
+            ddp_atmos_mode: None,
             format: "ddp".to_string(),
             bitrate: None,
             downmix: None,
             delay: None,
-            drc: "music_light".to_string(),
+            drc: None,
             dialnorm: 0,
             instances: None,
             keeptemp: false,
+            keep_log: false,
+            output_to_input: false,
+            disable_lfe: false,
             measure_only: false,
-            force_standard: false,
-            force_bluray: false,
             list_bitrates: false,
             long_argument: false,
             no_prompt: false,
             print_logos: false,
             changelog: false,
+            get_tools: false,
             config: false,
             generate_config: false,
         }
@@ -78,22 +87,26 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-i", "--input", Kind::Many),
     ("-ti", "--track-index", Kind::Int),
     ("-o", "--output", Kind::Str),
+    ("-oi", "--output-to-input", Kind::Flag),
     ("-f", "--format", Kind::Str),
+    ("", "--ddp-mode", Kind::Str),
+    ("", "--ddp-atmos-mode", Kind::Str),
     ("-b", "--bitrate", Kind::Int),
     ("-dm", "--downmix", Kind::Int),
+    ("-dl", "--disable-lfe", Kind::Flag),
     ("-d", "--delay", Kind::Str),
     ("-r", "--drc", Kind::Str),
     ("-dn", "--dialnorm", Kind::Int),
     ("-in", "--instances", Kind::Str),
     ("-k", "--keeptemp", Kind::Flag),
+    ("-kl", "--keep-log", Kind::Flag),
     ("-mo", "--measure-only", Kind::Flag),
-    ("-fs", "--force-standard", Kind::Flag),
-    ("-fb", "--force-bluray", Kind::Flag),
     ("-lb", "--list-bitrates", Kind::Flag),
     ("-la", "--long-argument", Kind::Flag),
     ("-np", "--no-prompt", Kind::Flag),
     ("-pl", "--print-logos", Kind::Flag),
     ("-cl", "--changelog", Kind::Flag),
+    ("-gt", "--get-tools", Kind::Flag),
     ("-c", "--config", Kind::Flag),
     ("-gc", "--generate-config", Kind::Flag),
 ];
@@ -120,7 +133,9 @@ enum Tok {
 }
 
 fn lookup(token: &str) -> Option<&'static Opt> {
-    OPTIONS.iter().find(|(s, l, _)| *s == token || *l == token)
+    OPTIONS
+        .iter()
+        .find(|(s, l, _)| (!s.is_empty() && *s == token) || *l == token)
 }
 
 /// Split `--long=value` / `-x=value` into the option and its explicit value.
@@ -214,20 +229,25 @@ fn py_int(s: &str) -> Option<i64> {
 }
 
 fn display_name(opt: &Opt) -> String {
+    if opt.0.is_empty() {
+        return opt.1.to_string();
+    }
     format!("{}/{}", opt.0, opt.1)
 }
 
 fn set_flag(args: &mut Args, long: &str) {
     match long {
         "--keeptemp" => args.keeptemp = true,
+        "--keep-log" => args.keep_log = true,
+        "--output-to-input" => args.output_to_input = true,
+        "--disable-lfe" => args.disable_lfe = true,
         "--measure-only" => args.measure_only = true,
-        "--force-standard" => args.force_standard = true,
-        "--force-bluray" => args.force_bluray = true,
         "--list-bitrates" => args.list_bitrates = true,
         "--long-argument" => args.long_argument = true,
         "--no-prompt" => args.no_prompt = true,
         "--print-logos" => args.print_logos = true,
         "--changelog" => args.changelog = true,
+        "--get-tools" => args.get_tools = true,
         "--config" => args.config = true,
         "--generate-config" => args.generate_config = true,
         _ => unreachable!("not a flag: {long}"),
@@ -248,8 +268,10 @@ fn set_str(args: &mut Args, long: &str, v: String) {
     match long {
         "--output" => args.output = Some(v),
         "--format" => args.format = v,
+        "--ddp-mode" => args.ddp_mode = Some(v),
+        "--ddp-atmos-mode" => args.ddp_atmos_mode = Some(v),
         "--delay" => args.delay = Some(v),
-        "--drc" => args.drc = v,
+        "--drc" => args.drc = Some(v),
         "--instances" => args.instances = Some(v),
         _ => unreachable!("not a string option: {long}"),
     }
@@ -341,21 +363,19 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
 }
 
 /// The usage block (header, version and the usage lines).
-fn usage_markup() -> &'static str {
-    HELP.split_once("\n\n[yellow]FLAGS")
-        .map_or(HELP, |(usage, _)| usage)
-}
-
-fn version_markup() -> String {
-    format!(
-        "[bold cyan]deew[/bold cyan] [not bold white]{}[/not bold white]",
-        env!("CARGO_PKG_VERSION")
-    )
+fn usage_markup() -> String {
+    let usage = HELP
+        .split_once("\n\n[yellow]FLAGS")
+        .map_or(HELP, |(usage, _)| usage);
+    wrap_help(usage, console_width())
 }
 
 /// Print the full help to stdout (the Python version prints it through rich).
 pub fn print_help() {
-    rprintln!("[not bold white]{}[/not bold white]", HELP);
+    rprintln!(
+        "[not bold white]{}[/not bold white]",
+        wrap_help(HELP, console_width())
+    );
 }
 
 /// Print the usage block followed by `deew: error: <message>` and exit with 2.
@@ -378,8 +398,7 @@ pub fn parse(argv: &[String]) -> Args {
             std::process::exit(0);
         }
         Err(Outcome::Version) => {
-            rprintln!("[not bold white]{}[/not bold white]", version_markup());
-            std::process::exit(0);
+            crate::info::print_version();
         }
         Err(Outcome::Error(message)) => usage_error(&message),
     }
@@ -415,20 +434,30 @@ mod tests {
         assert_eq!(a.bitrate, None);
         assert_eq!(a.downmix, None);
         assert_eq!(a.delay, None);
-        assert_eq!(a.drc, "music_light");
+        assert_eq!(a.drc, None);
         assert_eq!(a.dialnorm, 0);
         assert_eq!(a.instances, None);
-        assert!(!a.keeptemp && !a.measure_only && !a.force_standard && !a.force_bluray);
+        assert!(
+            !a.keeptemp && !a.keep_log && !a.measure_only && !a.output_to_input && !a.disable_lfe
+        );
+        assert!(a.ddp_mode.is_none() && a.ddp_atmos_mode.is_none());
         assert!(!a.list_bitrates && !a.long_argument && !a.no_prompt && !a.print_logos);
-        assert!(!a.changelog && !a.config && !a.generate_config);
+        assert!(!a.changelog && !a.get_tools && !a.config && !a.generate_config);
+    }
+
+    #[test]
+    fn force_standard_is_unknown() {
+        for flag in ["-fs", "--force-standard"] {
+            assert_eq!(err(&[flag]), format!("unrecognized arguments: {flag}"));
+        }
     }
 
     #[test]
     fn every_option() {
         let a = ok(&[
             "-i", "a.mkv", "b.mkv", "-ti", "2", "-o", "out", "-f", "DD", "-b", "640", "-dm", "2",
-            "-d", "+5ms", "-r", "speech", "-dn", "-27", "-in", "50%", "-k", "-mo", "-fs", "-fb",
-            "-lb", "-la", "-np", "-pl", "-cl", "-c", "-gc",
+            "-d", "+5ms", "-r", "speech", "-dn", "-27", "-in", "50%", "-k", "-kl", "-mo", "-oi",
+            "-dl", "-lb", "-la", "-np", "-pl", "-cl", "-gt", "-c", "-gc",
         ]);
         assert_eq!(
             a.input,
@@ -440,12 +469,12 @@ mod tests {
         assert_eq!(a.bitrate, Some(640));
         assert_eq!(a.downmix, Some(2));
         assert_eq!(a.delay.as_deref(), Some("+5ms"));
-        assert_eq!(a.drc, "speech");
+        assert_eq!(a.drc.as_deref(), Some("speech"));
         assert_eq!(a.dialnorm, -27);
         assert_eq!(a.instances.as_deref(), Some("50%"));
-        assert!(a.keeptemp && a.measure_only && a.force_standard && a.force_bluray);
+        assert!(a.keeptemp && a.keep_log && a.measure_only && a.output_to_input && a.disable_lfe);
         assert!(a.list_bitrates && a.long_argument && a.no_prompt && a.print_logos);
-        assert!(a.changelog && a.config && a.generate_config);
+        assert!(a.changelog && a.get_tools && a.config && a.generate_config);
     }
 
     #[test]
@@ -471,14 +500,19 @@ mod tests {
             "--instances",
             "3",
             "--keeptemp",
+            "--keep-log",
+            "--output-to-input",
+            "--ddp-mode",
+            "bluray",
+            "--ddp-atmos-mode=standard",
+            "--disable-lfe",
             "--measure-only",
-            "--force-standard",
-            "--force-bluray",
             "--list-bitrates",
             "--long-argument",
             "--no-prompt",
             "--print-logos",
             "--changelog",
+            "--get-tools",
             "--config",
             "--generate-config",
         ]);
@@ -486,9 +520,26 @@ mod tests {
         assert_eq!(a.track_index, 1);
         assert_eq!(a.bitrate, Some(256));
         assert_eq!(a.delay.as_deref(), Some("-5ms"));
-        assert_eq!(a.drc, "none");
+        assert_eq!(a.drc.as_deref(), Some("none"));
         assert_eq!(a.dialnorm, -5);
-        assert!(a.keeptemp && a.generate_config && a.config);
+        assert!(a.keeptemp && a.generate_config && a.config && a.get_tools);
+        assert!(a.output_to_input);
+        assert_eq!(a.ddp_mode.as_deref(), Some("bluray"));
+        assert_eq!(a.ddp_atmos_mode.as_deref(), Some("standard"));
+    }
+
+    #[test]
+    fn force_bluray_is_gone_and_modes_have_no_short_flags() {
+        assert_eq!(err(&["-fb"]), "unrecognized arguments: -fb");
+        assert_eq!(
+            err(&["--force-bluray"]),
+            "unrecognized arguments: --force-bluray"
+        );
+        assert_eq!(
+            err(&["--ddp-mode"]),
+            "argument --ddp-mode: expected one argument"
+        );
+        assert_eq!(err(&["-o", "a", "-oi", "x"]), "unrecognized arguments: x");
     }
 
     #[test]
@@ -687,7 +738,7 @@ mod tests {
     #[test]
     fn usage_block() {
         let u = usage_markup();
-        assert!(u.ends_with("[[green]-gc[/green]]"));
+        assert!(u.ends_with("[[green]-gt[/green]]"));
         assert!(!u.contains("FLAGS"));
         assert!(u.contains(env!("CARGO_PKG_VERSION")));
     }

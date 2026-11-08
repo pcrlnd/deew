@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { errorMessage, requestJson } from "./web-api"
+import { errorMessage, login, requestJson } from "./web-api"
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status })
@@ -74,6 +74,30 @@ describe("requestJson", () => {
       )
     ).rejects.toThrow("wrong username or password")
     expect(notify).not.toHaveBeenCalled()
+  })
+})
+
+describe("login", () => {
+  it("sends the remember choice", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchFn)
+    try {
+      await login("bob", "pw", "30d")
+      await login("bob", "pw")
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(JSON.parse(fetchFn.mock.calls[0][1].body)).toEqual({
+      user: "bob",
+      pass: "pw",
+      remember: "30d",
+    })
+    expect(JSON.parse(fetchFn.mock.calls[1][1].body)).toEqual({
+      user: "bob",
+      pass: "pw",
+    })
   })
 })
 

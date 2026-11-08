@@ -2,12 +2,15 @@ mod cli;
 mod commands;
 mod config;
 mod data;
+mod deewlog;
 mod encode;
 mod error;
 mod events;
+mod get_tools;
 mod help;
 mod info;
-mod jobxml;
+mod inputs;
+mod interrupt;
 mod markup;
 mod pipeline;
 mod plan;
@@ -19,7 +22,6 @@ mod toml_highlight;
 mod tools;
 mod ui;
 mod util;
-mod xml;
 
 /// Exit quietly (like a process killed by SIGPIPE) when stdout is closed,
 /// e.g. `deew -cl | head`, instead of printing a panic message.
@@ -36,6 +38,7 @@ fn exit_quietly_on_broken_pipe() {
 fn main() {
     exit_quietly_on_broken_pipe();
     events::init();
+    interrupt::install();
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
     if argv.is_empty() {
@@ -48,14 +51,18 @@ fn main() {
     if args.changelog {
         info::print_changelog();
     }
+    let paths = config::Paths::resolve();
+
     if args.list_bitrates {
-        info::list_bitrates();
+        info::list_bitrates(&paths);
     }
     if args.print_logos {
         info::print_logos();
     }
 
-    let paths = config::Paths::resolve();
+    if args.get_tools {
+        get_tools::run(&paths.exe_dir);
+    }
 
     if args.config {
         config::show_config(&paths);

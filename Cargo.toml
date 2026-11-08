@@ -1,30 +1,39 @@
 [package]
 name = "deew"
-version = "3.6.5"
+version = "5.0.0"
 edition = "2024"
 description = "Dolby Encoding Engine Wrapper"
 license = "MIT"
 authors = ["pcroland <pcroland@protonmail.ch>"]
 repository = "https://github.com/pcrlnd/deew"
-homepage = "https://deew.dev"
+homepage = "https://deew.app"
 readme = "README.md"
-keywords = ["dolby", "audio", "encoder", "ac3", "eac3"]
+keywords = ["dolby", "audio", "encoder", "atmos", "eac3"]
 categories = ["command-line-utilities", "multimedia::audio"]
-rust-version = "1.85"
+rust-version = "1.88"
 include = ["/src", "/build.rs", "/logo/icon.ico", "/README.md", "/LICENSE", "/changelog.md"]
 
 [dependencies]
 base64 = "0.23.1"
 console = "0.16.6"
+ctrlc = { version = "3.5.2", features = ["termination"] }
 deunicode = "1.6.2"
+flate2 = "1.1.11"
 indicatif = "0.18.6"
+lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "xz", "optimization"] }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-toml = "1.1.8"
+sha2 = "0.11.1"
+tar = { version = "0.4.46", default-features = false }
+toml = "1.2.1"
 unicode-width = "0.2.3"
-ureq = "3.5.0"
+ureq = "3.5.1"
 which = "8.0.6"
+zip = { version = "9.4.2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 lto = true
@@ -47,4 +56,12 @@ pkg-fmt = "bin"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-url = "{ repo }/releases/download/{ version }/deew.exe"
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/deew-macos"
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/deew-macos"
 pkg-fmt = "bin"

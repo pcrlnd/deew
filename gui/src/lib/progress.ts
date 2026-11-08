@@ -3,7 +3,7 @@
 
 import { formatDuration } from "@/lib/terminal-format"
 
-export type Stage = "starting" | "ffmpeg" | "measure" | "encode"
+export type Stage = "starting" | "ffmpeg" | "decode" | "measure" | "encode"
 
 export type ProgressEvent =
   | { type: "hello"; version: string }
@@ -21,7 +21,13 @@ export type ProgressEvent =
   | { type: "prompt"; text: string }
   | { type: "answered" }
 
-const STAGES: readonly string[] = ["starting", "ffmpeg", "measure", "encode"]
+const STAGES: readonly string[] = [
+  "starting",
+  "ffmpeg",
+  "decode",
+  "measure",
+  "encode",
+]
 
 const isIndex = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0
@@ -162,7 +168,18 @@ export function reduceProgress(
     case "error":
       return {
         ...state,
-        notes: [...state.notes, { tone: event.type, text: event.text }],
+        notes: [
+          ...state.notes,
+          {
+            // deew reports its Ctrl-C handling as an error; that is a stop
+            // the user asked for, not a failure.
+            tone:
+              event.type === "error" && event.text === "interrupted"
+                ? "warning"
+                : event.type,
+            text: event.text,
+          },
+        ],
       }
     case "prompt":
       return { ...state, prompt: event.text }
@@ -174,9 +191,10 @@ export function reduceProgress(
 const STAGE_LABELS: Record<JobProgress["stage"], string> = {
   waiting: "waiting",
   starting: "starting",
-  ffmpeg: "ffmpeg",
-  measure: "DEE: measure",
-  encode: "DEE: encode",
+  ffmpeg: "ffmpeg decode",
+  decode: "truehdd decode",
+  measure: "DEE measure",
+  encode: "DEE encode",
 }
 
 export function stageLabel(job: JobProgress): string {

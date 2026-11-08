@@ -2,6 +2,8 @@
 
 These files are reference outputs captured from the Python implementation in `python/` (deew 3.2.2). The `version.txt`, `help.txt`, `no_args.txt` and `err_*` files were later bumped by hand to `deew 3.6.5` (the Rust version number), so they no longer match the Python capture in that one line. They are the behavior the Rust rewrite should match.
 
+For deew 5.0.0 (DEE 6.7 tools instead of the XML interface) `help.txt`, `no_args.txt`, `list_bitrates.txt`, the `err_*` files were regenerated from the Rust binary (`-fs`/`-fb` removed, new formats and bitrate tables), they are no longer a Python capture.
+
 Commands were run from `python/` with stdout redirected to a file (so rich emits no ANSI codes) and the environment `COLUMNS=250 TERM=dumb NO_COLOR=1` (so rich does not wrap lines). `XDG_CONFIG_HOME` pointed at an empty temp dir. Nothing was written to stderr in any case.
 
 | File | Command | Exit code | Stream |
@@ -26,3 +28,5 @@ Full invocation example:
 The `-np, --no-prompt` description in `help.txt` and `no_args.txt` was intentionally changed from the Python output (now "skip confirmation questions, print them as notes and continue").
 
 The `-c, --config` description in `help.txt` and `no_args.txt` was intentionally changed from the Python output ("show config and config location"): the Rust version only supports one config location, `config.toml` next to the executable.
+
+`version.txt` is the output of `deew -v` with a `config.toml` next to the binary that points all five tools to nonexistent paths (so the output does not depend on the machine).

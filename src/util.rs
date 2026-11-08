@@ -13,24 +13,6 @@ pub fn clamp_i(v: i64, lo: i64, hi: i64) -> i64 {
     v.max(lo).min(hi)
 }
 
-/// Truncate to `40 - compensate` characters (with `...`) and pad with spaces.
-pub fn trim_names(name: &str, compensate: usize) -> String {
-    let width = 40usize.saturating_sub(compensate);
-    let len = name.chars().count();
-    let mut s = if len > width {
-        let head: String = name
-            .chars()
-            .take(37usize.saturating_sub(compensate))
-            .collect();
-        format!("{head}...")
-    } else {
-        name.to_string()
-    };
-    let len = s.chars().count();
-    s.extend(std::iter::repeat_n(' ', width.saturating_sub(len)));
-    s
-}
-
 /// Value of `allowed` closest to `value`; the first one wins on ties.
 pub fn find_closest_allowed(value: i64, allowed: &[u32]) -> u32 {
     *allowed
@@ -96,40 +78,6 @@ fn basename_for(
     name
 }
 
-/// Convert a `/mnt/c/foo` path to `C:\foo\` when running a Windows binary
-/// under WSL. Fails for paths outside `/mnt/` (Python exits with an error).
-pub fn wpc(p: &str, quote: bool, nonnative: bool) -> Result<String, ()> {
-    let out = if nonnative {
-        if !p.starts_with("/mnt/") {
-            return Err(());
-        }
-        let mut parts = p.split('/').filter(|s| !s.is_empty()).skip(1);
-        // Python raises IndexError when there is no drive component.
-        let drive = parts.next().ok_or(())?;
-        let mut out = format!("{}:", drive.to_uppercase());
-        for part in parts {
-            out.push('\\');
-            out.push_str(part);
-        }
-        out.push('\\');
-        out
-    } else {
-        p.to_string()
-    };
-    Ok(if quote { format!("\"{out}\"") } else { out })
-}
-
-/// Inverse of [`wpc`]: `C:\foo` -> `/mnt/c/foo`.
-pub fn rwpc(p: &str) -> String {
-    let p = p.replace('\\', "/");
-    match p.as_bytes() {
-        [d, b':', b'/', ..] if d.is_ascii_alphabetic() => {
-            format!("/mnt/{}/{}", d.to_ascii_lowercase() as char, &p[3..])
-        }
-        _ => p,
-    }
-}
-
 fn version_parts(v: &str) -> Vec<u64> {
     v.split('.')
         .map(|c| {
@@ -149,10 +97,6 @@ fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 
 pub fn version_lt(a: &str, b: &str) -> bool {
     version_cmp(a, b).is_lt()
-}
-
-pub fn version_ge(a: &str, b: &str) -> bool {
-    version_cmp(a, b).is_ge()
 }
 
 /// Python's `str(timedelta(seconds=x))`, including its float handling:
@@ -242,15 +186,6 @@ pub enum DelayMode {
     Start,
 }
 
-impl DelayMode {
-    pub fn xml_tag(&self) -> &'static str {
-        match self {
-            Self::PrependSilenceDuration => "prepend_silence_duration",
-            Self::Start => "start",
-        }
-    }
-}
-
 /// Python's `re.sub(r'[^0-9\.]', '', s)`.
 fn digits_and_dots(s: &str) -> String {
     s.chars()
@@ -267,7 +202,7 @@ fn py_float(s: &str) -> Result<f64, ()> {
 /// Port of `convert_delay_to_ms`: returns `(delay_print, delay_xml, mode)`.
 /// Every input Python rejects (`print_exit('delay')`) or crashes on
 /// (`ValueError`, `ZeroDivisionError`, ...) gives `Err`.
-pub fn convert_delay_to_ms(inp: &str, compensate: bool) -> Result<(String, String, DelayMode), ()> {
+pub fn convert_delay_to_ms(inp: &str, compensate: u32) -> Result<(String, String, DelayMode), ()> {
     if !inp.starts_with(['-', '+']) {
         return Err(());
     }
@@ -330,8 +265,8 @@ pub fn convert_delay_to_ms(inp: &str, compensate: bool) -> Result<(String, Strin
     }
     let delay_print = format!("{} ms", format_fixed(delay, 3));
 
-    if compensate {
-        delay -= 16.0 / 3.0; // 256 / 48000 * 1000
+    if compensate != 0 {
+        delay -= f64::from(compensate) / 48.0; // samples at 48 kHz to ms
     }
 
     if delay < 0.0 {
@@ -351,145 +286,254 @@ pub fn convert_delay_to_ms(inp: &str, compensate: bool) -> Result<(String, Strin
     }
 }
 
+/// Seconds of a Python `timedelta` string like `1 day, 3:46:40.005333`.
+fn parse_timedelta(text: &str) -> Option<f64> {
+    let (days, clock) = match text.split_once(", ") {
+        Some((days, clock)) => (days.split(' ').next()?.parse::<f64>().ok()?, clock),
+        None => (0.0, text),
+    };
+    let mut parts = clock.split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    Some(days * 86400.0 + hours * 3600.0 + minutes * 60.0 + seconds)
+}
+
+/// The delay as DEE takes it: how to apply it (`Start` trims the beginning,
+/// `PrependSilenceDuration` adds silence) and for how many seconds (negative
+/// zero for `-0ms` without compensation).
+pub fn delay_seconds(inp: &str, compensate: u32) -> Result<(DelayMode, f64), ()> {
+    let (_, text, mode) = convert_delay_to_ms(inp, compensate)?;
+    let seconds = match mode {
+        DelayMode::Start => parse_timedelta(&text).ok_or(())?,
+        DelayMode::PrependSilenceDuration => text.parse::<f64>().map_err(|_| ())?,
+    };
+    if seconds.is_finite() {
+        Ok((mode, seconds))
+    } else {
+        Err(())
+    }
+}
+
+/// Decimal seconds with at most 6 decimals and no trailing zeros.
+fn seconds_text(seconds: f64) -> String {
+    let text = format_fixed(seconds, 6);
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// `--start S` or `--add-silence P:0` for a delay; empty if the (compensated)
+/// delay is zero.
+pub fn delay_options(inp: &str, compensate: u32) -> Result<Vec<String>, ()> {
+    let (mode, seconds) = delay_seconds(inp, compensate)?;
+    let text = seconds_text(seconds);
+    if text == "0" || text == "-0" {
+        return Ok(Vec::new());
+    }
+    Ok(match mode {
+        DelayMode::Start => vec!["--start".to_string(), text],
+        DelayMode::PrependSilenceDuration => vec!["--add-silence".to_string(), format!("{text}:0")],
+    })
+}
+
+/// An argument as the shell of the platform needs it, for the command lines
+/// that are printed (`-la`, deew-log.html).
+pub fn shell_quote(arg: &str) -> String {
+    shell_quote_for(arg, cfg!(windows))
+}
+
+/// `shell_quote` for a given style: `windows` is cmd (double quotes), else
+/// a POSIX shell (single quotes).
+fn shell_quote_for(arg: &str, windows: bool) -> String {
+    if windows {
+        // Paths are shown as they are: `\` and `:` are plain characters.
+        let special = arg.is_empty()
+            || arg
+                .chars()
+                .any(|c| c.is_whitespace() || "\"'`$&|;<>()*?!#~^%".contains(c));
+        if special {
+            format!("\"{}\"", arg.replace('"', "\\\""))
+        } else {
+            arg.to_string()
+        }
+    } else {
+        let special = arg.is_empty()
+            || arg
+                .chars()
+                .any(|c| c.is_whitespace() || "\"'`$&|;<>()*?!#~^%[]{}\\".contains(c));
+        if special {
+            format!("'{}'", arg.replace('\'', "'\\''"))
+        } else {
+            arg.to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_quote_unix() {
+        let q = |a: &str| shell_quote_for(a, false);
+        assert_eq!(q("/tmp/a.wav"), "/tmp/a.wav");
+        assert_eq!(q("X:\\a:b"), "'X:\\a:b'");
+        assert_eq!(q("0:a:0"), "0:a:0");
+        assert_eq!(q("ő 日本 –"), "'ő 日本 –'");
+        assert_eq!(q("ő日本–"), "ő日本–");
+        assert_eq!(q(""), "''");
+        assert_eq!(q("a b"), "'a b'");
+        assert_eq!(q("it's"), "'it'\\''s'");
+        assert_eq!(q("$(x)`y`"), "'$(x)`y`'");
+        assert_eq!(q("[a:0]pan"), "'[a:0]pan'");
+        assert_eq!(q("a & b; $(x) 'q'.wav"), "'a & b; $(x) '\\''q'\\''.wav'");
+    }
+
+    #[test]
+    fn shell_quote_windows() {
+        let q = |a: &str| shell_quote_for(a, true);
+        assert_eq!(q("X:\\My Music\\a.thd"), "\"X:\\My Music\\a.thd\"");
+        assert_eq!(q("X:\\deew\\t.exe"), "X:\\deew\\t.exe");
+        assert_eq!(q(""), "\"\"");
+        assert_eq!(q("x\"y"), "\"x\\\"y\"");
+        assert_eq!(q("a&b"), "\"a&b\"");
+        assert_eq!(q("[a:0]pan"), "[a:0]pan");
+    }
 
     // The tables below were generated by running the original Python
     // functions (see `scratchpad/gen_util_tests.py` in the task report).
 
     type DelayCase = (
         &'static str,
-        bool,
+        u32,
         Option<(&'static str, &'static str, DelayMode)>,
     );
 
     #[rustfmt::skip]
     const DELAY_CASES: &[DelayCase] = &[
-        ("+0ms", true, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("+0ms", false, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
-        ("-0ms", true, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("-0ms", false, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
-        ("-5.1ms", true, Some(("-5.100 ms", "0:00:00.010433", DelayMode::Start))),
-        ("-5.1ms", false, Some(("-5.100 ms", "0:00:00.005100", DelayMode::Start))),
-        ("+5.1ms", true, Some(("5.100 ms", "0:00:00.000233", DelayMode::Start))),
-        ("+5.1ms", false, Some(("5.100 ms", "0.005100", DelayMode::PrependSilenceDuration))),
-        ("+1,52s", true, Some(("1520.000 ms", "1.514667", DelayMode::PrependSilenceDuration))),
-        ("+1,52s", false, Some(("1520.000 ms", "1.520000", DelayMode::PrependSilenceDuration))),
-        ("-1,52s", true, Some(("-1520.000 ms", "0:00:01.525333", DelayMode::Start))),
-        ("-1,52s", false, Some(("-1520.000 ms", "0:00:01.520000", DelayMode::Start))),
-        ("-24@pal", true, Some(("-960.000 ms", "0:00:00.965333", DelayMode::Start))),
-        ("-24@pal", false, Some(("-960.000 ms", "0:00:00.960000", DelayMode::Start))),
-        ("+10@24000/1001", true, Some(("417.083 ms", "0.411750", DelayMode::PrependSilenceDuration))),
-        ("+10@24000/1001", false, Some(("417.083 ms", "0.417083", DelayMode::PrependSilenceDuration))),
-        ("+3@ntsc", true, Some(("125.125 ms", "0.119792", DelayMode::PrependSilenceDuration))),
-        ("+3@ntsc", false, Some(("125.125 ms", "0.125125", DelayMode::PrependSilenceDuration))),
-        ("+100ms", true, Some(("100.000 ms", "0.094667", DelayMode::PrependSilenceDuration))),
-        ("+100ms", false, Some(("100.000 ms", "0.100000", DelayMode::PrependSilenceDuration))),
-        ("-100ms", true, Some(("-100.000 ms", "0:00:00.105333", DelayMode::Start))),
-        ("-100ms", false, Some(("-100.000 ms", "0:00:00.100000", DelayMode::Start))),
-        ("+2.5@25", true, Some(("80.000 ms", "0.074667", DelayMode::PrependSilenceDuration))),
-        ("+2.5@25", false, Some(("80.000 ms", "0.080000", DelayMode::PrependSilenceDuration))),
-        ("-3700s", true, Some(("-3700000.000 ms", "1:01:40.005333", DelayMode::Start))),
-        ("-3700s", false, Some(("-3700000.000 ms", "1:01:40.0", DelayMode::Start))),
-        ("+3.5@25", true, Some(("160.000 ms", "0.154667", DelayMode::PrependSilenceDuration))),
-        ("+3.5@25", false, Some(("160.000 ms", "0.160000", DelayMode::PrependSilenceDuration))),
-        ("+1000ms", true, Some(("1000.000 ms", "0.994667", DelayMode::PrependSilenceDuration))),
-        ("+1000ms", false, Some(("1000.000 ms", "1.000000", DelayMode::PrependSilenceDuration))),
-        ("-5ms", true, Some(("-5.000 ms", "0:00:00.010333", DelayMode::Start))),
-        ("-5ms", false, Some(("-5.000 ms", "0:00:00.005000", DelayMode::Start))),
-        ("+5.3333ms", true, Some(("5.333 ms", "0:00:00.0", DelayMode::Start))),
-        ("+5.3333ms", false, Some(("5.333 ms", "0.005333", DelayMode::PrependSilenceDuration))),
-        ("+5.34ms", true, Some(("5.340 ms", "0.000007", DelayMode::PrependSilenceDuration))),
-        ("+5.34ms", false, Some(("5.340 ms", "0.005340", DelayMode::PrependSilenceDuration))),
-        ("+0s", true, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("+0s", false, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
-        ("-0s", true, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("-0s", false, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
-        ("-0.0s", true, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("-0.0s", false, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
-        ("-86400s", true, Some(("-86400000.000 ms", "1 day, 0:00:00.005333", DelayMode::Start))),
-        ("-86400s", false, Some(("-86400000.000 ms", "1 day, 0:00:00.0", DelayMode::Start))),
-        ("-100000s", true, Some(("-100000000.000 ms", "1 day, 3:46:40.005333", DelayMode::Start))),
-        ("-100000s", false, Some(("-100000000.000 ms", "1 day, 3:46:40.0", DelayMode::Start))),
-        ("+1.5@23.976", true, Some(("83.417 ms", "0.078083", DelayMode::PrependSilenceDuration))),
-        ("+1.5@23.976", false, Some(("83.417 ms", "0.083417", DelayMode::PrependSilenceDuration))),
-        ("+7@30000/1001", true, Some(("233.567 ms", "0.228233", DelayMode::PrependSilenceDuration))),
-        ("+7@30000/1001", false, Some(("233.567 ms", "0.233567", DelayMode::PrependSilenceDuration))),
-        ("+24@24 ", true, Some(("1000.000 ms", "0.994667", DelayMode::PrependSilenceDuration))),
-        ("+24@24 ", false, Some(("1000.000 ms", "1.000000", DelayMode::PrependSilenceDuration))),
-        ("+10@25@3", true, Some(("400.000 ms", "0.394667", DelayMode::PrependSilenceDuration))),
-        ("+10@25@3", false, Some(("400.000 ms", "0.400000", DelayMode::PrependSilenceDuration))),
-        ("+1.4@25", true, Some(("40.000 ms", "0.034667", DelayMode::PrependSilenceDuration))),
-        ("+1.4@25", false, Some(("40.000 ms", "0.040000", DelayMode::PrependSilenceDuration))),
-        ("+0.4@25", true, None),
-        ("+0.4@25", false, None),
-        ("+1e3ms", true, Some(("13.000 ms", "0.007667", DelayMode::PrependSilenceDuration))),
-        ("+1e3ms", false, Some(("13.000 ms", "0.013000", DelayMode::PrependSilenceDuration))),
-        ("+12abcms", true, Some(("12.000 ms", "0.006667", DelayMode::PrependSilenceDuration))),
-        ("+12abcms", false, Some(("12.000 ms", "0.012000", DelayMode::PrependSilenceDuration))),
-        ("-1,5ms", true, Some(("-1.500 ms", "0:00:00.006833", DelayMode::Start))),
-        ("-1,5ms", false, Some(("-1.500 ms", "0:00:00.001500", DelayMode::Start))),
-        ("+9999999999999ms", true, Some(("9999999999999.000 ms", "9999999999.993666", DelayMode::PrependSilenceDuration))),
-        ("+9999999999999ms", false, Some(("9999999999999.000 ms", "9999999999.999001", DelayMode::PrependSilenceDuration))),
-        ("+5@inf", true, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("+5@inf", false, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
-        ("+5@nan", true, Some(("nan ms", "nan", DelayMode::PrependSilenceDuration))),
-        ("+5@nan", false, Some(("nan ms", "nan", DelayMode::PrependSilenceDuration))),
-        ("-5@inf", true, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("-5@inf", false, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
-        ("5ms", true, None),
-        ("5ms", false, None),
-        ("+0@pal", true, None),
-        ("+0@pal", false, None),
-        ("+1.2.3s", true, None),
-        ("+1.2.3s", false, None),
-        ("+5", true, None),
-        ("+5", false, None),
-        ("+5@abc", true, None),
-        ("+5@abc", false, None),
-        ("+5@1/0", true, None),
-        ("+5@1/0", false, None),
-        ("+@pal", true, None),
-        ("+@pal", false, None),
-        ("", true, None),
-        ("", false, None),
-        ("-", true, None),
-        ("-", false, None),
-        ("+ms", true, None),
-        ("+ms", false, None),
-        ("+.ms", true, None),
-        ("+.ms", false, None),
-        ("+5.ms", true, Some(("5.000 ms", "0:00:00.000333", DelayMode::Start))),
-        ("+5.ms", false, Some(("5.000 ms", "0.005000", DelayMode::PrependSilenceDuration))),
-        ("+5@-25", true, None),
-        ("+5@-25", false, None),
-        ("+5@0", true, None),
-        ("+5@0", false, None),
-        ("+5@/25", true, None),
-        ("+5@/25", false, None),
-        ("+5@25/", true, None),
-        ("+5@25/", false, None),
-        ("+5@1.2.3/4", true, None),
-        ("+5@1.2.3/4", false, None),
-        ("+1.2.3@25", true, None),
-        ("+1.2.3@25", false, None),
-        ("+5@25/0.0", true, None),
-        ("+5@25/0.0", false, None),
-        ("-1@0.5", true, Some(("-2000.000 ms", "0:00:02.005333", DelayMode::Start))),
-        ("-1@0.5", false, Some(("-2000.000 ms", "0:00:02.0", DelayMode::Start))),
-        ("+5@1/a", true, None),
-        ("+5@1/a", false, None),
-        ("+1e999s", true, Some(("1999000.000 ms", "1998.994667", DelayMode::PrependSilenceDuration))),
-        ("+1e999s", false, Some(("1999000.000 ms", "1999.000000", DelayMode::PrependSilenceDuration))),
-        ("-1e-9ms", true, Some(("-19.000 ms", "0:00:00.024333", DelayMode::Start))),
-        ("-1e-9ms", false, Some(("-19.000 ms", "0:00:00.019000", DelayMode::Start))),
-        ("-0.5ms", true, Some(("-0.500 ms", "0:00:00.005833", DelayMode::Start))),
-        ("-0.5ms", false, Some(("-0.500 ms", "0:00:00.000500", DelayMode::Start))),
-        ("+0.5ms", true, Some(("0.500 ms", "0:00:00.004833", DelayMode::Start))),
-        ("+0.5ms", false, Some(("0.500 ms", "0.000500", DelayMode::PrependSilenceDuration))),
-        ("+0.0000001ms", true, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
-        ("+0.0000001ms", false, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
+        ("+0ms", 256, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("+0ms", 0, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
+        ("-0ms", 256, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("-0ms", 0, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
+        ("-5.1ms", 256, Some(("-5.100 ms", "0:00:00.010433", DelayMode::Start))),
+        ("-5.1ms", 0, Some(("-5.100 ms", "0:00:00.005100", DelayMode::Start))),
+        ("+5.1ms", 256, Some(("5.100 ms", "0:00:00.000233", DelayMode::Start))),
+        ("+5.1ms", 0, Some(("5.100 ms", "0.005100", DelayMode::PrependSilenceDuration))),
+        ("+1,52s", 256, Some(("1520.000 ms", "1.514667", DelayMode::PrependSilenceDuration))),
+        ("+1,52s", 0, Some(("1520.000 ms", "1.520000", DelayMode::PrependSilenceDuration))),
+        ("-1,52s", 256, Some(("-1520.000 ms", "0:00:01.525333", DelayMode::Start))),
+        ("-1,52s", 0, Some(("-1520.000 ms", "0:00:01.520000", DelayMode::Start))),
+        ("-24@pal", 256, Some(("-960.000 ms", "0:00:00.965333", DelayMode::Start))),
+        ("-24@pal", 0, Some(("-960.000 ms", "0:00:00.960000", DelayMode::Start))),
+        ("+10@24000/1001", 256, Some(("417.083 ms", "0.411750", DelayMode::PrependSilenceDuration))),
+        ("+10@24000/1001", 0, Some(("417.083 ms", "0.417083", DelayMode::PrependSilenceDuration))),
+        ("+3@ntsc", 256, Some(("125.125 ms", "0.119792", DelayMode::PrependSilenceDuration))),
+        ("+3@ntsc", 0, Some(("125.125 ms", "0.125125", DelayMode::PrependSilenceDuration))),
+        ("+100ms", 256, Some(("100.000 ms", "0.094667", DelayMode::PrependSilenceDuration))),
+        ("+100ms", 0, Some(("100.000 ms", "0.100000", DelayMode::PrependSilenceDuration))),
+        ("-100ms", 256, Some(("-100.000 ms", "0:00:00.105333", DelayMode::Start))),
+        ("-100ms", 0, Some(("-100.000 ms", "0:00:00.100000", DelayMode::Start))),
+        ("+2.5@25", 256, Some(("80.000 ms", "0.074667", DelayMode::PrependSilenceDuration))),
+        ("+2.5@25", 0, Some(("80.000 ms", "0.080000", DelayMode::PrependSilenceDuration))),
+        ("-3700s", 256, Some(("-3700000.000 ms", "1:01:40.005333", DelayMode::Start))),
+        ("-3700s", 0, Some(("-3700000.000 ms", "1:01:40.0", DelayMode::Start))),
+        ("+3.5@25", 256, Some(("160.000 ms", "0.154667", DelayMode::PrependSilenceDuration))),
+        ("+3.5@25", 0, Some(("160.000 ms", "0.160000", DelayMode::PrependSilenceDuration))),
+        ("+1000ms", 256, Some(("1000.000 ms", "0.994667", DelayMode::PrependSilenceDuration))),
+        ("+1000ms", 0, Some(("1000.000 ms", "1.000000", DelayMode::PrependSilenceDuration))),
+        ("-5ms", 256, Some(("-5.000 ms", "0:00:00.010333", DelayMode::Start))),
+        ("-5ms", 0, Some(("-5.000 ms", "0:00:00.005000", DelayMode::Start))),
+        ("+5.3333ms", 256, Some(("5.333 ms", "0:00:00.0", DelayMode::Start))),
+        ("+5.3333ms", 0, Some(("5.333 ms", "0.005333", DelayMode::PrependSilenceDuration))),
+        ("+5.34ms", 256, Some(("5.340 ms", "0.000007", DelayMode::PrependSilenceDuration))),
+        ("+5.34ms", 0, Some(("5.340 ms", "0.005340", DelayMode::PrependSilenceDuration))),
+        ("+0s", 256, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("+0s", 0, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
+        ("-0s", 256, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("-0s", 0, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
+        ("-0.0s", 256, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("-0.0s", 0, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
+        ("-86400s", 256, Some(("-86400000.000 ms", "1 day, 0:00:00.005333", DelayMode::Start))),
+        ("-86400s", 0, Some(("-86400000.000 ms", "1 day, 0:00:00.0", DelayMode::Start))),
+        ("-100000s", 256, Some(("-100000000.000 ms", "1 day, 3:46:40.005333", DelayMode::Start))),
+        ("-100000s", 0, Some(("-100000000.000 ms", "1 day, 3:46:40.0", DelayMode::Start))),
+        ("+1.5@23.976", 256, Some(("83.417 ms", "0.078083", DelayMode::PrependSilenceDuration))),
+        ("+1.5@23.976", 0, Some(("83.417 ms", "0.083417", DelayMode::PrependSilenceDuration))),
+        ("+7@30000/1001", 256, Some(("233.567 ms", "0.228233", DelayMode::PrependSilenceDuration))),
+        ("+7@30000/1001", 0, Some(("233.567 ms", "0.233567", DelayMode::PrependSilenceDuration))),
+        ("+24@24 ", 256, Some(("1000.000 ms", "0.994667", DelayMode::PrependSilenceDuration))),
+        ("+24@24 ", 0, Some(("1000.000 ms", "1.000000", DelayMode::PrependSilenceDuration))),
+        ("+10@25@3", 256, Some(("400.000 ms", "0.394667", DelayMode::PrependSilenceDuration))),
+        ("+10@25@3", 0, Some(("400.000 ms", "0.400000", DelayMode::PrependSilenceDuration))),
+        ("+1.4@25", 256, Some(("40.000 ms", "0.034667", DelayMode::PrependSilenceDuration))),
+        ("+1.4@25", 0, Some(("40.000 ms", "0.040000", DelayMode::PrependSilenceDuration))),
+        ("+0.4@25", 256, None),
+        ("+0.4@25", 0, None),
+        ("+1e3ms", 256, Some(("13.000 ms", "0.007667", DelayMode::PrependSilenceDuration))),
+        ("+1e3ms", 0, Some(("13.000 ms", "0.013000", DelayMode::PrependSilenceDuration))),
+        ("+12abcms", 256, Some(("12.000 ms", "0.006667", DelayMode::PrependSilenceDuration))),
+        ("+12abcms", 0, Some(("12.000 ms", "0.012000", DelayMode::PrependSilenceDuration))),
+        ("-1,5ms", 256, Some(("-1.500 ms", "0:00:00.006833", DelayMode::Start))),
+        ("-1,5ms", 0, Some(("-1.500 ms", "0:00:00.001500", DelayMode::Start))),
+        ("+9999999999999ms", 256, Some(("9999999999999.000 ms", "9999999999.993666", DelayMode::PrependSilenceDuration))),
+        ("+9999999999999ms", 0, Some(("9999999999999.000 ms", "9999999999.999001", DelayMode::PrependSilenceDuration))),
+        ("+5@inf", 256, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("+5@inf", 0, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
+        ("+5@nan", 256, Some(("nan ms", "nan", DelayMode::PrependSilenceDuration))),
+        ("+5@nan", 0, Some(("nan ms", "nan", DelayMode::PrependSilenceDuration))),
+        ("-5@inf", 256, Some(("-0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("-5@inf", 0, Some(("-0.000 ms", "-0.000000", DelayMode::PrependSilenceDuration))),
+        ("5ms", 256, None),
+        ("5ms", 0, None),
+        ("+0@pal", 256, None),
+        ("+0@pal", 0, None),
+        ("+1.2.3s", 256, None),
+        ("+1.2.3s", 0, None),
+        ("+5", 256, None),
+        ("+5", 0, None),
+        ("+5@abc", 256, None),
+        ("+5@abc", 0, None),
+        ("+5@1/0", 256, None),
+        ("+5@1/0", 0, None),
+        ("+@pal", 256, None),
+        ("+@pal", 0, None),
+        ("", 256, None),
+        ("", 0, None),
+        ("-", 256, None),
+        ("-", 0, None),
+        ("+ms", 256, None),
+        ("+ms", 0, None),
+        ("+.ms", 256, None),
+        ("+.ms", 0, None),
+        ("+5.ms", 256, Some(("5.000 ms", "0:00:00.000333", DelayMode::Start))),
+        ("+5.ms", 0, Some(("5.000 ms", "0.005000", DelayMode::PrependSilenceDuration))),
+        ("+5@-25", 256, None),
+        ("+5@-25", 0, None),
+        ("+5@0", 256, None),
+        ("+5@0", 0, None),
+        ("+5@/25", 256, None),
+        ("+5@/25", 0, None),
+        ("+5@25/", 256, None),
+        ("+5@25/", 0, None),
+        ("+5@1.2.3/4", 256, None),
+        ("+5@1.2.3/4", 0, None),
+        ("+1.2.3@25", 256, None),
+        ("+1.2.3@25", 0, None),
+        ("+5@25/0.0", 256, None),
+        ("+5@25/0.0", 0, None),
+        ("-1@0.5", 256, Some(("-2000.000 ms", "0:00:02.005333", DelayMode::Start))),
+        ("-1@0.5", 0, Some(("-2000.000 ms", "0:00:02.0", DelayMode::Start))),
+        ("+5@1/a", 256, None),
+        ("+5@1/a", 0, None),
+        ("+1e999s", 256, Some(("1999000.000 ms", "1998.994667", DelayMode::PrependSilenceDuration))),
+        ("+1e999s", 0, Some(("1999000.000 ms", "1999.000000", DelayMode::PrependSilenceDuration))),
+        ("-1e-9ms", 256, Some(("-19.000 ms", "0:00:00.024333", DelayMode::Start))),
+        ("-1e-9ms", 0, Some(("-19.000 ms", "0:00:00.019000", DelayMode::Start))),
+        ("-0.5ms", 256, Some(("-0.500 ms", "0:00:00.005833", DelayMode::Start))),
+        ("-0.5ms", 0, Some(("-0.500 ms", "0:00:00.000500", DelayMode::Start))),
+        ("+0.5ms", 256, Some(("0.500 ms", "0:00:00.004833", DelayMode::Start))),
+        ("+0.5ms", 0, Some(("0.500 ms", "0.000500", DelayMode::PrependSilenceDuration))),
+        ("+0.0000001ms", 256, Some(("0.000 ms", "0:00:00.005333", DelayMode::Start))),
+        ("+0.0000001ms", 0, Some(("0.000 ms", "0.000000", DelayMode::PrependSilenceDuration))),
     ];
 
     #[rustfmt::skip]
@@ -609,97 +653,6 @@ mod tests {
     ];
 
     #[rustfmt::skip]
-    const TRIM_CASES: &[(&str, usize, &str)] = &[
-        ("short", 0, "short                                   "),
-        ("short", 1, "short                                  "),
-        ("short", 5, "short                              "),
-        ("short", 10, "short                         "),
-        ("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 0, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
-        ("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 1, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..."),
-        ("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 5, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..."),
-        ("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 10, "xxxxxxxxxxxxxxxxxxxxxxxxxxx..."),
-        ("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 0, "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy..."),
-        ("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 1, "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy..."),
-        ("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 5, "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy..."),
-        ("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 10, "yyyyyyyyyyyyyyyyyyyyyyyyyyy..."),
-        ("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", 0, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz..."),
-        ("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", 1, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz..."),
-        ("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", 5, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz..."),
-        ("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", 10, "zzzzzzzzzzzzzzzzzzzzzzzzzzz..."),
-        ("Éléphant Éléphant Éléphant Éléphant Éléphant Éléphant ", 0, "Éléphant Éléphant Éléphant Éléphant É..."),
-        ("Éléphant Éléphant Éléphant Éléphant Éléphant Éléphant ", 1, "Éléphant Éléphant Éléphant Éléphant ..."),
-        ("Éléphant Éléphant Éléphant Éléphant Éléphant Éléphant ", 5, "Éléphant Éléphant Éléphant Éléph..."),
-        ("Éléphant Éléphant Éléphant Éléphant Éléphant Éléphant ", 10, "Éléphant Éléphant Éléphant ..."),
-        ("日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語", 0, "日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日..."),
-        ("日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語", 1, "日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語..."),
-        ("日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語", 5, "日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本..."),
-        ("日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語", 10, "日本語日本語日本語日本語日本語日本語日本語日本語日本語..."),
-        ("", 0, "                                        "),
-        ("", 1, "                                       "),
-        ("", 5, "                                   "),
-        ("", 10, "                              "),
-        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa          "),
-        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa         "),
-        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 5, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa     "),
-        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 10, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-    ];
-
-    #[rustfmt::skip]
-    const WPC_CASES: &[(&str, bool, bool, Option<&str>)] = &[
-        ("/mnt/c/foo/bar", false, true, Some("C:\\foo\\bar\\")),
-        ("/mnt/c/foo/bar", false, false, Some("/mnt/c/foo/bar")),
-        ("/mnt/c/foo/bar", true, true, Some("\"C:\\foo\\bar\\\"")),
-        ("/mnt/c/foo/bar", true, false, Some("\"/mnt/c/foo/bar\"")),
-        ("/mnt/d", false, true, Some("D:\\")),
-        ("/mnt/d", false, false, Some("/mnt/d")),
-        ("/mnt/d", true, true, Some("\"D:\\\"")),
-        ("/mnt/d", true, false, Some("\"/mnt/d\"")),
-        ("/mnt/c/", false, true, Some("C:\\")),
-        ("/mnt/c/", false, false, Some("/mnt/c/")),
-        ("/mnt/c/", true, true, Some("\"C:\\\"")),
-        ("/mnt/c/", true, false, Some("\"/mnt/c/\"")),
-        ("/mnt/c//a///b/", false, true, Some("C:\\a\\b\\")),
-        ("/mnt/c//a///b/", false, false, Some("/mnt/c//a///b/")),
-        ("/mnt/c//a///b/", true, true, Some("\"C:\\a\\b\\\"")),
-        ("/mnt/c//a///b/", true, false, Some("\"/mnt/c//a///b/\"")),
-        ("/mnt/", false, true, None),
-        ("/mnt/", false, false, Some("/mnt/")),
-        ("/mnt/", true, true, None),
-        ("/mnt/", true, false, Some("\"/mnt/\"")),
-        ("/home/x", false, true, None),
-        ("/home/x", false, false, Some("/home/x")),
-        ("/home/x", true, true, None),
-        ("/home/x", true, false, Some("\"/home/x\"")),
-        ("mnt/c/x", false, true, None),
-        ("mnt/c/x", false, false, Some("mnt/c/x")),
-        ("mnt/c/x", true, true, None),
-        ("mnt/c/x", true, false, Some("\"mnt/c/x\"")),
-        ("/mnt/c/dir with space/f.mkv", false, true, Some("C:\\dir with space\\f.mkv\\")),
-        ("/mnt/c/dir with space/f.mkv", false, false, Some("/mnt/c/dir with space/f.mkv")),
-        ("/mnt/c/dir with space/f.mkv", true, true, Some("\"C:\\dir with space\\f.mkv\\\"")),
-        ("/mnt/c/dir with space/f.mkv", true, false, Some("\"/mnt/c/dir with space/f.mkv\"")),
-        ("/mnt/é/x", false, true, Some("É:\\x\\")),
-        ("/mnt/é/x", false, false, Some("/mnt/é/x")),
-        ("/mnt/é/x", true, true, Some("\"É:\\x\\\"")),
-        ("/mnt/é/x", true, false, Some("\"/mnt/é/x\"")),
-    ];
-
-    #[rustfmt::skip]
-    const RWPC_CASES: &[(&str, &str)] = &[
-        ("C:\\foo\\bar", "/mnt/c/foo/bar"),
-        ("c:/x", "/mnt/c/x"),
-        ("D:\\", "/mnt/d/"),
-        ("dd:/x", "dd:/x"),
-        ("\\\\server\\share", "//server/share"),
-        ("/mnt/c/x", "/mnt/c/x"),
-        ("C:foo", "C:foo"),
-        ("é:/x", "é:/x"),
-        ("Z:/a\\b", "/mnt/z/a/b"),
-        ("1:/x", "1:/x"),
-        ("", ""),
-    ];
-
-    #[rustfmt::skip]
     const CLOSEST_CASES: &[(i64, &[u32], u32)] = &[
         (0, &[96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640], 96),
         (96, &[96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640], 96),
@@ -766,17 +719,75 @@ mod tests {
         }
         // Python: OverflowError (timedelta) / float inf formatting.
         let huge = format!("-{}s", "9".repeat(400));
-        assert_eq!(convert_delay_to_ms(&huge, true), Err(()));
-        assert_eq!(convert_delay_to_ms(&huge, false), Err(()));
+        assert_eq!(convert_delay_to_ms(&huge, 256), Err(()));
+        assert_eq!(convert_delay_to_ms(&huge, 0), Err(()));
     }
 
     #[test]
-    fn delay_mode_tags() {
-        assert_eq!(DelayMode::Start.xml_tag(), "start");
+    fn delay_seconds_for_dee() {
+        let secs = |inp, comp| delay_seconds(inp, comp).map(|(m, s)| (m, format!("{s:.6}")));
+        // trimmed: DDP minus 16/3 ms
         assert_eq!(
-            DelayMode::PrependSilenceDuration.xml_tag(),
-            "prepend_silence_duration"
+            secs("+0ms", 256),
+            Ok((DelayMode::Start, "0.005333".to_string()))
         );
+        assert_eq!(
+            secs("+100ms", 256),
+            Ok((DelayMode::PrependSilenceDuration, "0.094667".to_string()))
+        );
+        assert_eq!(
+            secs("-24ms", 0),
+            Ok((DelayMode::Start, "0.024000".to_string()))
+        );
+        assert_eq!(
+            secs("-3700s", 0),
+            Ok((DelayMode::Start, "3700.000000".to_string()))
+        );
+        assert_eq!(
+            secs("-100000s", 256),
+            Ok((DelayMode::Start, "100000.005333".to_string()))
+        );
+        assert_eq!(
+            secs("-0ms", 0),
+            Ok((DelayMode::PrependSilenceDuration, "-0.000000".to_string()))
+        );
+        assert_eq!(secs("100ms", 256), Err(()));
+        assert_eq!(secs("+5@nan", 256), Err(()));
+    }
+
+    #[test]
+    fn dee_delay_options() {
+        let opt = |inp, comp| delay_options(inp, comp).unwrap();
+        assert_eq!(opt("+0ms", 256), ["--start", "0.005333"]);
+        assert_eq!(opt("+100ms", 256), ["--add-silence", "0.094667:0"]);
+        assert_eq!(opt("-24ms", 0), ["--start", "0.024"]);
+        assert_eq!(opt("+1s", 0), ["--add-silence", "1:0"]);
+        // nothing to do
+        assert!(opt("+0ms", 0).is_empty());
+        assert!(opt("-0ms", 0).is_empty());
+        assert!(opt("+5.3333ms", 256).is_empty());
+        assert_eq!(delay_options("x", 256), Err(()));
+    }
+
+    #[test]
+    fn delay_options_other_encoder_delays() {
+        let opt = |inp, comp| delay_options(inp, comp).unwrap();
+        assert_eq!(opt("+0ms", 2048), ["--start", "0.042667"]);
+        assert_eq!(opt("+0ms", 1600), ["--start", "0.033333"]);
+        assert_eq!(opt("+100ms", 1600), ["--add-silence", "0.066667:0"]);
+        assert!(opt("+0ms", 0).is_empty());
+    }
+
+    #[test]
+    fn timedelta_parsing() {
+        assert_eq!(parse_timedelta("0:00:00.005333"), Some(0.005333));
+        assert_eq!(parse_timedelta("1:01:40.0"), Some(3700.0));
+        assert_eq!(
+            parse_timedelta("1 day, 3:46:40.005333"),
+            Some(100000.005333)
+        );
+        assert_eq!(parse_timedelta("2 days, 0:00:00.0"), Some(172800.0));
+        assert_eq!(parse_timedelta("nonsense"), None);
     }
 
     #[test]
@@ -848,29 +859,6 @@ mod tests {
     }
 
     #[test]
-    fn trim_names_matches_python() {
-        for &(name, comp, expected) in TRIM_CASES {
-            assert_eq!(trim_names(name, comp), expected, "{name:?} {comp}");
-        }
-        // Degenerate compensation: Python slices with negative indices, we saturate.
-        assert_eq!(trim_names("abc", 100), "...");
-    }
-
-    #[test]
-    fn wpc_matches_python() {
-        for &(p, quote, nonnative, expected) in WPC_CASES {
-            assert_eq!(wpc(p, quote, nonnative).ok().as_deref(), expected, "{p:?}");
-        }
-    }
-
-    #[test]
-    fn rwpc_matches_python() {
-        for &(p, expected) in RWPC_CASES {
-            assert_eq!(rwpc(p), expected, "{p:?}");
-        }
-    }
-
-    #[test]
     fn closest_allowed_matches_python() {
         for &(v, allowed, expected) in CLOSEST_CASES {
             assert_eq!(find_closest_allowed(v, allowed), expected, "{v}");
@@ -899,11 +887,7 @@ mod tests {
         assert!(version_lt("3.2.2", "3.2.10"));
         assert!(version_lt("3.2", "3.2.1"));
         assert!(!version_lt("3.2.0", "3.2"));
-        assert!(version_ge("5.2.1", "5.2.0"));
-        assert!(version_ge("5.2", "5.2.0"));
-        assert!(!version_ge("5.1.9", "5.2.0"));
         assert!(version_lt("v1", "2")); // non-numeric component counts as 0
-        assert!(version_ge("1.2.3rc1", "1.2.3"));
     }
 
     #[test]

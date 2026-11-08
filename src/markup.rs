@@ -12,6 +12,10 @@ const COLORS: [&str; 8] = [
 
 /// Parse a single color word (`red` or `color(N)`) into its palette form.
 fn parse_color(word: &str, base: u32) -> Option<String> {
+    // bright blue marks what uses dee_shim
+    if word == "bright_blue" {
+        return Some((base + 64).to_string());
+    }
     if let Some(i) = COLORS.iter().position(|c| *c == word) {
         return Some((base + i as u32).to_string());
     }
@@ -56,7 +60,7 @@ fn parse_style(text: &str) -> Option<String> {
 }
 
 /// One lexical element of a markup string.
-enum Token<'a> {
+pub(crate) enum Token<'a> {
     /// Literal text (escapes already resolved to their literal form).
     Text(&'a str),
     /// A valid opening tag: its text and SGR parameters.
@@ -66,7 +70,7 @@ enum Token<'a> {
 }
 
 /// The single markup grammar shared by `render` and `balanced`.
-fn tokens(s: &str) -> impl Iterator<Item = Token<'_>> {
+pub(crate) fn tokens(s: &str) -> impl Iterator<Item = Token<'_>> {
     let mut rest = s;
     std::iter::from_fn(move || {
         if rest.is_empty() {
@@ -269,6 +273,20 @@ mod tests {
             render("[on color(17) blue]x", true),
             "\x1b[0m\x1b[48;5;17;34mx\x1b[0m"
         );
+    }
+
+    #[test]
+    fn bright_blue_marks_what_needs_dee_shim() {
+        assert_eq!(
+            render("[bright_blue]x[/bright_blue]", true),
+            "\x1b[0m\x1b[94mx\x1b[0m\x1b[0m"
+        );
+        assert_eq!(
+            render("[bold bright_blue]x", true),
+            "\x1b[0m\x1b[1;94mx\x1b[0m"
+        );
+        assert_eq!(render("[bright_blue]x[/bright_blue]", false), "x");
+        assert_eq!(strip("[bright_blue]x[/bright_blue]"), "x");
     }
 
     #[test]

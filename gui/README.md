@@ -100,14 +100,29 @@ section, and can also be edited by hand:
 ```toml
 [gui]
     progress = 'cli' # or 'native'
+    output = '' # output directory (-o), empty: home folder
 ```
+
+The Output directory field is saved there too (`output`) and loaded on startup.
 
 The toggle only edits an existing `config.toml` (run deew once to create it);
 otherwise it shows "Setting not saved". The GUI mode reads progress events that
-the CLI writes when `DEEW_EVENTS_FILE` is set, so it needs deew 3.6.2 or newer.
+the CLI writes when `DEEW_EVENTS_FILE` is set, so it needs deew 5.0.0 or newer (`deew-gui`/`deew-web` 0.5.0 and newer).
 Both `deew-gui` and `deew-web` run the `deew` binary next to them; with an older
 one the GUI mode shows a note that the CLI does not report progress, use the
 CLI output then.
+
+## Formats
+
+The format dropdown offers DD, DDP, DDP Atmos, AC4, AC4 Atmos, AAC and TrueHD.
+The options form follows the CLI rules: `-dm` is only available for
+DD/DDP/AC4/AAC, `-dn` for DD/DDP/AC4, and the Atmos formats (TrueHD Atmos input,
+decoded with truehdd) have neither `-dm` nor `-mo`. In GUI output the Atmos
+formats show an extra decode stage for truehdd. The tools themselves (DEE 6.7,
+truehdd, dee_shim) go next to the CLI or in your PATH, see the [main readme](../README.md).
+
+On macOS use the `deew-gui-macos` / `deew-web-macos` release binaries
+(`chmod +x` them, like on Linux).
 
 ## Layout
 

@@ -1,13 +1,7 @@
 import { useId, type ReactNode } from "react"
-import {
-  FileAudio,
-  Folder,
-  FolderOpen,
-  Loader2,
-  Trash2,
-  X,
-} from "lucide-react"
+import { FileAudio, Folder, FolderOpen, Loader2, Trash2, X } from "lucide-react"
 
+import { BalancedRows } from "@/components/balanced-rows"
 import { Hint } from "@/components/hint"
 import { NoteLine } from "@/components/note-line"
 import { SimpleSelect, type SelectChoice } from "@/components/simple-select"
@@ -17,23 +11,51 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   bitrateChoices as buildBitrateChoices,
-  DRC_VALUES,
+  DEFAULT_MODE,
+  DDP_ATMOS_MODES,
+  DDP_MODES,
+  ddpAtmosModeApplies,
+  ddpModeApplies,
+  disableLfeApplies,
+  drcChoices,
   FORMATS,
+  FORMAT_LABELS,
+  supportsDialnorm,
+  supportsDrc,
+  supportsMeasureOnly,
   setFlag,
   setFormat,
   type BooleanOption,
+  type DdpAtmosMode,
+  type DdpAtmosModeChoice,
+  type DdpMode,
+  type DdpModeChoice,
   type DeewOptions,
+  type DefaultModes,
   type Downmix,
   type Drc,
   type BitrateInfo,
   type Format,
 } from "@/lib/deew-args"
 import { HELP } from "@/lib/help-text"
+import {
+  SHIM_DDP_ATMOS_MODES,
+  SHIM_DDP_MODES,
+  isShimDrc,
+  isShimFormat,
+} from "@/lib/shim"
 import { formatSummary } from "@/lib/probe"
 import { inWeb } from "@/lib/runner"
 import { useFittingPlaceholder } from "@/lib/use-fitting-placeholder"
 import type { ProbeState } from "@/lib/use-probe"
 import { cn } from "@/lib/utils"
+
+/**
+ * Minimum width of an options column. The widest label, "DDP Atmos mode
+ * (--ddp-atmos-mode)", is ~229 px wide; a column must not be narrower so
+ * labels never wrap.
+ */
+const MIN_FIELD_WIDTH = 236
 
 /** Longest first; the Delay placeholder is shortened only when it is clipped. */
 const DELAY_PLACEHOLDERS = [
@@ -44,7 +66,8 @@ const DELAY_PLACEHOLDERS = [
 
 const FORMAT_CHOICES: SelectChoice[] = FORMATS.map((f) => ({
   value: f,
-  label: f,
+  label: FORMAT_LABELS[f],
+  shim: isShimFormat(f),
 }))
 const DOWNMIX_LABELS: Record<Downmix, string> = {
   none: "no (keep layout)",
@@ -52,10 +75,32 @@ const DOWNMIX_LABELS: Record<Downmix, string> = {
   "2": "2.0 (stereo)",
   "6": "5.1",
 }
-const DRC_CHOICES: SelectChoice[] = DRC_VALUES.map((d) => ({
-  value: d,
-  label: d,
-}))
+
+/**
+ * The choices of a mode select: the config's default mode has the value
+ * `DEFAULT_MODE` and is marked, like the default bitrate. Modes in
+ * `shimModes` need dee_shim and get the puzzle icon.
+ */
+function modeChoices<T extends string>(
+  modes: readonly T[],
+  defaultMode: T,
+  shimModes: readonly T[]
+): SelectChoice[] {
+  return modes.map((m) =>
+    m === defaultMode
+      ? {
+          value: DEFAULT_MODE,
+          label: `${m} (default)`,
+          shim: shimModes.includes(m),
+        }
+      : { value: m, label: m, shim: shimModes.includes(m) }
+  )
+}
+
+/** The select value of a stored choice (an explicit default mode is the default). */
+function modeValue(choice: string, defaultMode: string): string {
+  return choice === defaultMode ? DEFAULT_MODE : choice
+}
 
 const CHECKBOXES: {
   key: BooleanOption
@@ -64,28 +109,28 @@ const CHECKBOXES: {
   help: string
 }[] = [
   {
+    key: "disableLfe",
+    flag: "-dl",
+    label: "Disable LFE",
+    help: HELP.disableLfe,
+  },
+  {
     key: "keepTemp",
     flag: "-k",
     label: "Keep temp files",
     help: HELP.keepTemp,
   },
   {
+    key: "keepLog",
+    flag: "-kl",
+    label: "Keep log",
+    help: HELP.keepLog,
+  },
+  {
     key: "measureOnly",
     flag: "-mo",
     label: "Measure only",
     help: HELP.measureOnly,
-  },
-  {
-    key: "forceStandard",
-    flag: "-fs",
-    label: "Force standard",
-    help: HELP.forceStandard,
-  },
-  {
-    key: "forceBluray",
-    flag: "-fb",
-    label: "Force bluray",
-    help: HELP.forceBluray,
   },
   {
     key: "longArgument",
@@ -151,7 +196,12 @@ function ProbeSummaryLine({
   let summary: string | null = null
   if (probe.status === "done") {
     const s = probe.summary
-    summary = s.files === 0 ? "No files found." : formatSummary(s)
+    summary =
+      s.files === 0
+        ? s.skipped.length > 0
+          ? "No audio files found."
+          : "No files found."
+        : formatSummary(s)
     for (const m of s.mismatches) notes.push({ text: m })
     for (const e of s.errors.slice(0, MAX_LISTED_ERRORS)) {
       const name = e.path.split(/[\\/]/).pop() ?? e.path
@@ -162,6 +212,15 @@ function ProbeSummaryLine({
         text: `and ${s.errors.length - MAX_LISTED_ERRORS} more failed to probe`,
       })
     }
+    for (const e of s.skipped.slice(0, MAX_LISTED_ERRORS)) {
+      const name = e.path.split(/[\\/]/).pop() ?? e.path
+      notes.push({ text: `${name}: skipped, ${e.error}`, title: e.path })
+    }
+    if (s.skipped.length > MAX_LISTED_ERRORS) {
+      notes.push({
+        text: `and ${s.skipped.length - MAX_LISTED_ERRORS} more skipped`,
+      })
+    }
   } else if (probe.status === "error") {
     notes.push({ text: `Probing failed: ${probe.error}` })
   }
@@ -169,7 +228,9 @@ function ProbeSummaryLine({
   return (
     <div className="max-w-full min-w-0 flex-auto text-xs">
       {summary !== null && (
-        <p className="truncate font-mono whitespace-nowrap text-muted-foreground">{summary}</p>
+        <p className="truncate font-mono whitespace-nowrap text-muted-foreground">
+          {summary}
+        </p>
       )}
       {notes.map((n, i) => (
         <NoteLine
@@ -190,12 +251,16 @@ interface OptionsFormProps {
   onAddFiles: () => void
   onAddFolders: () => void
   onPickOutput: () => void
+  /** Folder deew runs in (the home folder), empty when unknown. */
+  defaultOutput: string
   dragging: boolean
   disabled: boolean
   probe: ProbeState
   bitrateInfo: BitrateInfo
   /** `[default_bitrates]` of the config: key -> kbps. */
   defaultBitrates: Record<string, number>
+  /** The config's `[default_modes]`. */
+  defaultModes: DefaultModes
   /** Downmix values that fit the probed input. */
   downmixChoices: Downmix[]
   /** Right-aligned in the "Input(s)" row (web mode, no window bar). */
@@ -208,11 +273,13 @@ export function OptionsForm({
   onAddFiles,
   onAddFolders,
   onPickOutput,
+  defaultOutput,
   dragging,
   disabled,
   probe,
   bitrateInfo,
   defaultBitrates,
+  defaultModes,
   downmixChoices,
   toolbar,
 }: OptionsFormProps) {
@@ -229,6 +296,7 @@ export function OptionsForm({
 
   // Fields that only make sense once there is something to encode.
   const waiting = disabled || value.inputs.length === 0
+  const probedChannels = probe.status === "done" ? probe.summary.channels : null
 
   const hasList =
     bitrateInfo.status === "ok" || bitrateInfo.status === "fallback"
@@ -324,14 +392,14 @@ export function OptionsForm({
               disabled={disabled || value.inputs.length === 0}
             >
               <Trash2 data-icon="inline-start" />
-              Clear
+              Clear all
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="@container">
-        <div className="grid grid-cols-2 gap-x-3 gap-y-2 @4xl:grid-cols-4">
+      <div className="flex flex-col gap-y-2">
+        <BalancedRows minItemWidth={MIN_FIELD_WIDTH}>
           <Field
             label="Track index"
             flag="-ti"
@@ -366,6 +434,44 @@ export function OptionsForm({
             />
           </Field>
           <Field
+            label="DDP mode"
+            flag="--ddp-mode"
+            disabled={waiting || !ddpModeApplies(value.format, bitrateInfo)}
+            help={HELP.ddpMode}
+            htmlFor={id("ddpm")}
+          >
+            <SimpleSelect
+              id={id("ddpm")}
+              value={modeValue(value.ddpMode, defaultModes.ddp)}
+              choices={modeChoices<DdpMode>(
+                DDP_MODES,
+                defaultModes.ddp,
+                SHIM_DDP_MODES
+              )}
+              onChange={(v) => patch({ ddpMode: v as DdpModeChoice })}
+              disabled={waiting || !ddpModeApplies(value.format, bitrateInfo)}
+            />
+          </Field>
+          <Field
+            label="DDP Atmos mode"
+            flag="--ddp-atmos-mode"
+            disabled={waiting || !ddpAtmosModeApplies(value.format)}
+            help={HELP.ddpAtmosMode}
+            htmlFor={id("ddpam")}
+          >
+            <SimpleSelect
+              id={id("ddpam")}
+              value={modeValue(value.ddpAtmosMode, defaultModes.ddpAtmos)}
+              choices={modeChoices<DdpAtmosMode>(
+                DDP_ATMOS_MODES,
+                defaultModes.ddpAtmos,
+                SHIM_DDP_ATMOS_MODES
+              )}
+              onChange={(v) => patch({ ddpAtmosMode: v as DdpAtmosModeChoice })}
+              disabled={waiting || !ddpAtmosModeApplies(value.format)}
+            />
+          </Field>
+          <Field
             label="Bitrate"
             flag="-b"
             disabled={waiting}
@@ -383,7 +489,7 @@ export function OptionsForm({
           <Field
             label="Downmix"
             flag="-dm"
-            disabled={waiting}
+            disabled={waiting || downmixChoices.length <= 1}
             help={HELP.downmix}
             htmlFor={id("dm")}
           >
@@ -392,7 +498,7 @@ export function OptionsForm({
               value={value.downmix}
               choices={downmixSelectChoices}
               onChange={(v) => patch({ downmix: v as Downmix })}
-              disabled={waiting}
+              disabled={waiting || downmixChoices.length <= 1}
             />
           </Field>
           <Field
@@ -416,22 +522,26 @@ export function OptionsForm({
           <Field
             label="DRC"
             flag="-r"
-            disabled={waiting}
+            disabled={waiting || !supportsDrc(value.format)}
             help={HELP.drc}
             htmlFor={id("r")}
           >
             <SimpleSelect
               id={id("r")}
               value={value.drc}
-              choices={DRC_CHOICES}
+              choices={drcChoices(value.format).map((d) => ({
+                value: d,
+                label: d,
+                shim: isShimDrc(value.format, d),
+              }))}
               onChange={(v) => patch({ drc: v as Drc })}
-              disabled={waiting}
+              disabled={waiting || !supportsDrc(value.format)}
             />
           </Field>
           <Field
             label="Dialnorm"
             flag="-dn"
-            disabled={waiting}
+            disabled={waiting || !supportsDialnorm(value.format)}
             help={HELP.dialnorm}
             htmlFor={id("dn")}
           >
@@ -444,7 +554,7 @@ export function OptionsForm({
               className="h-7"
               value={value.dialnorm}
               onChange={(e) => patch({ dialnorm: e.target.value })}
-              disabled={waiting}
+              disabled={waiting || !supportsDialnorm(value.format)}
             />
           </Field>
           <Field
@@ -464,54 +574,102 @@ export function OptionsForm({
               spellCheck={false}
             />
           </Field>
-          <Field
-            label="Output directory"
-            flag="-o"
-            help={HELP.output}
-            htmlFor={id("o")}
-            className="col-span-2 @4xl:col-span-4"
-          >
-            <div className="flex gap-1.5">
-              <Input
-                id={id("o")}
-                className="h-7 flex-1 font-mono"
-                placeholder="default (current directory)"
-                value={value.output}
-                onChange={(e) => patch({ output: e.target.value })}
-                disabled={disabled}
-                spellCheck={false}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onPickOutput}
-                disabled={disabled}
-              >
-                <Folder data-icon="inline-start" />
-                Browse
-              </Button>
-            </div>
-          </Field>
-        </div>
+        </BalancedRows>
+        <Field
+          label="Output directory"
+          flag="-o"
+          help={HELP.output}
+          htmlFor={id("o")}
+          disabled={value.outputToInput}
+        >
+          <div className="flex items-center gap-1.5">
+            <Input
+              id={id("o")}
+              className="h-7 flex-1"
+              placeholder={`default (${defaultOutput || "home folder"})`}
+              value={value.output}
+              onChange={(e) => patch({ output: e.target.value })}
+              disabled={disabled || value.outputToInput}
+              spellCheck={false}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onPickOutput}
+              disabled={disabled || value.outputToInput}
+            >
+              <Folder data-icon="inline-start" />
+              Browse
+            </Button>
+          </div>
+        </Field>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-        {CHECKBOXES.map(({ key, flag, label, help }) => (
-          <div key={key} className="flex items-center gap-2">
-            <Checkbox
-              id={id(key)}
-              checked={value[key]}
-              onCheckedChange={(checked) =>
-                onChange(setFlag(value, key, checked === true))
-              }
-              disabled={disabled}
-            />
-            <Hint text={help} render={<Label htmlFor={id(key)} />}>
-              {label}
-              <FlagCode flag={flag} />
-            </Hint>
-          </div>
-        ))}
+        <div
+          className={cn(
+            "flex items-center gap-2",
+            disabled && "cursor-not-allowed opacity-40"
+          )}
+        >
+          <Checkbox
+            id={id("oi")}
+            checked={value.outputToInput}
+            onCheckedChange={(checked) =>
+              patch({ outputToInput: checked === true })
+            }
+            disabled={disabled}
+          />
+          <Hint
+            text={HELP.outputToInput}
+            render={
+              <Label
+                htmlFor={id("oi")}
+                className={cn(disabled && "cursor-not-allowed")}
+              />
+            }
+          >
+            Save next to input
+            <FlagCode flag="-oi" />
+          </Hint>
+        </div>
+        {CHECKBOXES.map(({ key, flag, label, help }) => {
+          const off =
+            disabled ||
+            (key === "measureOnly" && !supportsMeasureOnly(value.format)) ||
+            (key === "disableLfe" &&
+              !disableLfeApplies(value.format, probedChannels, value.downmix))
+          return (
+            <div
+              key={key}
+              className={cn(
+                "flex items-center gap-2",
+                off && "cursor-not-allowed opacity-40"
+              )}
+            >
+              <Checkbox
+                id={id(key)}
+                checked={value[key]}
+                onCheckedChange={(checked) =>
+                  onChange(setFlag(value, key, checked === true))
+                }
+                disabled={off}
+              />
+              <Hint
+                text={help}
+                render={
+                  <Label
+                    htmlFor={id(key)}
+                    className={cn(off && "cursor-not-allowed")}
+                  />
+                }
+              >
+                {label}
+                <FlagCode flag={flag} />
+              </Hint>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

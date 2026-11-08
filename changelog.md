@@ -1,3 +1,185 @@
+# deew 5.0.0:
+- DEE 6.7.0 support: deew now drives DEE's command line tools
+  (`dee_ddp_encoder`, `dee_dthd_encoder` etc...),
+  DEE 5.2.1 and the XML interface are no longer supported
+- new formats for `-f`: `ddp-atmos` (#31), `thd-atmos`, `ac4-atmos` and `aac`
+  - `ddp-atmos`, `thd-atmos` and `ac4-atmos` take a TrueHD Atmos input, it is
+    decoded with [truehdd](https://github.com/truehdd/truehdd) and re-encoded
+    from the Atmos master
+  - the input can be a raw `.thd` (decoded directly) or a container
+    (mkv/mka/m2ts, the track is selected with `-ti` and piped from ffmpeg to
+    truehdd)
+  - the decoded length is checked against the input, a truncated decode is
+    an error
+  - `ddp-atmos` and `thd-atmos` require
+    [dee_shim](https://github.com/truehdd/dee-shim), so DEE doesn't smooth the
+    object positions a second time
+  - `-dm` and `-mo` can't be used with the Atmos formats
+- `aac` output is always 2.0 CBR (a DEE limitation),
+  mono inputs and `-dm 1` are rejected
+  - deew suggests qaac for AAC encoding
+- `ac4` encoding now creates 2.0 or 5.1 output (it used to create immersive
+  stereo from 5.1 sources only), `-dm` works for it
+- `-dm 2` and `-dm 6` work for TrueHD: the TrueHD encoder can't downmix, so
+  deew downmixes with ffmpeg using the coefficients of DEE's own downmix (the
+  stereo downmix has a limiter against clipping, like DEE)
+- new `--ddp-mode` option (`standard` / `bluray`, default from the config's
+  new `[default_modes]` section) for 7.1 DDP: `standard` (the default) is
+  E-AC-3 independent and dependent substreams, 384-1792 kbps, `.ec3`, which
+  uses dee_shim; `bluray` is the Blu-ray profile (AC-3 core, 768-1664 kbps,
+  `.eb3`), without dee_shim 7.1 DDP needs `--ddp-mode bluray` (otherwise it is
+  an error), `-fs` was removed
+- new `--ddp-atmos-mode` option (`streaming` / `standard` / `bluray`, default
+  from `[default_modes]`) for `ddp-atmos`: `streaming` (the default) is 5.1
+  with Atmos (384-1024 kbps, `.ec3`), `standard` is 7.1 with Atmos, E-AC-3
+  only (768-2048 kbps, `.ec3`), `bluray` is 7.1 with Atmos with an AC-3 core
+  (1152-1664 kbps, `.eb3`)
+- new `-oi`/`--output-to-input` option: saves each output next to its input
+  file, overrides `-o` and the config's output path
+- the CLI uses the config's new `[output]` `path` as the output directory
+  (overridden by `-o`), `to_input` is the default of `-oi`
+- 5.0 and 7.0 inputs are supported (other 5- and 7-channel layouts are
+  rejected), DD and DDP create a real 5.0/7.0, TrueHD and AC4 keep a silent LFE
+- new `-dl`/`--disable-lfe` option for 5.1 and 7.1 inputs (5.0 and 7.0 inputs
+  always behave this way) (#74):
+  - DD and DDP create a real 5.0 (`lfe_on=0`), DDP creates a real 7.0 from 7.1
+    input, which needs dee_shim (an error without it)
+  - TrueHD and AC4 can't leave out the LFE channel, it is kept silent
+    (with a note)
+  - ignored with a note for AAC, `-dm 1`/`-dm 2`, the Atmos formats and
+    mono/stereo inputs
+- `-h` and `-lb` mark the values that use dee_shim in blue
+- the default DRC is `none` now (`music_light` for AC4)
+- `-r none` is rejected for AC4, and TrueHD with DRC `none` requires dee_shim
+  (the TrueHD encoder has no such preset) (#29)
+- custom dialnorm (`-dn`) is applied through a loudness manifest and only
+  works for DD, DDP and AC4
+- `-mo` measures the loudness with `dee_measure_loudness` instead of killing DEE
+  when the dialnorm is printed, `-mo` and `-dn` don't work with 7.1 input
+  (`dee_measure_loudness` supports up to 5.1)
+- WSL/Linux path conversion was removed, use native version on every OS
+- macOS support: universal (Apple silicon + x86_64) builds:
+  `deew-macos`, `deew-gui-macos`, `deew-web-macos`
+- config changes, run `deew -gc` to generate a new config:
+  - the tool paths were removed (`ffmpeg_path`, `ffprobe_path`, `dee_path`),
+    old configs still work and these keys are ignored
+  - new `default_bitrates` keys: `ddp_7_1_standard`, `ddp_7_1_bluray`,
+    `ddp_atmos_streaming`, `ddp_atmos_standard`, `ddp_atmos_bluray`,
+    `ac4_5_1`, `ac4_atmos` and `aac_2_0` (`ddp_7_1` is ignored), the default of
+    `ac4_2_0` is 256 now (was 320)
+  - new `[output]` section (`path`, `to_input`) and `[default_modes]` section
+    (`ddp`, `ddp_atmos`)
+- ffmpeg, ffprobe, truehdd and dee_shim are looked for next to deew first,
+  the DEE tools in a `dee` folder next to deew, then in your PATH (there's
+  nothing to set in the config)
+- new `-gt`/`--get-tools` option: downloads ffmpeg and ffprobe (latest
+  stable, GPL, static), truehdd and dee_shim next to deew, in parallel with a
+  progress bar for each, the downloads are checked against their SHA256
+- new `-kl`/`--keep-log` option: keeps TrueHD's `.thd.log.html` (the `.mll`
+  is always deleted) and writes a standalone `<name>.deew-log.html` report
+  next to each output (also for failed jobs) with the settings, tool versions,
+  command lines and the complete output of every stage
+- the encoding summary shows the truehdd and dee_shim versions, `-v` prints the
+  versions of the tools too (DEE, truehdd, dee_shim, ffmpeg, ffprobe), listed
+  by name in one aligned column, with the path where each one was found
+- if any of the tools (ffmpeg, truehdd, DEE) fails, the job fails with the
+  error of the tool and deew exits with an error code (#63)
+  - ffmpeg's error is its last line that names an error (e.g. `Error closing
+    file: No space left on device`, with the temp path when the disk is full)
+    instead of `Conversion failed!`
+  - a DEE error printed without an `ERROR:` prefix is shown too
+- new `-lb` layout: a tree grouped by codec (DD, DDP, AC4, AAC) with the
+  channel layouts and the profiles of `--ddp-mode` and `--ddp-atmos-mode`
+  below them, aligned values wrapped to the terminal width (at most 78
+  columns), the default bitrates and modes (from the config) marked with
+  `(default)`, and the bitrates of the new formats
+- `-h` (and the usage shown with errors) wraps to the terminal width with the
+  descriptions aligned, below 80 columns each description goes under its
+  flags, the usage wraps between options and is at most 80 columns wide
+- new CLI progress display:
+  - each line shows the step (`ffmpeg decode`, `truehdd decode`,
+    `DEE measure`, `DEE encode`) with its own color, the file name, the
+    dialnorm, the bar, the percentage and the estimated time left (after the
+    step has run for 5 seconds)
+  - the measure and encode steps both go from 0 to 100% (non-Atmos TrueHD's
+    first step is a pulsing bar)
+  - the columns size themselves to the file names and the terminal width, long
+    names are cut, below 80 columns each file uses two lines
+  - finished and failed files are printed above the running ones
+    (`finished: name (-27 dB) - took 1:12`, `failed: name - error`), the files
+    waiting to start are shown as `+3 files in queue`
+- the encoding summary shows the sample rate of the inputs (`48 kHz`), and
+  the number of files moved to the Input(s) section
+- the Atmos formats check the input's ffprobe profile before anything is
+  decoded: a TrueHD input without Atmos is rejected right away (truehdd's
+  "no Atmos presentation" check stays as a safety net)
+- folder inputs: files without an audio track (e.g. `.nfo`, `.jpg`) or that
+  ffprobe can't open are listed with the reason, and deew asks whether to skip
+  them and encode the rest (`-np` skips them with a note), if nothing is left
+  it is an error
+- probing errors name the file and the reason (`asd.jpg has no audio track.`,
+  `no audio track 3 (-ti), it has 2 (0-1)`, `ffprobe: Permission denied`)
+  instead of a general ffprobe error, and all of them are listed at once (#71)
+- Ctrl-C (also SIGTERM/SIGHUP on Unix, Ctrl-Break and console close on
+  Windows) stops deew cleanly: no new job starts, the running tools (DEE,
+  dee_shim, ffmpeg, truehdd) are killed, the temp files and the partial
+  outputs of the stopped jobs are removed (finished jobs keep their outputs),
+  the `-kl` report of a stopped job says `interrupted`, a summary line is
+  printed (`interrupted: 2 jobs finished, 1 stopped, 3 not started`) and the
+  exit code is 130; a second Ctrl-C exits at once, Ctrl-C at a prompt exits
+  with 130 too
+- logos: logos 3-11 were removed, logo 1's text is bold white, logo 2 is blue
+  instead of orange, and logo 3 is a new 60-column ANSI art (`logo` is now
+  1-3, any other value shows no logo)
+- updated dependencies
+- `deew-gui`/`deew-web` 0.5.0:
+  - the format dropdown has DD, DDP, DDP Atmos, AC4, AC4 Atmos, AAC, TrueHD
+    and TrueHD Atmos
+  - the options follow the new rules: no `-fs`, `-dm` is available for
+    DD/DDP/AC4/AAC and TrueHD (2.0 and 5.1), `-dn` for DD/DDP/AC4 only, `-mo`
+    is not available for the Atmos formats
+  - "DDP mode" (`--ddp-mode`) and "DDP Atmos mode" (`--ddp-atmos-mode`)
+    dropdowns, always shown and greyed out unless they apply (7.1 DDP / DDP
+    Atmos), defaulting to the config's `[default_modes]`
+  - the options use as many columns as fit and are spread evenly over the
+    rows, so every row is full width (5 + 5, 4 + 3 + 3, 3 + 3 + 2 + 2, ...)
+  - the window can be made smaller (minimum 600 × 400, the page scrolls when
+    needed) and the output area is at least twice as tall as before
+  - "Disable LFE" (`-dl`) checkbox, greyed out unless the input is 5.1/7.1 and
+    the output can use it (not the Atmos formats, not AAC, not `-dm 1`/`-dm 2`)
+  - 5.0 and 7.0 inputs are recognised
+  - DRC `none` is offered for all formats except AC4 and AC4 Atmos (AAC has no
+    DRC)
+  - "Keep log (`-kl`)" checkbox
+  - values that use dee_shim show a puzzle icon (tooltip: "Uses dee_shim"):
+    DDP Atmos, TrueHD Atmos, DRC `none` for TrueHD, DDP mode `standard` and its
+    7.1 bitrates, every DDP Atmos mode and bitrate
+  - the probe line shows `Atmos` before the channels of Atmos inputs
+    (`Atmos 7.1 - 48 kHz - 24-bit - 1 file`); the Atmos formats warn about DDP
+    Atmos, TrueHD without Atmos and other non-TrueHD inputs
+  - folder files that aren't audio are listed as skipped under the probe line
+    (`asd.jpg: skipped, no audio track`) instead of as errors, and probing
+    errors name the reason (#71)
+  - Stop sends Ctrl+C on Windows too (deew removes its temp files and partial
+    outputs) and waits 10 s before killing; exit code 130 is shown as "Stopped"
+  - Run and Stop are one button that switches between Run, Stop and
+    "Stopping..." (with a spinner) and keeps the width of its widest label
+  - the "Clear" button is called "Clear all" now
+  - "Download tools" (`-gt`) at the end of the Utilities menu
+  - the Output directory field shows the real default folder instead of
+    `default (from config)` and is saved to the config's new `[output]` `path`
+    key on every change, then loaded on startup
+  - "Save next to input" (`-oi`) checkbox (first in the checkbox row), saved
+    to `[output]` `to_input`, it greys out the Output directory field (its
+    value is kept)
+  - the native progress view shows each step from 0 to 100% and the step
+    labels match the CLI (`DEE encode`, `truehdd decode`)
+  - deew-web: "Keep me logged in" choice on the login page (until the browser
+    is closed, 1 day, 7 days (default), 30 days; the last choice is
+    remembered), the session cookie lasts as long as the server session,
+    restarting deew-web still logs everyone out
+  - needs deew 5.0.0 or newer
+
 # deew 3.6.5:
 - logo 1 uses a thin border
 - the encoding summary shows the bit depths of mixed inputs (e.g. `16/24`)

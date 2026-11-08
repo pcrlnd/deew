@@ -26,14 +26,19 @@ import { WebToolbar } from "@/components/web-toolbar"
 import {
   DEFAULT_BITRATE,
   DEFAULT_OPTIONS,
+  PROGRAM_DEFAULT_MODES,
   buildArgs,
   detectPlatform,
+  effectiveDdpAtmosMode,
+  effectiveDdpMode,
   formatCommand,
   infoArgs,
+  parseDefaultModes,
   relevantBitrates,
   relevantDownmixes,
   validate,
   type DeewOptions,
+  type DefaultModes,
   type InfoFlag,
 } from "@/lib/deew-args"
 import {
@@ -86,6 +91,7 @@ function addUnique(list: string[], extra: string[]): string[] {
 export function App({ onLogout }: { onLogout?: () => void }) {
   const [options, setOptions] = useState<DeewOptions>({ ...DEFAULT_OPTIONS })
   const [running, setRunning] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [outcome, setOutcome] = useState<RunOutcome | null>(null)
   const [endCount, setEndCount] = useState(0)
   const [dragging, setDragging] = useState(false)
@@ -106,6 +112,18 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const [view, setView] = useState<OutputView>("cli")
   const viewRef = useRef<OutputView>("cli")
   const [saveError, setSaveError] = useState<string | null>(null)
+  // The output directory as last loaded from / sent to the config.
+  const savedOutputRef = useRef("")
+  const outputTouchedRef = useRef(false)
+  const outputRef = useRef("")
+  // The same for "Save next to input" (output.to_input), saved at once.
+  const savedToInputRef = useRef(false)
+  const toInputTouchedRef = useRef(false)
+  const toInputRef = useRef(false)
+  const [defaultModes, setDefaultModes] = useState<DefaultModes>({
+    ...PROGRAM_DEFAULT_MODES,
+  })
+  const [defaultOutput, setDefaultOutput] = useState("")
   // Every run of this session, for the native view (like the terminal's).
   const [history, dispatchHistory] = useReducer(reduceHistory, EMPTY_HISTORY)
   const current = history.runs.at(-1)
@@ -115,8 +133,6 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   // Info runs have no progress: their output is shown until the next run.
   const showTerminal = !native || (current?.info ?? false)
 
-  const args = useMemo(() => buildArgs(options), [options])
-  const command = useMemo(() => formatCommand(args, platform), [args])
   const problems = useMemo(() => validate(options), [options])
   const canRun = options.inputs.length > 0 && problems.length === 0
 
@@ -125,17 +141,25 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     : null
   const probe = useProbe(options.inputs, trackIndex)
   const channels = probe.status === "done" ? probe.summary.channels : null
-  const downmix = relevantDownmixes(channels).includes(options.downmix)
-    ? options.downmix
-    : "none"
-  const downmixes = relevantDownmixes(channels)
+  const codecs = probe.status === "done" ? probe.summary.codecs : []
+  const inputs = probe.status === "done" ? probe.summary.inputs : undefined
+  const downmixes = relevantDownmixes(options.format, channels)
+  const downmix = downmixes.includes(options.downmix) ? options.downmix : "none"
   const bitrateInfo = relevantBitrates({
     format: options.format,
     channels,
     downmix,
-    forceStandard: options.forceStandard,
-    forceBluray: options.forceBluray,
+    codecs,
+    inputs,
+    ddpMode: effectiveDdpMode(options.ddpMode, defaultModes),
+    atmosMode: effectiveDdpAtmosMode(options.ddpAtmosMode, defaultModes),
   })
+  const args = buildArgs(options, {
+    ddp71: bitrateInfo.ddp71,
+    channels,
+    defaultModes,
+  })
+  const command = formatCommand(args, platform)
   // A downmix or bitrate that the probed layout cannot do goes back to the
   // default (adjusting state while rendering, as React recommends for derived
   // state).
@@ -211,8 +235,27 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     let cancelled = false
     guiSettings()
       .then((settings) => {
+        if (cancelled) return
+        setDefaultOutput(settings.defaultOutput)
+        setDefaultModes(
+          parseDefaultModes(
+            settings.defaultDdpMode,
+            settings.defaultDdpAtmosMode
+          )
+        )
+        if (!toInputTouchedRef.current) {
+          savedToInputRef.current = settings.toInput
+          toInputRef.current = settings.toInput
+          setOptions((o) => ({ ...o, outputToInput: settings.toInput }))
+        }
+        // An edit before the answer arrives wins.
+        if (!outputTouchedRef.current) {
+          savedOutputRef.current = settings.output
+          outputRef.current = settings.output
+          setOptions((o) => ({ ...o, output: settings.output }))
+        }
         // A toggle before the answer arrives wins.
-        if (cancelled || viewRef.current !== "cli") return
+        if (viewRef.current !== "cli") return
         viewRef.current = settings.progress
         setView(settings.progress)
       })
@@ -222,14 +265,44 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     }
   }, [])
 
-  const changeView = (next: OutputView) => {
-    viewRef.current = next
-    setView(next)
-    saveGuiSettings({ progress: next }).then(
+  // Every save sends both settings.
+  const saveSettings = useCallback(() => {
+    saveGuiSettings({
+      progress: viewRef.current,
+      output: outputRef.current,
+      toInput: toInputRef.current,
+    }).then(
       () => setSaveError(null),
       (e) => setSaveError(errorMessage(e))
     )
+  }, [])
+
+  const changeView = (next: OutputView) => {
+    viewRef.current = next
+    setView(next)
+    saveSettings()
   }
+
+  // Typing, Browse and Clear all end up here: save 500 ms after the last change.
+  useEffect(() => {
+    outputRef.current = options.output
+    if (options.output === savedOutputRef.current) return
+    outputTouchedRef.current = true
+    const timer = setTimeout(() => {
+      savedOutputRef.current = options.output
+      saveSettings()
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [options.output, saveSettings])
+
+  // The toggle is saved right away, the path stays as it is.
+  useEffect(() => {
+    toInputRef.current = options.outputToInput
+    if (options.outputToInput === savedToInputRef.current) return
+    toInputTouchedRef.current = true
+    savedToInputRef.current = options.outputToInput
+    saveSettings()
+  }, [options.outputToInput, saveSettings])
 
   // Raw event lines of the CLI; anything unparsable is ignored.
   const onProgressLine = useCallback((line: string) => {
@@ -254,6 +327,17 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   // Re-read after every job: the user may have just generated or edited it.
   const refreshDefaults = useCallback(() => {
     defaultBitrates().then(setDefaults).catch(console.warn)
+    // [default_modes] may have been edited too
+    guiSettings()
+      .then((settings) =>
+        setDefaultModes(
+          parseDefaultModes(
+            settings.defaultDdpMode,
+            settings.defaultDdpAtmosMode
+          )
+        )
+      )
+      .catch(console.warn)
   }, [])
 
   useEffect(() => {
@@ -329,15 +413,19 @@ export function App({ onLogout }: { onLogout?: () => void }) {
 
   const endRun = useCallback(
     (term: TerminalHandle, code: number | null | undefined) => {
+      // Exit code 130 is deew's answer to Ctrl-C (Stop, or typed into the
+      // terminal pane): a stop, not a failure.
+      const stopped = stoppedRef.current || code === 130
       const startedAt = startedAtRef.current
       clearStartTimer()
       runningRef.current = false
       awaitingStartRef.current = false
       setRunning(false)
-      setOutcome(runOutcome({ stopped: stoppedRef.current, code }))
+      setStopping(false)
+      setOutcome(runOutcome({ stopped, code }))
       setEndCount((n) => n + 1)
       const ms = startedAt === null ? null : performance.now() - startedAt
-      const status = stoppedRef.current
+      const status = stopped
         ? stoppedStatus()
         : code === undefined
           ? exitStatus(null)
@@ -349,7 +437,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               : successStatus(ms)
       dispatchHistory({
         type: "end",
-        status: stoppedRef.current
+        status: stopped
           ? { kind: "stopped" }
           : code === undefined || code === null
             ? { kind: "exit", code: null }
@@ -368,6 +456,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       runningRef.current = false
       awaitingStartRef.current = false
       setRunning(false)
+      setStopping(false)
       setOutcome(runOutcome({ error: true }))
       setEndCount((n) => n + 1)
       dispatchHistory({ type: "end", status: { kind: "error", message } })
@@ -384,6 +473,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       awaitingStartRef.current = inWeb()
       stoppedRef.current = false
       setRunning(true)
+      setStopping(false)
       beginProgress(runArgs)
       await printStart(term, runArgs)
       // Focusing opens the on-screen keyboard on phones.
@@ -439,6 +529,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       stoppedRef.current = false
       startedAtRef.current = startedAt
       setRunning(true)
+      setStopping(false)
       beginProgress(runArgs)
       await printStart(term, runArgs)
     },
@@ -528,11 +619,13 @@ export function App({ onLogout }: { onLogout?: () => void }) {
             <OptionsForm
               value={options}
               onChange={setOptions}
+              defaultOutput={defaultOutput}
               dragging={dragging}
               disabled={running}
               probe={probe}
               bitrateInfo={bitrateInfo}
               defaultBitrates={defaults}
+              defaultModes={defaultModes}
               downmixChoices={downmixes}
               toolbar={
                 inWeb() && (
@@ -555,13 +648,19 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               command={command}
               problems={problems}
               running={running}
+              stopping={stopping}
               runState={running ? "running" : (outcome ?? "idle")}
               endCount={endCount}
               canRun={canRun}
               onRun={run}
               onStop={() => {
                 stoppedRef.current = true
-                void stopDeew().catch(console.error)
+                setStopping(true)
+                void stopDeew().catch((error) => {
+                  console.error(error)
+                  stoppedRef.current = false
+                  setStopping(false)
+                })
               }}
               view={view}
               onViewChange={changeView}
@@ -573,7 +672,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               />
             )}
 
-            <div className="flex min-h-40 flex-1 flex-col gap-2">
+            <div className="flex min-h-80 flex-1 flex-col gap-2">
               {!showTerminal && (
                 <ProgressPane className="min-h-24 flex-1" runs={history.runs} />
               )}

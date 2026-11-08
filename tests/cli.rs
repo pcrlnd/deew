@@ -40,12 +40,19 @@ fn golden(name: &str) -> Vec<u8> {
 }
 
 /// Run deew with an isolated config home. `stdin` is fed to the process.
-fn run_bin(bin: &Path, config_home: &Path, args: &[&str], stdin: &str) -> Output {
+fn run_bin(
+    bin: &Path,
+    config_home: &Path,
+    args: &[&str],
+    stdin: &str,
+    envs: &[(&str, &str)],
+) -> Output {
     let mut child = spawn_retry(
         Command::new(bin)
             .args(args)
             .env("XDG_CONFIG_HOME", config_home)
             .env_remove("NO_COLOR")
+            .envs(envs.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()),
@@ -62,7 +69,7 @@ fn run_bin(bin: &Path, config_home: &Path, args: &[&str], stdin: &str) -> Output
 /// Run the real binary; only for tests that never need a config.
 fn run(args: &[&str]) -> Output {
     let home = tempfile::tempdir().unwrap();
-    run_bin(Path::new(BIN), home.path(), args, "")
+    run_bin(Path::new(BIN), home.path(), args, "", &[("COLUMNS", "80")])
 }
 
 /// A private copy of the binary in its own temp dir, so that the config
@@ -90,7 +97,20 @@ impl Sandbox {
     }
 
     fn run(&self, args: &[&str], stdin: &str) -> Output {
-        run_bin(&self.bin, &self.dir.path().join("xdg"), args, stdin)
+        run_bin(&self.bin, &self.dir.path().join("xdg"), args, stdin, &[])
+    }
+
+    /// Run with an empty `PATH`, so that no program of the machine is found.
+    fn run_without_path(&self, args: &[&str]) -> Output {
+        let empty = self.dir.path().join("xdg");
+        let empty = empty.to_str().unwrap();
+        run_bin(
+            &self.bin,
+            &self.dir.path().join("xdg"),
+            args,
+            "",
+            &[("PATH", empty)],
+        )
     }
 }
 
@@ -119,12 +139,6 @@ fn help() {
 #[test]
 fn no_args_prints_help_and_exits_1() {
     assert_golden(&[], "no_args.txt", 1);
-}
-
-#[test]
-fn version() {
-    assert_golden(&["-v"], "version.txt", 0);
-    assert_golden(&["--version"], "version.txt", 0);
 }
 
 #[test]
@@ -160,7 +174,7 @@ fn template() -> String {
 fn template_matches_python() {
     // The template is dumped from the Python source; spot-check its shape.
     let t = template();
-    assert!(t.starts_with("# These are required.\n"));
+    assert!(t.starts_with("# deew looks for the programs next to the deew executable first, then in your system PATH:\n"));
     assert!(t.contains("max_instances = '50%'\n"));
     assert!(t.contains("    other = true\n"));
     assert!(t.ends_with("[gui]\n    progress = 'cli'\n"));
@@ -169,6 +183,52 @@ fn template_matches_python() {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+
+    /// `-v` with every tool missing (hermetic: nothing of the machine shows).
+    /// The programs next to deew and their paths are in `version_shows_the_paths`.
+    #[test]
+    fn version_lists_the_tools() {
+        let sb = Sandbox::new();
+        for flag in ["-v", "--version"] {
+            let out = sb.run_without_path(&[flag]);
+            assert_eq!(out.status.code(), Some(0));
+            assert_eq!(stdout(&out).as_bytes(), golden("version.txt"), "{flag}");
+            assert!(out.stderr.is_empty());
+        }
+        // the first line is what deew-gui parses
+        let first = stdout(&sb.run_without_path(&["-v"]));
+        assert_eq!(
+            first.lines().next().unwrap(),
+            format!("deew {}", env!("CARGO_PKG_VERSION"))
+        );
+        // no config at all: still works, and no config is created
+        let sb2 = Sandbox::new();
+        let out = sb2.run_without_path(&["-v"]);
+        assert_eq!(out.status.code(), Some(0));
+        assert!(stdout(&out).starts_with(&format!("deew {}\n", env!("CARGO_PKG_VERSION"))));
+        assert!(stdout(&out).contains("truehdd  not found"));
+        assert!(!sb2.config().exists());
+    }
+
+    /// A tool next to deew is found, and its path is shown after the version.
+    #[test]
+    fn version_shows_the_paths() {
+        use std::os::unix::fs::PermissionsExt;
+        let sb = Sandbox::new();
+        let truehdd = sb.dir.path().join("truehdd");
+        std::fs::write(
+            &truehdd,
+            "#!/bin/sh\necho 'truehdd 0.6.2 (truehd library 0.7.2)'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&truehdd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = sb.run_without_path(&["-v"]);
+        let text = stdout(&out);
+        let line = format!("truehdd  0.6.2  {}", truehdd.display());
+        assert!(text.lines().any(|l| l == line), "{text}");
+        // a tool that is not found has no path
+        assert!(text.lines().any(|l| l == "DEE      not found"), "{text}");
+    }
 
     #[test]
     fn generate_config_writes_template_without_asking() {
@@ -305,7 +365,7 @@ mod linux {
         assert_eq!(
             text,
             "ERROR: the following keys are missing from your config file: \
-ffmpeg_path, ffprobe_path, dee_path, max_instances, default_bitrates, summary_sections.\n\
+max_instances, default_bitrates, summary_sections.\n\
 Update your config file.\n"
         );
     }
@@ -347,10 +407,10 @@ Update your config file.\n"
         assert!(text.starts_with("ERROR: invalid config "), "{text}");
         assert!(!text.contains("panicked"), "{text}");
 
-        let bad = template().replace("    ddp_7_1 = 1536\n", "");
+        let bad = template().replace("    ddp_2_0 = 256\n", "");
         let (out, text) = with_config(&bad, &["-i", "x.mkv"]);
         assert_eq!(out.status.code(), Some(1), "{text}");
-        assert!(text.contains("ddp_7_1"), "{text}");
+        assert!(text.contains("ddp_2_0"), "{text}");
     }
 
     #[test]
@@ -361,7 +421,13 @@ Update your config file.\n"
             text.ends_with("deew: error: the following arguments are required: -i/--input\n"),
             "{text}"
         );
-        assert!(text.starts_with("deew 3.6.5\n\nUSAGE: deew"), "{text}");
+        assert!(
+            text.starts_with(&format!(
+                "deew {}\n\nUSAGE: deew",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{text}"
+        );
     }
 
     #[test]

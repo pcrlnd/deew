@@ -1,6 +1,6 @@
 [package]
 name = "deew-web"
-version = "0.4.2"
+version = "0.5.0"
 description = "Browser version of the deew GUI: serves the frontend and runs the deew CLI"
 authors = ["pcroland <pcroland@protonmail.ch>"]
 license = "MIT"
@@ -29,7 +29,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 subtle = "2.6.1"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net"] }
-toml = "1.1.8"
+toml = "1.2.1"
 
 [dev-dependencies]
 futures-util = "0.3.34"

@@ -1,6 +1,6 @@
 //! The HTTP application: routes, security middleware and the run WebSocket.
 
-use crate::auth::{self, COOKIE_NAME, Sessions};
+use crate::auth::{self, Sessions};
 use crate::config::Credentials;
 use crate::job::{Event, Job};
 use crate::{assets, fsapi, security};
@@ -13,7 +13,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use deew_gui_core::cli;
-use deew_gui_core::settings::{self, GuiSettings};
+use deew_gui_core::settings::{self, GuiSettings, SettingsView};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -203,6 +203,14 @@ fn parse_json<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, ApiErro
 struct LoginBody {
     user: String,
     pass: String,
+    #[serde(default)]
+    remember: Option<String>,
+}
+
+/// Whether to mark cookies `Secure`. deew-web serves plain HTTP only and does
+/// not trust proxy headers (`X-Forwarded-Proto`), so this is always false.
+fn cookies_secure() -> bool {
+    false
 }
 
 fn cookie_header(value: &str) -> Result<HeaderValue, ApiError> {
@@ -220,6 +228,7 @@ async fn login(State(state): State<Shared>, body: Bytes) -> Result<Response, Api
         .acquire()
         .await
         .map_err(|_| ApiError::internal("server shutting down"))?;
+    let remember = body.remember.clone();
     let ok = tokio::task::spawn_blocking(move || {
         auth::check_credentials(&creds, &body.user, &body.pass)
     })
@@ -233,10 +242,12 @@ async fn login(State(state): State<Shared>, body: Bytes) -> Result<Response, Api
             "wrong username or password",
         ));
     }
-    let token = state.sessions.create().map_err(ApiError::internal)?;
-    let cookie = cookie_header(&format!(
-        "{COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/"
-    ))?;
+    let (lifetime, max_age) = auth::remember_lifetime(remember.as_deref());
+    let token = state
+        .sessions
+        .create_with_lifetime(lifetime)
+        .map_err(ApiError::internal)?;
+    let cookie = cookie_header(&auth::session_cookie(&token, max_age, cookies_secure()))?;
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     Ok(response)
@@ -246,9 +257,7 @@ async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Result<Respo
     if let Some(token) = session_token(&headers) {
         state.sessions.remove(&token);
     }
-    let cookie = cookie_header(&format!(
-        "{COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
-    ))?;
+    let cookie = cookie_header(&auth::clear_cookie(cookies_secure()))?;
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     Ok(response)
@@ -274,11 +283,14 @@ fn config_path(state: &AppState) -> Option<PathBuf> {
     state.config_path.clone().or_else(cli::config_path)
 }
 
-async fn get_settings(State(state): State<Shared>) -> axum::Json<GuiSettings> {
+async fn get_settings(State(state): State<Shared>) -> axum::Json<SettingsView> {
     axum::Json(
-        tokio::task::spawn_blocking(move || settings::load(config_path(&state).as_deref()))
-            .await
-            .unwrap_or_default(),
+        tokio::task::spawn_blocking(move || {
+            let config = config_path(&state);
+            SettingsView::new(settings::load(config.as_deref()), config.as_deref())
+        })
+        .await
+        .unwrap_or_default(),
     )
 }
 

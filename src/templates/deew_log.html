@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root{color-scheme:light dark;--background:oklch(1 0 0);--foreground:oklch(.141 .005 285.823);--card:oklch(1 0 0);--primary:oklch(.488 .243 264.376);--primary-foreground:oklch(.97 .014 254.604);--secondary:oklch(.967 .001 286.375);--muted:oklch(.967 .001 286.375);--muted-foreground:oklch(.552 .016 285.938);--destructive:oklch(.577 .245 27.325);--border:oklch(.92 .004 286.32);--warning:oklch(.68 .16 70);--radius:0}
+@media (prefers-color-scheme:dark){:root{--background:oklch(.141 .005 285.823);--foreground:oklch(.985 0 0);--card:oklch(.21 .006 285.885);--primary:oklch(.424 .199 265.638);--secondary:oklch(.274 .006 286.033);--muted:oklch(.274 .006 286.033);--muted-foreground:oklch(.705 .015 286.067);--destructive:oklch(.704 .191 22.216);--border:oklch(1 0 0/10%);--warning:oklch(.8 .15 80)}}
+*{box-sizing:border-box;border-color:var(--border)}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:"IBM Plex Sans Variable","IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:1.5}
+main{max-width:64rem;margin:0 auto;padding:1.5rem 1rem 3rem;display:flex;flex-direction:column;gap:1rem}
+.mono,pre,code{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.card>h2{margin:0;padding:.75rem 1rem;font-size:.8125rem;font-weight:600;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.5rem}
+.card>.body{padding:1rem}
+header.card{display:flex;align-items:center;gap:1rem;padding:1rem}
+.logo{width:2.5rem;height:2.5rem;flex:none}
+header h1{margin:0;font-size:1.125rem;font-weight:600;word-break:break-all}
+.sub{color:var(--muted-foreground);font-size:.8125rem;display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin-top:.25rem}
+.sub span{display:inline-flex;align-items:center;gap:.25rem}
+.grow{flex:1;min-width:0}
+svg.i{width:1rem;height:1rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.badge{display:inline-flex;align-items:center;gap:.25rem;height:1.25rem;padding:.125rem .5rem;font-size:.75rem;font-weight:500;white-space:nowrap;border:1px solid transparent;border-radius:var(--radius)}
+.badge svg.i{width:.75rem;height:.75rem}
+.badge.ok{background:var(--primary);color:var(--primary-foreground)}
+.badge.fail{background:color-mix(in oklab,var(--destructive) 10%,transparent);color:var(--destructive)}
+.badge.sec{background:var(--secondary);color:var(--foreground)}
+.badge.out{border-color:var(--border);color:var(--foreground)}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:.375rem 1rem;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td:first-child{width:11rem;color:var(--muted-foreground);white-space:nowrap}
+td:last-child{word-break:break-all}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr))}
+.alert{border:1px solid var(--border);padding:.625rem 1rem;display:flex;gap:.5rem;align-items:flex-start;word-break:break-word}
+.alert.err{border-color:color-mix(in oklab,var(--destructive) 50%,transparent);background:color-mix(in oklab,var(--destructive) 10%,transparent);color:var(--destructive)}
+.alert.warn{border-color:color-mix(in oklab,var(--warning) 50%,transparent);background:color-mix(in oklab,var(--warning) 12%,transparent)}
+.alert svg.i{margin-top:.2rem}
+details.stage{border-top:1px solid var(--border)}
+details.stage:first-of-type{border-top:0}
+details.stage>summary{cursor:pointer;list-style:none;padding:.625rem 1rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+details.stage>summary::-webkit-details-marker{display:none}
+details.stage>summary .chev{transition:transform .15s}
+details.stage[open]>summary .chev{transform:rotate(180deg)}
+.stage-name{font-weight:600}
+.muted{color:var(--muted-foreground)}
+.stage .inner{padding:0 1rem 1rem;display:flex;flex-direction:column;gap:.5rem}
+.label{font-size:.75rem;color:var(--muted-foreground);display:flex;align-items:center;gap:.5rem}
+pre{margin:0;padding:.625rem .75rem;background:var(--muted);border:1px solid var(--border);border-radius:var(--radius);font-size:.75rem;line-height:1.5;overflow:auto;white-space:pre-wrap;word-break:break-all}
+pre.scroll{max-height:24rem;white-space:pre;word-break:normal}
+button.copy{display:none;margin-left:auto;align-items:center;justify-content:center;gap:.375rem;min-height:2rem;min-width:5rem;padding:0 .75rem;font:inherit;font-size:.8125rem;touch-action:manipulation;color:var(--foreground);background:var(--secondary);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer}
+html.js button.copy{display:inline-flex}
+footer{color:var(--muted-foreground);font-size:.75rem;text-align:center}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-fail" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+<symbol id="i-term" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></symbol>
+<symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></symbol>
+<symbol id="i-checks" viewBox="0 0 24 24"><path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/></symbol>
+<symbol id="i-pkg" viewBox="0 0 24 24"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+</defs></svg>
+<main>
+{{BODY}}
+<footer>written by deew {{VERSION}} (<code>-kl</code>)</footer>
+</main>
+<script>
+(function(){
+var d=document;
+d.documentElement.classList.add("js");
+function select(el){var r=d.createRange();r.selectNodeContents(el);var s=window.getSelection();s.removeAllRanges();s.addRange(r)}
+function legacy(text){
+var t=d.createElement("textarea");t.value=text;t.setAttribute("readonly","");
+t.style.cssText="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
+d.body.appendChild(t);t.focus();t.select();
+try{t.setSelectionRange(0,text.length)}catch(e){}
+var ok=false;try{ok=d.execCommand("copy")}catch(e){}
+d.body.removeChild(t);return ok}
+function done(b,label,ms){var t=b.querySelector(".t");t.textContent=label;if(ms){setTimeout(function(){t.textContent="copy"},ms)}}
+function fail(b,pre){select(pre);done(b,"select + copy",0)}
+d.querySelectorAll("button.copy").forEach(function(b){b.addEventListener("click",function(){
+var pre=d.getElementById(b.dataset.target);if(!pre){return}
+var text=pre.textContent;
+function fallback(){if(legacy(text)){done(b,"copied",1500)}else{fail(b,pre)}}
+if(window.isSecureContext&&navigator.clipboard&&navigator.clipboard.writeText){
+navigator.clipboard.writeText(text).then(function(){done(b,"copied",1500)},fallback)}
+else{fallback()}
+})});
+})();
+</script>
+</body>
+</html>

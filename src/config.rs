@@ -10,10 +10,7 @@ use std::path::{Path, PathBuf};
 pub const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");
 
 /// Top-level keys that have to be present in the config.
-pub const CONFIG_KEYS: [&str; 8] = [
-    "ffmpeg_path",
-    "ffprobe_path",
-    "dee_path",
+pub const CONFIG_KEYS: [&str; 5] = [
     "temp_path",
     "logo",
     "max_instances",
@@ -29,6 +26,23 @@ pub enum MaxInstances {
     Text(String),
 }
 
+/// Defaults of the keys that were added later: configs without them still load.
+fn d_7_1_standard() -> i64 {
+    1536
+}
+fn d_7_1_bluray() -> i64 {
+    1536
+}
+fn d_atmos_streaming() -> i64 {
+    1024
+}
+fn d_atmos_standard() -> i64 {
+    1536
+}
+fn d_atmos_bluray() -> i64 {
+    1536
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DefaultBitrates {
     pub dd_1_0: i64,
@@ -37,8 +51,102 @@ pub struct DefaultBitrates {
     pub ddp_1_0: i64,
     pub ddp_2_0: i64,
     pub ddp_5_1: i64,
-    pub ddp_7_1: i64,
+    #[serde(default = "d_7_1_standard")]
+    pub ddp_7_1_standard: i64,
+    #[serde(default = "d_7_1_bluray")]
+    pub ddp_7_1_bluray: i64,
+    #[serde(default = "d_atmos_streaming")]
+    pub ddp_atmos_streaming: i64,
+    #[serde(default = "d_atmos_standard")]
+    pub ddp_atmos_standard: i64,
+    #[serde(default = "d_atmos_bluray")]
+    pub ddp_atmos_bluray: i64,
     pub ac4_2_0: i64,
+    pub ac4_5_1: i64,
+    pub ac4_atmos: i64,
+    pub aac_2_0: i64,
+}
+
+/// The profile of 7.1 DDP (`--ddp-mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DdpMode {
+    Standard,
+    Bluray,
+}
+
+impl DdpMode {
+    pub fn parse(s: &str) -> Option<DdpMode> {
+        match s {
+            "standard" => Some(DdpMode::Standard),
+            "bluray" => Some(DdpMode::Bluray),
+            _ => None,
+        }
+    }
+}
+
+/// The profile of DDP Atmos (`--ddp-atmos-mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DdpAtmosMode {
+    Streaming,
+    Standard,
+    Bluray,
+}
+
+impl DdpAtmosMode {
+    pub fn parse(s: &str) -> Option<DdpAtmosMode> {
+        match s {
+            "streaming" => Some(DdpAtmosMode::Streaming),
+            "standard" => Some(DdpAtmosMode::Standard),
+            "bluray" => Some(DdpAtmosMode::Bluray),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DdpAtmosMode::Streaming => "streaming",
+            DdpAtmosMode::Standard => "standard",
+            DdpAtmosMode::Bluray => "bluray",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct DefaultModes {
+    #[serde(default = "default_ddp_mode")]
+    pub ddp: DdpMode,
+    #[serde(default = "default_atmos_mode")]
+    pub ddp_atmos: DdpAtmosMode,
+}
+
+fn default_ddp_mode() -> DdpMode {
+    DdpMode::Standard
+}
+
+fn default_atmos_mode() -> DdpAtmosMode {
+    DdpAtmosMode::Streaming
+}
+
+impl Default for DefaultModes {
+    fn default() -> Self {
+        DefaultModes {
+            ddp: default_ddp_mode(),
+            ddp_atmos: default_atmos_mode(),
+        }
+    }
+}
+
+/// `[output]`: where the outputs go.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OutputConfig {
+    /// Empty: the current directory. `-o` overrides it.
+    #[serde(default)]
+    pub path: String,
+    /// Write each output next to its input (`-oi`).
+    #[serde(default)]
+    pub to_input: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,9 +160,6 @@ pub struct SummarySections {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub ffmpeg_path: String,
-    pub ffprobe_path: String,
-    pub dee_path: String,
     pub temp_path: String,
     /// Only checked to be a number; the logo is printed from the raw table
     /// before the other keys are validated.
@@ -63,6 +168,10 @@ pub struct Config {
     pub max_instances: MaxInstances,
     pub default_bitrates: DefaultBitrates,
     pub summary_sections: SummarySections,
+    #[serde(default)]
+    pub output: OutputConfig,
+    #[serde(default)]
+    pub default_modes: DefaultModes,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +241,37 @@ fn read_table(path: &Path) -> Result<toml::Table, String> {
     text.parse::<toml::Table>().map_err(|e| e.to_string())
 }
 
+/// The default bitrates and modes for `-lb`: the config's values, the program
+/// defaults (the template's) for what is missing or when there is no usable config.
+pub fn default_values(paths: &Paths) -> (DefaultBitrates, DefaultModes) {
+    default_values_of(read_table(&paths.config).ok())
+}
+
+pub fn default_values_of(user: Option<toml::Table>) -> (DefaultBitrates, DefaultModes) {
+    let template: toml::Table = CONFIG_TEMPLATE.parse().expect("template parses");
+    let fallback: Config = template
+        .clone()
+        .try_into()
+        .expect("template is a valid config");
+    let Some(user) = user else {
+        return (fallback.default_bitrates, fallback.default_modes);
+    };
+    let mut merged = template;
+    for section in ["default_bitrates", "default_modes"] {
+        if let (Some(toml::Value::Table(base)), Some(toml::Value::Table(over))) =
+            (merged.get_mut(section), user.get(section))
+        {
+            for (k, v) in over {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    match merged.try_into::<Config>() {
+        Ok(c) => (c.default_bitrates, c.default_modes),
+        Err(_) => (fallback.default_bitrates, fallback.default_modes),
+    }
+}
+
 /// Load the raw config table from the config file.
 fn load_table(paths: &Paths) -> Result<(PathBuf, toml::Table), String> {
     let path = &paths.config;
@@ -199,12 +339,17 @@ mod tests {
     #[test]
     fn template_deserializes() {
         let config: Config = toml::from_str(CONFIG_TEMPLATE).unwrap();
-        assert_eq!(config.ffmpeg_path, "ffmpeg");
-        assert_eq!(config.dee_path, "dee.exe");
         assert_eq!(config.temp_path, "");
         assert_eq!(config.max_instances, MaxInstances::Text("50%".into()));
         assert_eq!(config.default_bitrates.ddp_5_1, 1024);
-        assert_eq!(config.default_bitrates.ac4_2_0, 320);
+        let d = &config.default_bitrates;
+        assert_eq!((d.ac4_2_0, d.ac4_5_1, d.ac4_atmos), (256, 448, 448));
+        assert_eq!((d.ddp_atmos_streaming, d.aac_2_0), (1024, 256));
+        assert_eq!((d.ddp_7_1_standard, d.ddp_atmos_bluray), (1536, 1536));
+        assert_eq!(config.output.path, "");
+        assert!(!config.output.to_input);
+        assert_eq!(config.default_modes.ddp, DdpMode::Standard);
+        assert_eq!(config.default_modes.ddp_atmos, DdpAtmosMode::Streaming);
         assert!(config.summary_sections.deew_info && config.summary_sections.other);
     }
 
@@ -229,10 +374,46 @@ mod tests {
 
     #[test]
     fn missing_sub_key_is_an_error() {
-        let t = CONFIG_TEMPLATE.replace("    ac4_2_0 = 320\n", "");
-        let table: toml::Table = t.parse().unwrap();
-        let e = table.try_into::<Config>().unwrap_err();
-        assert!(e.message().contains("ac4_2_0"), "{}", e.message());
+        for key in ["ac4_atmos", "ddp_5_1", "aac_2_0", "ac4_5_1"] {
+            let t: String = CONFIG_TEMPLATE
+                .lines()
+                .filter(|l| !l.trim_start().starts_with(&format!("{key} =")))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            let table: toml::Table = t.parse().unwrap();
+            let e = table.try_into::<Config>().unwrap_err();
+            assert!(e.message().contains(key), "{}", e.message());
+        }
+    }
+
+    #[test]
+    fn old_tool_keys_are_ignored() {
+        let old = format!("dee_path = '/x'\nffmpeg_path = 'C:/ffmpeg.exe'\n{CONFIG_TEMPLATE}");
+        toml::from_str::<Config>(&old).unwrap();
+    }
+
+    #[test]
+    fn old_and_missing_new_keys_use_the_defaults() {
+        let old = "temp_path = ''\nlogo = 1\nmax_instances = 4\n\
+            [default_bitrates]\ndd_1_0 = 128\ndd_2_0 = 256\ndd_5_1 = 640\nddp_1_0 = 128\n\
+            ddp_2_0 = 256\nddp_5_1 = 1024\nddp_7_1 = 1536\nddp_atmos = 768\nac4_2_0 = 256\n\
+            ac4_5_1 = 448\nac4_atmos = 448\naac_2_0 = 256\n\
+            [summary_sections]\ndeew_info = true\nbinaries = true\ninput_info = true\n\
+            output_info = true\nother = true\n[gui]\noutput = '/x'\n";
+        let config: Config = toml::from_str(old).unwrap();
+        assert_eq!(config.default_bitrates.ddp_atmos_streaming, 1024);
+        assert_eq!(config.default_bitrates.ddp_7_1_standard, 1536);
+        assert_eq!(config.default_modes.ddp_atmos, DdpAtmosMode::Streaming);
+        assert!(config.output.path.is_empty());
+    }
+
+    #[test]
+    fn invalid_mode_is_an_error() {
+        let t = CONFIG_TEMPLATE.replace("ddp = 'standard'", "ddp = 'nope'");
+        let e = toml::from_str::<Config>(&t).unwrap_err();
+        assert!(e.message().contains("nope"), "{}", e.message());
+        let t = CONFIG_TEMPLATE.replace("ddp_atmos = 'streaming'", "ddp_atmos = 'x'");
+        assert!(toml::from_str::<Config>(&t).is_err());
     }
 
     #[test]
@@ -240,14 +421,7 @@ mod tests {
         let table: toml::Table = "logo = 1\ntemp_path = ''\n".parse().unwrap();
         assert_eq!(
             missing_keys(&table),
-            [
-                "ffmpeg_path",
-                "ffprobe_path",
-                "dee_path",
-                "max_instances",
-                "default_bitrates",
-                "summary_sections"
-            ]
+            ["max_instances", "default_bitrates", "summary_sections"]
         );
         let full: toml::Table = CONFIG_TEMPLATE.parse().unwrap();
         assert!(missing_keys(&full).is_empty());

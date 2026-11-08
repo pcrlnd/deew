@@ -100,14 +100,30 @@ szerkeszthető:
 ```toml
 [gui]
     progress = 'cli' # vagy 'native'
+    output = '' # kimeneti mappa (-o), üres: a home mappa
 ```
+
+A Kimeneti mappa mező értéke is ide kerül (`output`), és induláskor betöltődik.
 
 A kapcsoló csak létező `config.toml`-t módosít (futtasd egyszer a deew-t, hogy létrejöjjön),
 különben "Setting not saved" üzenetet ír. A GUI mód a CLI által írt eseményeket olvassa,
-amikor a `DEEW_EVENTS_FILE` be van állítva, ezért deew 3.6.2 vagy újabb kell hozzá.
+amikor a `DEEW_EVENTS_FILE` be van állítva, ezért deew 5.0.0 vagy újabb kell hozzá (`deew-gui`/`deew-web` 0.5.0 és újabb).
 A `deew-gui` és a `deew-web` is a mellettük lévő `deew` binárist futtatja; régebbinél
 a GUI mód egy megjegyzést mutat, hogy a CLI nem jelent folyamatot, ilyenkor válts
 CLI kimenetre.
+
+## Formátumok
+
+A formátum legördülő menü a DD, DDP, DDP Atmos, AC4, AC4 Atmos, AAC és TrueHD
+formátumokat kínálja. Az opciók űrlap a CLI szabályait követi: a `-dm` csak
+DD/DDP/AC4/AAC esetén, a `-dn` csak DD/DDP/AC4 esetén érhető el, az Atmos
+formátumoknak (TrueHD Atmos input, truehdd-vel dekódolva) pedig nincs `-dm`-jük
+és `-mo`-juk. GUI kimenetben az Atmos formátumok egy extra dekódolási szakaszt
+mutatnak a truehdd-hez. Maguk az eszközök (DEE 6.7, truehdd, dee_shim) a CLI
+mellé vagy a PATH-ba kerülnek, lásd a [fő leírást](../README_hu.md).
+
+macOS-en a `deew-gui-macos` / `deew-web-macos` release binárisokat használd
+(`chmod +x`, mint Linuxon).
 
 ## Felépítés
 

@@ -3,8 +3,17 @@ import { CheckIcon, CopyIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { copyText } from "@/lib/clipboard"
+import { cn } from "@/lib/utils"
 
-export function CopyBlock({ text, label }: { text: string; label: string }) {
+export function CopyBlock({
+  text,
+  label,
+  wrap = false,
+}: {
+  text: string
+  label: string
+  wrap?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<number | undefined>(undefined)
 
@@ -24,8 +33,18 @@ export function CopyBlock({ text, label }: { text: string; label: string }) {
   }
 
   return (
-    <div className="flex items-center gap-2 border bg-muted/50 py-1 pr-1 pl-3">
-      <pre className="min-w-0 flex-1 overflow-x-auto py-1 font-mono text-sm">
+    <div
+      className={cn(
+        "flex gap-2 border bg-muted/50 py-1 pr-1 pl-3",
+        wrap ? "items-start" : "items-center"
+      )}
+    >
+      <pre
+        className={cn(
+          "min-w-0 flex-1 py-1 font-mono text-sm",
+          wrap ? "break-all whitespace-pre-wrap" : "overflow-x-auto"
+        )}
+      >
         <code>{text}</code>
       </pre>
       <Button

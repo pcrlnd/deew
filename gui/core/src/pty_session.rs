@@ -20,9 +20,9 @@ pub type Result<T> = std::result::Result<T, String>;
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
 /// Time between two reads of the events file while it has no new data.
 const EVENTS_POLL: Duration = Duration::from_millis(50);
-/// Time between the polite interrupt and the hard kill in [`PtySession::stop`].
-#[cfg(unix)]
-const STOP_GRACE: Duration = Duration::from_secs(3);
+/// Time between the polite interrupt and the hard kill in [`PtySession::stop`]
+/// (deew removes its temp files and partial outputs when interrupted).
+const STOP_GRACE: Duration = Duration::from_secs(10);
 
 pub struct SpawnConfig {
     pub program: PathBuf,
@@ -250,6 +250,10 @@ impl PtySession {
     /// in a terminal, and kills them if they are still alive after a grace
     /// period.
     pub fn stop(&mut self) {
+        self.stop_with_grace(STOP_GRACE);
+    }
+
+    fn stop_with_grace(&mut self, grace: Duration) {
         if self.is_finished() {
             return;
         }
@@ -260,12 +264,28 @@ impl PtySession {
             signal_group(pid, libc::SIGINT);
             let exited = Arc::clone(&self.exited);
             std::thread::spawn(move || {
-                std::thread::sleep(STOP_GRACE);
+                std::thread::sleep(grace);
                 if !exited.load(Ordering::SeqCst) {
                     signal_group(pid, libc::SIGKILL);
+                    kill_session(pid);
                 }
             });
             return;
+        }
+        #[cfg(windows)]
+        if let Some(pid) = self.pid {
+            // ConPTY turns the Ctrl+C byte into a CTRL_C_EVENT for the
+            // processes of its console.
+            if self.write(&[0x03]).is_ok() {
+                let exited = Arc::clone(&self.exited);
+                std::thread::spawn(move || {
+                    std::thread::sleep(grace);
+                    if !exited.load(Ordering::SeqCst) {
+                        taskkill_tree(pid);
+                    }
+                });
+                return;
+            }
         }
         self.hard_kill();
     }
@@ -273,13 +293,18 @@ impl PtySession {
     fn hard_kill(&mut self) {
         #[cfg(windows)]
         if let Some(pid) = self.pid {
-            // Also takes down the child processes (DEE, ffmpeg, ...).
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .output();
+            taskkill_tree(pid);
         }
         let _ = self.killer.kill();
     }
+}
+
+/// Kills the process and its children (DEE, ffmpeg, ...).
+#[cfg(windows)]
+fn taskkill_tree(pid: u32) {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output();
 }
 
 #[cfg(unix)]
@@ -292,6 +317,18 @@ fn signal_group(pid: u32, signal: i32) {
     }
 }
 
+/// Kills every process of the session the child leads. deew runs its tools in
+/// their own process groups, which a kill of deew's group does not reach.
+#[cfg(unix)]
+fn kill_session(sid: u32) {
+    let _ = std::process::Command::new("pkill")
+        .args(["-KILL", "-s", &sid.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 impl Drop for PtySession {
     fn drop(&mut self) {
         if self.is_finished() {
@@ -299,7 +336,8 @@ impl Drop for PtySession {
         }
         #[cfg(unix)]
         if let Some(pid) = self.pid {
-            signal_group(pid, libc::SIGKILL);
+            // deew handles SIGTERM: it kills its tools, cleans up and exits.
+            signal_group(pid, libc::SIGTERM);
             return;
         }
         self.hard_kill();
@@ -400,7 +438,7 @@ mod tests {
             .find(|p| {
                 p.file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("deew-"))
+                    .is_some_and(|n| n.starts_with("deew-") && n.ends_with(".exe") == cfg!(windows))
             })
             .unwrap_or_else(|| panic!("no deew-<triple> sidecar in {}", dir.display()))
     }
@@ -417,9 +455,26 @@ mod tests {
             )],
         );
         assert_eq!(run.wait_exit(), 0);
-        let text = run.text();
-        assert!(text.contains("ddp_51"), "unexpected output: {text:?}");
-        assert!(text.contains("ac4_20"), "unexpected output: {text:?}");
+        // The output is a tree (`DDP:` header, `├─ 5.1: ...` leaves) that may
+        // carry ANSI colors; strip CSI sequences before matching.
+        let raw = run.text();
+        let mut text = String::new();
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next();
+                for n in chars.by_ref() {
+                    if ('@'..='~').contains(&n) {
+                        break;
+                    }
+                }
+            } else {
+                text.push(c);
+            }
+        }
+        for needle in ["DDP:", "AC4:", "├─ 5.1: ", "(default)"] {
+            assert!(text.contains(needle), "missing {needle:?} in: {text:?}");
+        }
     }
 
     #[test]
@@ -552,14 +607,61 @@ mod tests {
         }
 
         #[test]
+        fn drop_sends_sigterm() {
+            let dir = tempfile::tempdir().unwrap();
+            let marker = dir.path().join("marker");
+            let script = format!(
+                "trap 'echo term > {}; exit 0' TERM; echo started; while :; do sleep 0.1; done",
+                marker.display()
+            );
+            let run = sh(&script);
+            run.wait_for("started");
+            drop(run.session);
+            let start = Instant::now();
+            while !marker.exists() {
+                assert!(start.elapsed() < Duration::from_secs(5), "no SIGTERM");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        #[test]
+        fn escalation_kills_processes_in_other_groups() {
+            let mut run = sh("trap '' INT; set -m; sleep 100 & echo grandchild:$!; wait");
+            run.wait_for("grandchild:");
+            let text = run.text();
+            let pid: i32 = text
+                .split("grandchild:")
+                .nth(1)
+                .and_then(|t| t.split_whitespace().next())
+                .and_then(|t| t.parse().ok())
+                .expect("pid");
+            let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+            assert!(alive(pid));
+            run.session.stop_with_grace(Duration::from_secs(1));
+            run.wait_exit();
+            let start = Instant::now();
+            // A killed process may linger as a zombie until its parent reaps it.
+            while alive(pid) && !is_zombie(pid) {
+                assert!(start.elapsed() < Duration::from_secs(5), "still alive");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        fn is_zombie(pid: i32) -> bool {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .map(|s| s.rsplit(") ").next().is_some_and(|r| r.starts_with('Z')))
+                .unwrap_or(true)
+        }
+
+        #[test]
         fn stop_escalates_to_kill() {
             let mut run = sh("trap '' INT; echo started; while :; do sleep 1; done");
             run.wait_for("started");
-            run.session.stop();
+            run.session.stop_with_grace(Duration::from_secs(1));
             let start = Instant::now();
             let code = run.wait_exit();
             assert_ne!(code, 0);
-            assert!(start.elapsed() >= Duration::from_secs(2));
+            assert!(start.elapsed() >= Duration::from_millis(500));
         }
     }
 }

@@ -1,4 +1,4 @@
-export type Platform = "windows" | "linux" | "other"
+export type Platform = "windows" | "linux" | "macos" | "other"
 
 type NavigatorWithUAData = Navigator & {
   userAgentData?: { platform?: string }
@@ -9,6 +9,7 @@ export function detectPlatform(): Platform {
   const nav = navigator as NavigatorWithUAData
   const p = `${nav.userAgentData?.platform ?? ""} ${nav.platform ?? ""} ${nav.userAgent ?? ""}`
   if (/android|iphone|ipad|ipod|cros/i.test(p)) return "other"
+  if (/macintosh|mac os|macintel/i.test(p)) return "macos"
   if (/win/i.test(p)) return "windows"
   if (/linux|x11/i.test(p)) return "linux"
   return "other"

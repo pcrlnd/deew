@@ -164,10 +164,23 @@ export type OutputView = "cli" | "native"
 
 export interface GuiSettings {
   progress: OutputView
+  /** `output.path`: the output directory (-o), empty uses the default. */
+  output: string
+  /** `output.to_input`: save each output next to its input (-oi). */
+  toInput: boolean
 }
 
-/** The config's `[gui]` section. */
-export const guiSettings = (): Promise<GuiSettings> =>
+export interface LoadedGuiSettings extends GuiSettings {
+  /** The folder deew runs in (the home folder), empty when unknown. */
+  defaultOutput: string
+  /** `default_modes.ddp` of the config. */
+  defaultDdpMode: string
+  /** `default_modes.ddp_atmos` of the config. */
+  defaultDdpAtmosMode: string
+}
+
+/** The GUI settings of the config (`gui.progress`, `output.*`, `default_modes`). */
+export const guiSettings = (): Promise<LoadedGuiSettings> =>
   inWeb() ? requestJson("/api/settings") : invoke("gui_settings")
 
 export const saveGuiSettings = (settings: GuiSettings): Promise<void> =>

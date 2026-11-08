@@ -8,7 +8,45 @@ use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 pub const COOKIE_NAME: &str = "deew_session";
-pub const SESSION_LIFETIME: Duration = Duration::from_secs(7 * 24 * 3600);
+const DAY: u64 = 24 * 3600;
+/// Default login lifetime ("remember" missing or unknown).
+pub const SESSION_LIFETIME: Duration = Duration::from_secs(7 * DAY);
+
+/// Maps the login `remember` choice to (server-side lifetime, cookie Max-Age
+/// in seconds). `session` is a browser-session cookie (no Max-Age) whose
+/// server-side lifetime is bounded to one day. Missing/unknown means `7d`.
+pub fn remember_lifetime(value: Option<&str>) -> (Duration, Option<u64>) {
+    let days = match value {
+        Some("session") => return (Duration::from_secs(DAY), None),
+        Some("1d") => 1,
+        Some("30d") => 30,
+        _ => 7,
+    };
+    (Duration::from_secs(days * DAY), Some(days * DAY))
+}
+
+/// The `Set-Cookie` value for a session token. `max_age` None = session cookie.
+pub fn session_cookie(token: &str, max_age: Option<u64>, secure: bool) -> String {
+    let mut cookie = format!("{COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/");
+    if let Some(seconds) = max_age {
+        cookie.push_str(&format!("; Max-Age={seconds}"));
+    }
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// The `Set-Cookie` value that clears the session cookie.
+pub fn clear_cookie(secure: bool) -> String {
+    let mut cookie = format!(
+        "{COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
 
 /// Hashes a password with argon2id (default parameters, random salt) into a PHC string.
 pub fn hash_password(password: &str) -> Result<String, String> {
@@ -59,10 +97,6 @@ pub struct Sessions {
 impl Sessions {
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
         self.map.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    pub fn create(&self) -> Result<String, String> {
-        self.create_with_lifetime(SESSION_LIFETIME)
     }
 
     pub fn create_with_lifetime(&self, lifetime: Duration) -> Result<String, String> {
@@ -140,12 +174,38 @@ mod tests {
     #[test]
     fn sessions_expire_and_logout() {
         let s = Sessions::default();
-        let t = s.create().unwrap();
+        let t = s.create_with_lifetime(SESSION_LIFETIME).unwrap();
         assert!(s.is_valid(&t));
         assert!(!s.is_valid("other"));
         s.remove(&t);
         assert!(!s.is_valid(&t));
         let t = s.create_with_lifetime(Duration::ZERO).unwrap();
         assert!(!s.is_valid(&t));
+    }
+
+    #[test]
+    fn remember_choices() {
+        let day = Duration::from_secs(86400);
+        assert_eq!(remember_lifetime(Some("session")), (day, None));
+        assert_eq!(remember_lifetime(Some("1d")), (day, Some(86400)));
+        assert_eq!(remember_lifetime(Some("7d")), (day * 7, Some(604800)));
+        assert_eq!(remember_lifetime(Some("30d")), (day * 30, Some(2592000)));
+        assert_eq!(remember_lifetime(None), (day * 7, Some(604800)));
+        assert_eq!(remember_lifetime(Some("forever")), (day * 7, Some(604800)));
+    }
+
+    #[test]
+    fn cookie_strings() {
+        assert_eq!(
+            session_cookie("t", None, false),
+            "deew_session=t; HttpOnly; SameSite=Strict; Path=/"
+        );
+        assert_eq!(
+            session_cookie("t", Some(86400), true),
+            "deew_session=t; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400; Secure"
+        );
+        assert!(clear_cookie(false).contains("Max-Age=0"));
+        assert!(!clear_cookie(false).contains("Secure"));
+        assert!(clear_cookie(true).ends_with("; Secure"));
     }
 }
