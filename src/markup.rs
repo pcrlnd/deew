@@ -126,6 +126,9 @@ pub fn render(s: &str, color: bool) -> String {
     // (tag text, SGR parameters) of the currently open tags.
     let mut stack: Vec<(&str, String)> = Vec::new();
     let mut emitted = false;
+    // Set after a line break while a style is open: the style has to be
+    // re-applied before the next visible text on the new line.
+    let mut pending = false;
 
     let restyle = |out: &mut String, stack: &[(&str, String)]| {
         if color {
@@ -138,15 +141,42 @@ pub fn render(s: &str, color: bool) -> String {
 
     for token in tokens(s) {
         match token {
-            Token::Text(text) => out.push_str(text),
+            Token::Text(text) if !color || stack.is_empty() => out.push_str(text),
+            Token::Text(text) => {
+                // Every line must end with default attributes, otherwise
+                // some terminals (ConPTY) pad it with styled spaces.
+                for piece in text.split_inclusive('\n') {
+                    let line = piece.strip_suffix('\n');
+                    let body = line.unwrap_or(piece);
+                    let body = body.strip_suffix('\r').unwrap_or(body);
+                    if !body.is_empty() {
+                        if pending {
+                            for (_, codes) in &stack {
+                                out.push_str(&format!("\x1b[{codes}m"));
+                            }
+                            pending = false;
+                        }
+                        out.push_str(body);
+                    }
+                    if line.is_some() {
+                        if !pending {
+                            out.push_str(RESET);
+                        }
+                        out.push_str(&piece[body.len()..]);
+                        pending = true;
+                    }
+                }
+            }
             Token::Open(tag, codes) => {
                 stack.push((tag, codes));
                 restyle(&mut out, &stack);
+                pending = false;
                 emitted = true;
             }
             Token::Close(closing) => {
                 close_tag(&mut stack, closing);
                 restyle(&mut out, &stack);
+                pending = false;
                 emitted = true;
             }
         }
@@ -335,6 +365,56 @@ mod tests {
             render(&balanced("[bold cyan]x"), true),
             "\x1b[0m\x1b[1;36mx\x1b[0m\x1b[0m"
         );
+    }
+
+    /// Every line must end in default attributes or contain no escapes.
+    fn assert_lines_reset(ansi: &str) {
+        for line in ansi.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            assert!(
+                !line.contains('\x1b') || line.ends_with(RESET),
+                "line ends styled: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lines_end_with_reset() {
+        let r = render("[not bold white]a\nb[/not bold white]", true);
+        assert_lines_reset(&r);
+        assert!(r.contains("\x1b[22;37mb"), "{r:?}");
+        assert_eq!(render("a\nb", true), "a\nb");
+        assert_eq!(render("a\nb", false), "a\nb");
+        assert_eq!(
+            render("[bold]a\r\nb[/bold]", true),
+            "\x1b[0m\x1b[1ma\x1b[0m\r\n\x1b[1mb\x1b[0m\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn nested_styles_survive_newline() {
+        let r = render("[bold cyan]x [red]y\nz[/red] w[/bold cyan]", true);
+        assert_lines_reset(&r);
+        let style_y = "\x1b[0m\x1b[1;36m\x1b[31my";
+        assert!(r.contains(style_y), "{r:?}");
+        assert!(r.contains("\n\x1b[1;36m\x1b[31mz"), "{r:?}");
+    }
+
+    #[test]
+    fn blank_lines_in_styled_block() {
+        let r = render("[bold]a\n\n\nb[/bold]", true);
+        assert_lines_reset(&r);
+        assert_eq!(r, "\x1b[0m\x1b[1ma\x1b[0m\n\n\n\x1b[1mb\x1b[0m\x1b[0m");
+        assert_lines_reset(&render("[red]a\n[/red]\n[blue]\n", true));
+    }
+
+    #[test]
+    fn help_lines_end_with_reset() {
+        let help = crate::help::wrap_help(crate::help::HELP, 80);
+        assert_lines_reset(&render(
+            &format!("[not bold white]{help}[/not bold white]"),
+            true,
+        ));
     }
 
     #[test]

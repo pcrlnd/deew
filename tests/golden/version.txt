@@ -1,4 +1,4 @@
-deew 5.0.0
+deew 5.0.1
 DEE      not found
 truehdd  not found
 dee_shim not found

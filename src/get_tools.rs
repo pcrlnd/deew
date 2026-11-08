@@ -192,6 +192,12 @@ fn parse_sha256(text: &str, name: &str) -> Option<String> {
     None
 }
 
+/// The last path segment of a URL, without any `?query` or `#fragment`.
+fn url_file_name(url: &str) -> &str {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02x}");
@@ -578,7 +584,8 @@ fn fetch_archive(
             let url = format!("{}.sha256", transfer.final_url);
             let text =
                 get_text(agent, &url).map_err(|e| format!("cannot read the checksum: {e}"))?;
-            Some(parse_sha256(&text, "").ok_or("the checksum file has no SHA256")?)
+            let name = url_file_name(&transfer.final_url);
+            Some(parse_sha256(&text, name).ok_or("the checksum file has no SHA256")?)
         }
     };
     let total = transfer.total;
@@ -962,29 +969,51 @@ pub fn run(exe_dir: &Path) -> ! {
     });
     interrupt::jobs_ended();
 
+    // Finish the display before anything else is printed: dropping the
+    // MultiProgress (and the bars) stops the tickers and writes the newline
+    // that ends the last bar line. `process::exit` runs no destructors, so
+    // without this the cursor stays at the end of the last bar line.
+    let hidden = multi.is_hidden();
+    let names: Vec<&'static str> = rows.iter().map(|r| r.name).collect();
+    let finals: Vec<_> = rows
+        .iter()
+        .map(|r| *r.state.lock().expect("row state"))
+        .collect();
+    drop(rows);
+    drop(multi);
+    if !hidden {
+        // indicatif leaves the cursor at the end of the last bar line, which
+        // is as wide as the terminal (pending wrap). Print the line break
+        // now, with no colour active: otherwise the first character of the
+        // next line triggers the wrap (and the scroll) with the red
+        // background of `ERROR:` set, and the terminal fills the new line
+        // with it.
+        println!();
+    }
+    let _ = std::io::stdout().flush();
+
     if interrupt::is_interrupted() {
         std::process::exit(interrupt::EXIT_CODE);
     }
 
     // Without a terminal nothing was drawn: print the final lines.
-    if multi.is_hidden() {
+    if hidden {
         let cells = bar_cells();
-        for row in &rows {
-            let (status, fraction) = *row.state.lock().expect("row state");
-            println!("{}", row_text(row.name, status, fraction, false, cells));
+        for (name, (status, fraction)) in names.iter().zip(&finals) {
+            println!("{}", row_text(name, *status, *fraction, false, cells));
         }
     }
 
     let mut failed = false;
     let mut saved = Vec::new();
-    for (row, outcome) in rows.iter().zip(&outcomes) {
+    for (&name, outcome) in names.iter().zip(&outcomes) {
         match outcome.lock().expect("outcome").take() {
-            Some(Ok(())) => saved.push(row.name),
+            Some(Ok(())) => saved.push(name),
             Some(Err(reason)) => {
                 failed = true;
                 rprintln!(
                     "[color(231) on red]ERROR:[/color(231) on red] failed to get [bold yellow]{}[/bold yellow]: {}",
-                    row.name,
+                    name,
                     escape(&reason)
                 );
             }
@@ -1202,6 +1231,23 @@ mod tests {
             LABEL_WIDTH
         );
         assert_eq!(label("dee_shim", Status::Done).chars().count(), LABEL_WIDTH);
+    }
+
+    #[test]
+    fn url_file_names() {
+        let url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip";
+        assert_eq!(url_file_name(url), "ffmpeg.zip");
+        assert_eq!(url_file_name(&format!("{url}?x=a/b#frag")), "ffmpeg.zip");
+        assert_eq!(url_file_name("ffmpeg.zip"), "ffmpeg.zip");
+    }
+
+    #[test]
+    fn sha256_next_to_final_url() {
+        let url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip";
+        let hash = "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924";
+        let text = format!("{hash}  ffmpeg.zip\n");
+        assert_eq!(parse_sha256(&text, url_file_name(url)), Some(hash.into()));
+        assert_eq!(parse_sha256(&text, ""), None);
     }
 
     #[test]

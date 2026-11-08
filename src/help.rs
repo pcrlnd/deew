@@ -428,11 +428,10 @@ mod tests {
         let ansi = render(&format!("[not bold white]{out}[/not bold white]"), true);
         // the text after each break carries the same SGR state as before it
         let at = ansi.find("gamma").unwrap();
-        let state = &ansi[ansi[..at].rfind("\x1b[0m").unwrap()..at];
-        assert!(
-            state.starts_with("\x1b[0m\x1b[22;37m\x1b[4;35m"),
-            "{state:?}"
-        );
+        let head = &ansi[..at];
+        let from = (head.rfind("\x1b[0m").unwrap() + 4).max(head.rfind('\n').unwrap() + 1);
+        let state = &ansi[from..at];
+        assert!(state.starts_with("\x1b[22;37m\x1b[4;35m"), "{state:?}");
         assert!(ansi[..at].contains('\n'));
         assert_eq!(strip(&out).split("\n").count(), out.split('\n').count());
     }

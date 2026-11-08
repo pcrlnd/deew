@@ -1,3 +1,10 @@
+# deew 5.0.1:
+- `-gt` on macOS: downloading ffmpeg and ffprobe failed with `the checksum
+  file has no SHA256`
+- `-gt`: the first error line no longer gets a red background up to the end
+  of the line (e.g. in macOS Terminal)
+- the colors are reset at the end of every line, improving `-h` and `-lb`
+
 # deew 5.0.0:
 - DEE 6.7.0 support: deew now drives DEE's command line tools
   (`dee_ddp_encoder`, `dee_dthd_encoder` etc...),
