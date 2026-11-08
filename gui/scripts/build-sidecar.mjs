@@ -4,6 +4,9 @@
 //
 // The target is TAURI_ENV_TARGET_TRIPLE when set (the Tauri CLI sets it for
 // beforeBuildCommand / beforeDevCommand), else the host triple of rustc.
+// For universal-apple-darwin it writes the two per-arch copies
+// (deew-aarch64-apple-darwin, deew-x86_64-apple-darwin) plus the lipo'd
+// deew-universal-apple-darwin.
 
 import { execFileSync, spawnSync } from "node:child_process"
 import { copyFileSync, mkdirSync } from "node:fs"
@@ -46,11 +49,19 @@ const ext = target.includes("windows") ? ".exe" : ""
 const dest = join(binariesDir, `deew-${target}${ext}`)
 mkdirSync(binariesDir, { recursive: true })
 
+const ARCHS = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+
 if (target === "universal-apple-darwin") {
-  const parts = ["aarch64-apple-darwin", "x86_64-apple-darwin"].map((t) => {
+  const parts = ARCHS.map((t) => {
     cargoBuild(t)
     return builtBinary(t)
   })
+  // tauri-build also needs the per-arch sidecars when compiling each arch.
+  for (const [i, t] of ARCHS.entries()) {
+    const archDest = join(binariesDir, `deew-${t}`)
+    copyFileSync(parts[i], archDest)
+    console.log(`sidecar: ${archDest}`)
+  }
   execFileSync("lipo", ["-create", "-output", dest, ...parts], {
     stdio: "inherit",
   })
