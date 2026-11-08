@@ -15,6 +15,16 @@ PLATFORMS = [
     ("🍎", ["deew-macos", "deew-gui-macos", "deew-web-macos"]),
 ]
 
+ROWS = [
+    ("🪟", "Windows", ["deew.exe", "deew-gui.exe", "deew-web.exe"]),
+    ("🐧", "Linux", ["deew", "deew-gui", "deew-web"]),
+    ("🍎", "macOS", ["deew-macos", "deew-gui-macos", "deew-web-macos"]),
+]
+
+
+class TelegramError(Exception):
+    pass
+
 
 def components(args):
     parts = (["CLI"] if args.cli else []) + (["GUI", "Web"] if args.gui_web else [])
@@ -81,6 +91,34 @@ def done_caption(args):
     ).rstrip()
 
 
+def md_escape(text):
+    return "".join("\\" + c if c in "[]()|*_`\\" else c for c in text)
+
+
+def done_markdown(args):
+    base = f"https://github.com/{args.repo}/releases"
+    info = built_platforms(args)
+    if args.started_at:
+        info += f" - ⏱️ {duration(args.started_at)}"
+    assets = read_assets(args.assets)
+    rows = []
+    for emoji, label, names in ROWS:
+        if not any(n in assets for n in names):
+            continue
+        cells = [
+            f"[{md_escape(n)}]({base}/download/{args.version}/{n})" if n in assets else "-"
+            for n in names
+        ]
+        rows.append(f"| {emoji} **{label}** | " + " | ".join(cells) + " |")
+    out = (
+        f"✅ **[{md_escape('deew ' + args.version)}]({base}/tag/{args.version})**"
+        f" is out! ({components(args)})\n\n{info}\n\n"
+    )
+    if rows:
+        out += "| | CLI | GUI | Web |\n|:--|:--|:--|:--|\n" + "\n".join(rows) + "\n\n"
+    return out + "![](tg://document?id=chlog)\n"
+
+
 def post(token, method, body, content_type):
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/{method}",
@@ -94,12 +132,12 @@ def post(token, method, body, content_type):
             desc = json.loads(e.read()).get("description", "")
         except Exception:
             desc = ""
-        sys.exit(f"Telegram error (HTTP {e.code}): {desc}")
+        raise TelegramError(f"Telegram error (HTTP {e.code}): {desc}") from None
     except urllib.error.URLError as e:
-        sys.exit(f"Telegram request failed: {e.reason}")
+        raise TelegramError(f"Telegram request failed: {e.reason}") from None
 
 
-def multipart(fields, filename, data):
+def multipart(fields, filename, data, field="document"):
     boundary = uuid.uuid4().hex
     out = b""
     for k, v in fields.items():
@@ -107,13 +145,45 @@ def multipart(fields, filename, data):
             f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
         ).encode()
     out += (
-        f'--{boundary}\r\nContent-Disposition: form-data; name="document"; '
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; '
         f'filename="{filename}"\r\nContent-Type: text/markdown\r\n\r\n'
     ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
     return out, f"multipart/form-data; boundary={boundary}"
 
 
+def send_fallback(args, caption, data):
+    body, ctype = multipart(
+        {"chat_id": args.chat, "parse_mode": "HTML", "caption": caption},
+        "changelog.md",
+        data,
+    )
+    post(args.token, "sendDocument", body, ctype)
+
+
+def send_rich(args, markdown, data):
+    rich = {
+        "markdown": markdown,
+        "media": [
+            {"id": "chlog", "media": {"type": "document", "media": "attach://chlogfile"}}
+        ],
+    }
+    body, ctype = multipart(
+        {"chat_id": args.chat, "rich_message": json.dumps(rich)},
+        "changelog.md",
+        data,
+        field="chlogfile",
+    )
+    post(args.token, "sendRichMessage", body, ctype)
+
+
 def main():
+    try:
+        run()
+    except TelegramError as e:
+        sys.exit(str(e))
+
+
+def run():
     p = argparse.ArgumentParser()
     p.add_argument("command", choices=["start", "done"])
     p.add_argument("--token", default="")
@@ -146,17 +216,19 @@ def main():
         return
 
     caption = done_caption(args)
+    markdown = done_markdown(args)
     data = latest_changelog(args.changelog).encode("utf-8")
     if args.dry_run:
+        print(markdown)
+        print(f"[document: changelog.md, {len(data)} bytes]")
+        print("--- fallback caption ---")
         print(caption)
-        print(f"\n[document: changelog.md, {len(data)} bytes]")
         return
-    body, ctype = multipart(
-        {"chat_id": args.chat, "parse_mode": "HTML", "caption": caption},
-        "changelog.md",
-        data,
-    )
-    post(args.token, "sendDocument", body, ctype)
+    try:
+        send_rich(args, markdown, data)
+    except TelegramError as e:
+        print(f"Warning: sendRichMessage failed, falling back to sendDocument: {e}", file=sys.stderr)
+        send_fallback(args, caption, data)
 
 
 if __name__ == "__main__":
