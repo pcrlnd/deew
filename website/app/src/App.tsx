@@ -3,6 +3,7 @@ import { CircleCheckIcon, DownloadIcon, ExternalLinkIcon } from "lucide-react"
 import {
   AppleIcon,
   GithubIcon,
+  KofiIcon,
   LinuxIcon,
   MoneroIcon,
   WindowsIcon,
@@ -13,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { features } from "@/features"
-import { detectPlatform, LATEST, RELEASES, REPO } from "@/lib/platform"
+import { detectPlatform, KOFI, LATEST, RELEASES, REPO } from "@/lib/platform"
 
 function DownloadButton({
   platform,
@@ -252,40 +253,44 @@ export default function App() {
             Donate
           </h2>
           <p className="mt-2 mb-6 max-w-2xl text-muted-foreground">
-            If you like deew, you can support the people behind it with Monero.
+            If you like deew, you can support the people behind it on Ko-fi or
+            with Monero.
           </p>
 
           <div className="border bg-card text-card-foreground">
-            {[
-              {
-                label: "Donate Monero to pcroland",
-                short: "pcroland",
-                address:
-                  "42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL",
-              },
-              {
-                label:
-                  "Donate Monero to rainbaby (developer of truehdd and dee_shim)",
-                short: "rainbaby",
-                address:
-                  "47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U",
-              },
-            ].map(({ label, short, address }) => (
-              <div
-                key={short}
-                className="flex flex-col gap-2 border-b p-4 last:border-b-0"
+            <div className="flex flex-col gap-3 border-b p-4">
+              <p className="text-sm font-medium">pcroland</p>
+              <a
+                className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                href={KOFI}
               >
-                <p className="flex items-start gap-2 text-sm font-medium">
+                <KofiIcon className="size-4 shrink-0 text-[#ff6433]" />
+                Ko-fi
+                <ExternalLinkIcon className="size-3" aria-hidden="true" />
+              </a>
+              <div className="flex flex-col gap-2">
+                <p className="flex items-start gap-2 text-sm text-muted-foreground">
                   <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />
-                  {label}
+                  Monero
                 </p>
                 <CopyBlock
-                  text={address}
-                  label={`${short} Monero address`}
+                  text="42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL"
+                  label="pcroland Monero address"
                   wrap
                 />
               </div>
-            ))}
+            </div>
+            <div className="flex flex-col gap-2 p-4">
+              <p className="flex items-start gap-2 text-sm font-medium">
+                <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />
+                rainbaby (developer of truehdd and dee_shim)
+              </p>
+              <CopyBlock
+                text="47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U"
+                label="rainbaby Monero address"
+                wrap
+              />
+            </div>
           </div>
         </section>
       </main>

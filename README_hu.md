@@ -229,14 +229,16 @@ több formátum/bitráta kódolása egy ideiglenes fájl készítésével
 [https://t.me/deew_supp](https://t.me/deew_supp)
 
 # Támogatás
-Ha tetszik a deew, Moneróval támogathatod a mögötte álló embereket.
+Ha tetszik a deew, Ko-fi-on vagy Moneróval támogathatod a mögötte álló embereket.
 
-Monero adomány pcrolandnek:
-```
-42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL
-```
+pcroland:
+- <img src="https://deew.app/ko-fi.svg" height="14"> [Ko-fi](https://ko-fi.com/pcrlnd)
+- Monero:
+  ```
+  42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL
+  ```
 
-Monero adomány rainbabynek (a truehdd és a dee_shim fejlesztője):
+rainbaby (a truehdd és a dee_shim fejlesztője):
 ```
 47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U
 ```

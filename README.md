@@ -228,14 +228,16 @@ encode multiple formats/bitrates while creating the temp file only once
 [https://t.me/deew_supp](https://t.me/deew_supp)
 
 # Donate
-If you like deew, you can support the people behind it with Monero.
+If you like deew, you can support the people behind it on Ko-fi or with Monero.
 
-Donate Monero to pcroland:
-```
-42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL
-```
+pcroland:
+- <img src="https://deew.app/ko-fi.svg" height="14"> [Ko-fi](https://ko-fi.com/pcrlnd)
+- Monero:
+  ```
+  42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL
+  ```
 
-Donate Monero to rainbaby (developer of truehdd and dee_shim):
+rainbaby (developer of truehdd and dee_shim):
 ```
 47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U
 ```
