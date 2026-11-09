@@ -29,7 +29,10 @@ function NavLink({
 
 export function SiteHeader({ current }: { current: SitePage }) {
   return (
-    <nav aria-label="Site" className="border-b">
+    <nav
+      aria-label="Site"
+      className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur"
+    >
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
         <a href={HOME} className="inline-flex items-center gap-2">
           <img
