@@ -19,3 +19,5 @@ export const REPO = "https://github.com/pcrlnd/deew"
 export const RELEASES = `${REPO}/releases`
 export const LATEST = `${REPO}/releases/latest/download/`
 export const KOFI = "https://ko-fi.com/pcrlnd"
+export const HOME = "./"
+export const TOOL_CHAIN = "tool-chain"

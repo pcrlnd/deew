@@ -1,0 +1,506 @@
+/* Styles of the tool chain page, scoped under .tc so the element selectors
+   below do not leak onto the shared header and footer. Colours come from the
+   theme in index.css; only the extra tokens live here. */
+.tc {
+  --tool-bg: color-mix(in oklch, var(--primary) 35%, var(--card));
+  --tool-fg: var(--chart-1);
+  --tool-bd: var(--chart-2);
+  --emerald: oklch(0.596 0.145 163.225);
+  --amber: oklch(0.666 0.179 58.318);
+  --violet: oklch(0.541 0.281 293.009);
+  --file-bg: color-mix(in oklch, var(--emerald) 24%, var(--card));
+  --file-fg: oklch(0.845 0.143 164.978);
+  --file-bd: var(--emerald);
+  --step-bg: color-mix(in oklch, var(--amber) 24%, var(--card));
+  --step-fg: oklch(0.879 0.169 91.605);
+  --step-bd: var(--amber);
+  --cond-fg: oklch(0.702 0.183 293.541);
+  --code-bg: oklch(0.18 0.006 285.885);
+  --line: var(--muted-foreground);
+
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+
+  * {
+    border-radius: 0;
+  }
+  ul {
+    list-style: disc;
+  }
+
+  .wrap {
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 40px 16px 72px;
+    display: grid;
+    gap: 48px;
+  }
+  header {
+    display: grid;
+    gap: 12px;
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  h1 {
+    font-size: clamp(28px, 4.4vw, 40px);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    margin: 0;
+    text-wrap: balance;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h3 {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h4 {
+    font-size: 11px;
+    font-weight: 500;
+    margin: 0;
+    color: var(--muted-foreground);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  h2 svg {
+    width: 18px;
+    height: 18px;
+    color: var(--primary);
+  }
+  h3 svg {
+    width: 16px;
+    height: 16px;
+    color: var(--tool-fg);
+  }
+  p {
+    margin: 0;
+    max-width: 72ch;
+  }
+  .lede {
+    font-size: 15px;
+    color: var(--muted-foreground);
+  }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--muted);
+    padding: 1px 5px;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .sw {
+    width: 13px;
+    height: 13px;
+    border: 1px solid;
+    display: inline-block;
+  }
+  .sw.step {
+    background: var(--step-bg);
+    border-color: var(--step-bd);
+  }
+  .sw.tool {
+    background: var(--tool-bg);
+    border-color: var(--tool-bd);
+  }
+  .sw.file {
+    background: var(--file-bg);
+    border-color: var(--file-bd);
+  }
+  .sw.opt {
+    background: transparent;
+    border-color: var(--muted-foreground);
+    border-style: dashed;
+  }
+
+  section {
+    display: grid;
+    gap: 16px;
+  }
+  .sec-head {
+    display: grid;
+    gap: 4px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+  .sec-head p {
+    color: var(--muted-foreground);
+  }
+
+  /* ---------- overview diagram ---------- */
+  .diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 12px;
+    overflow-x: auto;
+  }
+  .diagram svg.dg {
+    display: block;
+    width: 100%;
+    min-width: 900px;
+    height: auto;
+  }
+  .diagram .b-step {
+    fill: var(--step-bg);
+    stroke: var(--step-bd);
+  }
+  .diagram .b-tool {
+    fill: var(--tool-bg);
+    stroke: var(--tool-bd);
+  }
+  .diagram .b-file {
+    fill: var(--file-bg);
+    stroke: var(--file-bd);
+  }
+  .diagram .b-frame {
+    fill: color-mix(in oklch, var(--violet) 6%, transparent);
+    stroke: var(--violet);
+    stroke-dasharray: 6 4;
+  }
+  .diagram .dash {
+    stroke-dasharray: 5 4;
+  }
+  .diagram rect {
+    stroke-width: 1;
+  }
+  .diagram .t-step {
+    fill: var(--step-fg);
+  }
+  .diagram .t-tool {
+    fill: var(--tool-fg);
+  }
+  .diagram .t-file {
+    fill: var(--file-fg);
+  }
+  .diagram .node.step {
+    color: var(--step-fg);
+  }
+  .diagram .node.tool {
+    color: var(--tool-fg);
+  }
+  .diagram .node.file {
+    color: var(--file-fg);
+  }
+  .diagram .node.shim,
+  .diagram .t-shim {
+    color: var(--cond-fg);
+    fill: var(--cond-fg);
+  }
+  .diagram .t-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .diagram .t-sub {
+    font-family: var(--font-sans);
+    font-size: 11px;
+  }
+  .diagram .wire {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 1.4;
+  }
+  .diagram .wire.opt {
+    stroke-dasharray: 5 4;
+  }
+  .diagram .arrowhead {
+    fill: var(--line);
+  }
+  .diagram .lbl {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted-foreground);
+    paint-order: stroke;
+    stroke: var(--card);
+    stroke-width: 5px;
+    stroke-linejoin: round;
+  }
+
+  /* ---------- chains ---------- */
+  .chains {
+    display: grid;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .chain {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 6px 16px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .chain:last-child {
+    border-bottom: 0;
+  }
+  .chain .when {
+    font-size: 13px;
+    min-width: 0;
+  }
+  .chain .when b {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  .chain .when small {
+    display: block;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 4px;
+    min-width: 0;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 0 8px;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .chip.tool {
+    background: var(--tool-bg);
+    color: var(--tool-fg);
+    border-color: var(--tool-bd);
+  }
+  .chip.file {
+    background: var(--file-bg);
+    color: var(--file-fg);
+    border-color: var(--file-bd);
+  }
+  .chip.step {
+    background: var(--step-bg);
+    color: var(--step-fg);
+    border-color: var(--step-bd);
+  }
+  .chip.opt {
+    border-style: dashed;
+  }
+  .arr {
+    color: var(--muted-foreground);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 0 2px;
+    white-space: nowrap;
+  }
+  .alt {
+    display: inline-grid;
+    gap: 4px;
+    padding-right: 8px;
+    margin-right: 2px;
+    border-right: 2px solid var(--line);
+  }
+  .alt-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ---------- module cards ---------- */
+  .modules {
+    display: grid;
+    gap: 20px;
+  }
+  .module {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--tool-bd);
+    display: grid;
+  }
+  .module:has(.tag.step) {
+    border-top-color: var(--step-bd);
+  }
+  .module-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .module-head .tag {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 0 8px;
+    border: 1px solid var(--tool-bd);
+    color: var(--tool-fg);
+    background: var(--tool-bg);
+  }
+  .module-head .tag.step {
+    border-color: var(--step-bd);
+    color: var(--step-fg);
+    background: var(--step-bg);
+  }
+  .module-head p {
+    flex-basis: 100%;
+    color: var(--muted-foreground);
+    font-size: 13px;
+  }
+  .ports {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    border-bottom: 1px solid var(--border);
+  }
+  .port {
+    padding: 10px 16px;
+    display: grid;
+    gap: 4px;
+    align-content: start;
+    min-width: 0;
+  }
+  .port + .port {
+    border-left: 1px solid var(--border);
+  }
+  .port h4 {
+    color: var(--file-fg);
+  }
+  .port ul {
+    margin: 0;
+    padding-left: 16px;
+    font-size: 13px;
+    display: grid;
+    gap: 2px;
+  }
+  .module-body {
+    padding: 14px 16px 16px;
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  pre.argv {
+    margin: 0;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.75;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .argv .p {
+    color: var(--tool-fg);
+    font-weight: 600;
+  }
+  .argv .v {
+    color: var(--file-fg);
+    font-weight: 600;
+  }
+  .argv .c {
+    color: var(--cond-fg);
+    font-style: italic;
+  }
+  .argv .m {
+    color: var(--muted-foreground);
+  }
+  .argv .s {
+    color: var(--primary-foreground);
+    background: var(--primary);
+    font-weight: 600;
+    padding: 0 3px;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 7px 11px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+    background: var(--muted);
+  }
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  td code {
+    white-space: nowrap;
+  }
+  td.wrapcode code {
+    white-space: normal;
+    word-break: break-all;
+  }
+
+  footer {
+    color: var(--muted-foreground);
+    font-size: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+
+  @media (max-width: 640px) {
+    .chain {
+      grid-template-columns: 1fr;
+    }
+    .port + .port {
+      border-left: 0;
+      border-top: 1px solid var(--border);
+    }
+  }
+
+  @media (min-width: 640px) {
+    .wrap {
+      padding-inline: 24px;
+    }
+  }
+}

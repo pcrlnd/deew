@@ -10,6 +10,7 @@ import {
 } from "@/components/brand-icons"
 import { CopyBlock } from "@/components/copy-block"
 import { GetStarted } from "@/components/get-started"
+import { SiteFooter, SiteHeader } from "@/components/site-shell"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -62,6 +63,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
+      <SiteHeader current="home" />
       <header className="border-b">
         <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-10 sm:px-6 sm:py-16 lg:grid-cols-2">
           <div className="min-w-0">
@@ -295,18 +297,7 @@ export default function App() {
         </section>
       </main>
 
-      <footer className="border-t">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-6 text-sm text-muted-foreground sm:px-6">
-          <span>deew - Dolby Encoding Engine Wrapper</span>
-          <a
-            className="inline-flex items-center gap-2 hover:text-foreground"
-            href={REPO}
-          >
-            <GithubIcon className="size-4" />
-            GitHub
-          </a>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   )
 }
