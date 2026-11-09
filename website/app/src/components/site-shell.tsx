@@ -1,6 +1,6 @@
-import { GithubIcon } from "@/components/brand-icons"
+import { GithubIcon, TelegramIcon } from "@/components/brand-icons"
 import { cn } from "@/lib/utils"
-import { HOME, REPO, TOOL_CHAIN } from "@/lib/platform"
+import { HOME, REPO, TELEGRAM, TOOL_CHAIN } from "@/lib/platform"
 
 export type SitePage = "home" | "tool-chain"
 
@@ -68,10 +68,10 @@ export function SiteFooter() {
         <span>deew - Dolby Encoding Engine Wrapper</span>
         <a
           className="inline-flex items-center gap-2 hover:text-foreground"
-          href={REPO}
+          href={TELEGRAM}
         >
-          <GithubIcon className="size-4" />
-          GitHub
+          <TelegramIcon className="size-4" />
+          Telegram support
         </a>
       </div>
     </footer>
