@@ -3,11 +3,11 @@
 
 use crate::error::escape;
 use crate::interrupt;
+use crate::live::Live;
 use crate::markup::color_enabled;
 use crate::rprintln;
 use crate::term::console_width;
-use crate::ui::{bar_width, download_bar_text, download_percent_text};
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
+use crate::ui::{download_tail_text, separator, tool_text, two_line_bar, two_lines};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::fs::File;
@@ -15,7 +15,7 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ureq::ResponseExt;
 
 const GITHUB_API: &str = "https://api.github.com/repos";
@@ -30,8 +30,6 @@ const BAR_CELLS: usize = 20;
 const NAME_WIDTH: usize = 8;
 /// Width of the status column (`downloading...`).
 const STATUS_WIDTH: usize = 14;
-/// Positions of a bar are hundredths of a percent.
-const SCALE: u64 = 10_000;
 /// Share of the bar that is the download, the rest is the unpacking.
 const DOWNLOAD_SHARE: f64 = 0.9;
 /// A transfer that gets no data for this long fails.
@@ -245,67 +243,46 @@ pub fn overall_fraction(status: Status, done: u64, total: Option<u64>) -> Option
     }
 }
 
-/// `truehdd  | unpacking...  `
-fn label(name: &str, status: Status) -> String {
-    format!(
-        "{name:<NAME_WIDTH$} | {:<STATUS_WIDTH$}",
-        status.text(),
-        NAME_WIDTH = NAME_WIDTH,
-        STATUS_WIDTH = STATUS_WIDTH
-    )
-}
-
-const LABEL_WIDTH: usize = NAME_WIDTH + 3 + STATUS_WIDTH;
-
-fn bar_cells() -> usize {
-    bar_width(console_width(), LABEL_WIDTH).min(BAR_CELLS)
-}
-
-/// A whole row as printed without a terminal (and by the tests).
-fn row_text(
+/// The lines of a row for a console `width` wide, like the encoding bars:
+/// `truehdd  │ unpacking...   │ bar 95.00% - ~0:03 left`, or below 80
+/// columns `truehdd  │ unpacking...` with the bar on a line of its own.
+/// `secs` moves a pulsing bar and is the base of the remaining time.
+fn row_lines(
     name: &str,
     status: Status,
     fraction: Option<f64>,
+    secs: f64,
+    width: usize,
     color: bool,
-    cells: usize,
-) -> String {
-    format!(
-        "[ {} ] {} {}",
-        label(name, status),
-        download_bar_text(fraction, color, 0.0, cells),
-        download_percent_text(fraction, color)
-    )
-}
-
-fn style() -> ProgressStyle {
-    let color = color_enabled();
-    let fraction = |s: &ProgressState| s.len().map(|len| s.pos() as f64 / len as f64);
-    ProgressStyle::with_template("[ {msg} ] {deewbar} {deewpct}")
-        .expect("valid template")
-        .with_key(
-            "deewbar",
-            move |s: &ProgressState, w: &mut dyn std::fmt::Write| {
-                let _ = w.write_str(&download_bar_text(
-                    fraction(s),
-                    color,
-                    s.elapsed().as_secs_f64(),
-                    bar_cells(),
-                ));
-            },
-        )
-        .with_key(
-            "deewpct",
-            move |s: &ProgressState, w: &mut dyn std::fmt::Write| {
-                let _ = w.write_str(&download_percent_text(fraction(s), color));
-            },
-        )
+) -> Vec<String> {
+    let pad = " ".repeat(NAME_WIDTH.saturating_sub(name.len()));
+    let name = format!("{}{pad}", tool_text(name, color));
+    let separator = separator(color);
+    // a failed bar stands still: no remaining time
+    let secs = if status == Status::Failed { 0.0 } else { secs };
+    if two_lines(width) {
+        let cells = two_line_bar(width).min(BAR_CELLS);
+        vec![
+            format!("{name}{separator}{}", status.text()),
+            download_tail_text(fraction, secs, cells, color),
+        ]
+    } else {
+        vec![format!(
+            "{name}{separator}{:<STATUS_WIDTH$}{separator}{}",
+            status.text(),
+            download_tail_text(fraction, secs, BAR_CELLS, color),
+        )]
+    }
 }
 
 /// One tool and its progress line.
 struct Row {
     name: &'static str,
     file: String,
-    pb: ProgressBar,
+    /// When the row was created; drives the pulsing bar.
+    started: Instant,
+    /// When the size became known; the base of the remaining time.
+    sized: Mutex<Option<Instant>>,
     state: Mutex<(Status, Option<f64>)>,
 }
 
@@ -319,18 +296,25 @@ impl Row {
                 f.min(0.9999)
             }
         });
-        *self.state.lock().expect("row state") = (status, fraction);
-        self.pb.set_message(label(self.name, status));
-        match fraction {
-            Some(f) => {
-                if self.pb.length().is_none() {
-                    self.pb.set_length(SCALE);
-                }
-                self.pb
-                    .set_position((f.clamp(0.0, 1.0) * SCALE as f64).round() as u64);
-            }
-            None => self.pb.unset_length(),
+        if fraction.is_some() {
+            self.sized
+                .lock()
+                .expect("row sized")
+                .get_or_insert_with(Instant::now);
         }
+        *self.state.lock().expect("row state") = (status, fraction);
+    }
+
+    /// The lines of the row on a terminal `width` columns wide.
+    fn lines(&self, width: usize, color: bool) -> Vec<String> {
+        let (status, fraction) = *self.state.lock().expect("row state");
+        let since = self
+            .sized
+            .lock()
+            .expect("row sized")
+            .unwrap_or(self.started);
+        let secs = since.elapsed().as_secs_f64();
+        row_lines(self.name, status, fraction, secs, width, color)
     }
 
     fn progress(&self, status: Status, done: u64, total: Option<u64>) {
@@ -344,8 +328,6 @@ impl Row {
             let fraction = self.state.lock().expect("row state").1;
             self.set(Status::Failed, fraction.or(Some(0.0)));
         }
-        self.pb.disable_steady_tick();
-        self.pb.abandon();
     }
 }
 
@@ -924,32 +906,31 @@ fn exe(name: &str) -> String {
 /// `-gt`: download the tools into `exe_dir` and exit.
 pub fn run(exe_dir: &Path) -> ! {
     let platform = Platform::current();
-    let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stdout_with_hz(8));
     let rows: Vec<Arc<Row>> = ["truehdd", "dee_shim", "ffmpeg", "ffprobe"]
         .iter()
         .map(|&name| {
-            let pb = multi.add(ProgressBar::new(SCALE));
-            pb.set_style(style());
-            pb.enable_steady_tick(Duration::from_millis(125));
-            let row = Row {
+            Arc::new(Row {
                 name,
                 file: exe(name),
-                pb,
+                started: Instant::now(),
+                sized: Mutex::new(None),
                 state: Mutex::new((Status::Downloading, None)),
-            };
-            row.set(Status::Downloading, None);
-            Arc::new(row)
+            })
         })
         .collect();
 
-    let printer = multi.clone();
+    let live = {
+        let rows = rows.clone();
+        let color = color_enabled();
+        Live::new(move |width| {
+            rows.iter()
+                .flat_map(|row| row.lines(width, color))
+                .collect()
+        })
+    };
+    let print = live.printer();
     interrupt::jobs_started(move |markup| {
-        let text = crate::markup::render(markup, color_enabled());
-        if printer.is_hidden() {
-            println!("{text}");
-        } else {
-            let _ = printer.println(text);
-        }
+        print(&crate::markup::render(markup, color_enabled()));
     });
 
     let outcomes: Vec<Mutex<Option<Result<(), String>>>> =
@@ -969,27 +950,15 @@ pub fn run(exe_dir: &Path) -> ! {
     });
     interrupt::jobs_ended();
 
-    // Finish the display before anything else is printed: dropping the
-    // MultiProgress (and the bars) stops the tickers and writes the newline
-    // that ends the last bar line. `process::exit` runs no destructors, so
-    // without this the cursor stays at the end of the last bar line.
-    let hidden = multi.is_hidden();
+    // Finish the display before anything else is printed. `process::exit`
+    // runs no destructors, so the ticker has to be stopped here.
+    let hidden = live.is_hidden();
     let names: Vec<&'static str> = rows.iter().map(|r| r.name).collect();
     let finals: Vec<_> = rows
         .iter()
         .map(|r| *r.state.lock().expect("row state"))
         .collect();
-    drop(rows);
-    drop(multi);
-    if !hidden {
-        // indicatif leaves the cursor at the end of the last bar line, which
-        // is as wide as the terminal (pending wrap). Print the line break
-        // now, with no colour active: otherwise the first character of the
-        // next line triggers the wrap (and the scroll) with the red
-        // background of `ERROR:` set, and the terminal fills the new line
-        // with it.
-        println!();
-    }
+    live.finish(true);
     let _ = std::io::stdout().flush();
 
     if interrupt::is_interrupted() {
@@ -998,9 +967,11 @@ pub fn run(exe_dir: &Path) -> ! {
 
     // Without a terminal nothing was drawn: print the final lines.
     if hidden {
-        let cells = bar_cells();
+        let width = console_width();
         for (name, (status, fraction)) in names.iter().zip(&finals) {
-            println!("{}", row_text(name, *status, *fraction, false, cells));
+            for line in row_lines(name, *status, *fraction, 0.0, width, false) {
+                println!("{line}");
+            }
         }
     }
 
@@ -1206,31 +1177,66 @@ mod tests {
     #[test]
     fn rows_without_color() {
         let bar = |n: usize| "━".repeat(n);
+        let row =
+            |name, status, fraction, secs| row_lines(name, status, fraction, secs, 100, false);
         assert_eq!(
-            row_text("truehdd", Status::Unpacking, Some(0.95), false, 20),
-            format!("[ truehdd  | unpacking...   ] {}{} 95.00% ", bar(19), " ")
+            row("truehdd", Status::Unpacking, Some(0.95), 0.0),
+            [format!("truehdd  │ unpacking...   │ {}  95.00%", bar(19))]
         );
         assert_eq!(
-            row_text("ffmpeg", Status::Downloading, Some(0.75), false, 20),
-            format!(
-                "[ ffmpeg   | downloading... ] {}{} 75.00% ",
+            row("ffmpeg", Status::Downloading, Some(0.75), 0.0),
+            [format!(
+                "ffmpeg   │ downloading... │ {}{} 75.00%",
                 bar(15),
                 " ".repeat(5)
-            )
+            )]
         );
         assert_eq!(
-            row_text("dee_shim", Status::Done, Some(1.0), false, 20),
-            format!("[ dee_shim | done           ] {} 100%   ", bar(20))
+            row("dee_shim", Status::Done, Some(1.0), 60.0),
+            [format!("dee_shim │ done           │ {} 100%", bar(20))]
         );
         assert_eq!(
-            row_text("ffprobe", Status::Failed, Some(0.0), false, 20),
-            format!("[ ffprobe  | failed         ] {} 0.00%  ", " ".repeat(20))
+            row("ffprobe", Status::Failed, Some(0.5), 60.0),
+            [format!(
+                "ffprobe  │ failed         │ {}{} 50.00%",
+                bar(10),
+                " ".repeat(10)
+            )]
+        );
+    }
+
+    #[test]
+    fn rows_show_the_remaining_time_after_5_seconds() {
+        let row = |secs| row_lines("ffmpeg", Status::Downloading, Some(0.5), secs, 100, false);
+        assert!(row(4.9)[0].ends_with(" 50.00%"));
+        assert!(row(10.0)[0].ends_with(" 50.00% - ~0:10 left"));
+    }
+
+    #[test]
+    fn rows_get_two_lines_below_80_columns() {
+        let bar = |n: usize| "━".repeat(n);
+        assert_eq!(
+            row_lines("dee_shim", Status::Done, Some(1.0), 0.0, 79, false),
+            ["dee_shim │ done".to_string(), format!("{} 100%", bar(20))]
         );
         assert_eq!(
-            label("ffmpeg", Status::Downloading).chars().count(),
-            LABEL_WIDTH
+            row_lines("ffmpeg", Status::Downloading, Some(0.5), 10.0, 40, false),
+            [
+                "ffmpeg   │ downloading...".to_string(),
+                // 40 columns: a 17 cell bar, half of it is 8.5 cells
+                format!("{}╸{} 50.00% - ~0:10 left", bar(8), " ".repeat(8))
+            ]
         );
-        assert_eq!(label("dee_shim", Status::Done).chars().count(), LABEL_WIDTH);
+        assert_eq!(
+            row_lines("ffmpeg", Status::Done, Some(1.0), 0.0, 80, false).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn row_names_are_bold_cyan() {
+        let line = &row_lines("ffmpeg", Status::Done, Some(1.0), 0.0, 100, true)[0];
+        assert!(line.starts_with("\x1b[1;36mffmpeg\x1b[0m   "));
     }
 
     #[test]

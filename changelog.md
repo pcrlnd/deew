@@ -1,3 +1,11 @@
+# deew 5.0.2:
+- resizing the terminal (or deew-gui) during encoding or `-gt` no longer
+  duplicates or garbles the progress bars, deew draws them itself now
+  instead of using indicatif
+- `-gt`: the progress bars look like the encoding ones: `│` columns, bold
+  cyan tool names, the remaining time after 5 seconds and two lines per tool
+  below 80 columns
+
 # deew 5.0.1:
 - `-gt` on macOS: downloading ffmpeg and ffprobe failed with `the checksum
   file has no SHA256`

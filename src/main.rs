@@ -11,6 +11,7 @@ mod help;
 mod info;
 mod inputs;
 mod interrupt;
+mod live;
 mod markup;
 mod pipeline;
 mod plan;

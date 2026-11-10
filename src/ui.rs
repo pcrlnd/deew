@@ -4,14 +4,12 @@
 //!
 //! The layout is a pure function ([`render_rows`]): it gets the width of the
 //! terminal and the state of all live lines and returns the rendered lines.
-//! The indicatif bars only draw what it returns.
+//! The live renderer ([`crate::live::Live`]) only draws what it returns.
 
 use crate::events;
+use crate::live::Live;
 use crate::markup::{color_enabled, render};
-use crate::term::console_width;
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
 use std::collections::BTreeMap;
-use std::fmt::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -146,40 +144,60 @@ pub fn bar_text(fraction: Option<f64>, color: bool, time: f64, width: usize, cod
     out
 }
 
-/// Width of the bar of the download display.
-const DOWNLOAD_BAR_WIDTH: usize = 40;
-/// Width of the percentage column of the download display (`100.00%`).
-const DOWNLOAD_PERCENT_WIDTH: usize = 7;
 /// Color of a finished bar of the download display.
 const COLOR_FINISHED: u8 = 70;
 
-/// Width of the bar of the download display: 40 cells, less if the line
-/// would not fit the console (`[ `, description, ` ] `, bar, a space and
-/// the percentage).
-pub fn bar_width(console: usize, description: usize) -> usize {
-    let fixed = 2 + description + 3 + 1 + DOWNLOAD_PERCENT_WIDTH;
-    DOWNLOAD_BAR_WIDTH.min(console.saturating_sub(fixed)).max(1)
+/// Whether a console `width` wide gets two lines per row.
+pub fn two_lines(width: usize) -> bool {
+    width < TWO_LINE_BELOW
 }
 
-/// The bar of the download display: pink, green when finished.
-pub fn download_bar_text(fraction: Option<f64>, color: bool, time: f64, width: usize) -> String {
+/// Width of the bar of a two-line row (it has a line of its own).
+pub fn two_line_bar(width: usize) -> usize {
+    width
+        .saturating_sub(PERCENT_RESERVED + TIME_RESERVED + 1)
+        .clamp(BAR_MIN, BAR_MAX)
+}
+
+/// ` │ ` between the columns of a row.
+pub fn separator(color: bool) -> String {
+    if color {
+        format!(" {}│{RESET} ", fg(COLOR_SEPARATOR))
+    } else {
+        " │ ".to_string()
+    }
+}
+
+/// The name of a tool, bold cyan.
+pub fn tool_text(tool: &str, color: bool) -> String {
+    if color {
+        format!("{BOLD_CYAN}{tool}{RESET}")
+    } else {
+        tool.to_string()
+    }
+}
+
+/// Bar, then (unless it pulses) the percentage and the remaining time.
+/// `secs` is how long the step ran: it moves a pulsing bar and is the base
+/// of the estimate.
+pub fn tail_text(fraction: Option<f64>, secs: f64, width: usize, code: u8, color: bool) -> String {
+    let mut out = bar_text(fraction, color, secs, width, code);
+    if fraction.is_some() {
+        out.push(' ');
+        out.push_str(&percent_text(fraction, color));
+        out.push_str(&time_text(fraction, secs));
+    }
+    out
+}
+
+/// [`tail_text`] of the download display: pink, green when finished.
+pub fn download_tail_text(fraction: Option<f64>, secs: f64, width: usize, color: bool) -> String {
     let code = if fraction.is_some_and(|f| f >= 1.0) {
         COLOR_FINISHED
     } else {
         COLOR_ENCODE
     };
-    bar_text(fraction, color, time, width, code)
-}
-
-/// The percentage of the download display, padded to its column.
-pub fn download_percent_text(fraction: Option<f64>, color: bool) -> String {
-    let plain = percent_text(fraction, false);
-    let text = format!("{plain:<DOWNLOAD_PERCENT_WIDTH$}");
-    if color {
-        format!("{MAGENTA}{text}{RESET}")
-    } else {
-        text
-    }
+    tail_text(fraction, secs, width, code, color)
 }
 
 /// `{task.percentage:.2f}%` in magenta, not padded. A finished bar shows
@@ -340,7 +358,8 @@ impl Row<'_> {
                 format!("{}{suffix}{RESET}", fg(COLOR_GREY))
             };
             format!(
-                "{BOLD_CYAN}{tool}{RESET} {}{verb}{RESET}: {name}{grey}",
+                "{} {}{verb}{RESET}: {name}{grey}",
+                tool_text(tool, true),
                 fg(code)
             )
         } else {
@@ -359,13 +378,7 @@ impl Row<'_> {
 
     /// Bar, percentage and time.
     fn tail(&self, bar: usize, color: bool) -> String {
-        let mut out = bar_text(self.fraction, color, self.step_secs, bar, self.code());
-        if self.fraction.is_some() {
-            out.push(' ');
-            out.push_str(&percent_text(self.fraction, color));
-            out.push_str(&time_text(self.fraction, self.step_secs));
-        }
-        out
+        tail_text(self.fraction, self.step_secs, bar, self.code(), color)
     }
 }
 
@@ -374,9 +387,8 @@ impl Row<'_> {
 /// then bar) below 80 columns. The result has one entry per row, each with
 /// one or two lines.
 pub fn render_rows(width: usize, rows: &[Row], color: bool) -> Vec<Vec<String>> {
-    if width < TWO_LINE_BELOW {
-        let bar = width.saturating_sub(PERCENT_RESERVED + TIME_RESERVED + 1);
-        let bar = bar.clamp(BAR_MIN, BAR_MAX);
+    if two_lines(width) {
+        let bar = two_line_bar(width);
         return rows
             .iter()
             .map(|row| {
@@ -407,11 +419,7 @@ pub fn render_rows(width: usize, rows: &[Row], color: bool) -> Vec<Vec<String>> 
     let column = descs.iter().map(|(_, w)| *w).max().unwrap_or(0);
     let bar = width.saturating_sub(FIXED_WIDTH + column);
     let bar = bar.clamp(BAR_MIN, BAR_MAX);
-    let separator = if color {
-        format!(" {}│{RESET} ", fg(COLOR_SEPARATOR))
-    } else {
-        " │ ".to_string()
-    };
+    let separator = separator(color);
     rows.iter()
         .zip(descs)
         .map(|(row, (desc, desc_width))| {
@@ -445,7 +453,7 @@ struct EventState {
 }
 
 /// The state of a live line.
-struct Live {
+struct Job {
     name: String,
     stage: Stage,
     db: Option<i64>,
@@ -453,40 +461,10 @@ struct Live {
     step_started: Instant,
 }
 
-type LiveMap = Arc<Mutex<BTreeMap<usize, Live>>>;
-
-/// The indicatif style of the line of job `index`: asks the layout for the
-/// lines of all live jobs and writes its own.
-fn style(live: LiveMap, index: usize) -> ProgressStyle {
-    let color = color_enabled();
-    ProgressStyle::with_template("{deewlines}")
-        .expect("valid template")
-        .with_key("deewlines", move |_: &ProgressState, w: &mut dyn Write| {
-            let live = live.lock().expect("live lines");
-            let rows: Vec<Row> = live
-                .values()
-                .map(|l| Row {
-                    stage: l.stage,
-                    name: &l.name,
-                    db: l.db,
-                    fraction: l.fraction,
-                    step_secs: l.step_started.elapsed().as_secs_f64(),
-                })
-                .collect();
-            let position = live.keys().position(|&i| i == index);
-            if let Some(lines) = position.and_then(|p| {
-                render_rows(console_width(), &rows, color)
-                    .into_iter()
-                    .nth(p)
-            }) {
-                let _ = w.write_str(&lines.join("\n"));
-            }
-        })
-}
+type LiveMap = Arc<Mutex<BTreeMap<usize, Job>>>;
 
 /// A progress line of one job.
 pub struct Bar {
-    pb: ProgressBar,
     index: usize,
     name: String,
     started: Instant,
@@ -495,7 +473,7 @@ pub struct Bar {
 }
 
 impl Bar {
-    fn with_live(&self, f: impl FnOnce(&mut Live)) {
+    fn with_live(&self, f: impl FnOnce(&mut Job)) {
         if let Some(live) = self.live.lock().expect("live lines").get_mut(&self.index) {
             f(live);
         }
@@ -581,50 +559,69 @@ pub enum End<'a> {
     Stopped,
 }
 
-/// Jobs that were started, and the line that counts the others.
-struct Queue {
-    started: usize,
-    pb: Option<ProgressBar>,
-}
+/// The text of the queue line, `None` when there is none.
+type QueueText = Arc<Mutex<Option<String>>>;
 
 /// All progress lines plus a way to print messages above them.
 pub struct Ui {
-    multi: MultiProgress,
+    screen: Live,
     live: LiveMap,
     total: usize,
-    queue: Mutex<Queue>,
+    /// How many jobs were started.
+    started: Mutex<usize>,
+    queue: QueueText,
 }
 
 impl Ui {
     /// `total` is the number of jobs.
     pub fn new(total: usize) -> Ui {
-        let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stdout_with_hz(8));
-        // The queue line exists from the start (new lines go above it), as
-        // long as there is more than the first job to wait for.
-        let queue_pb = (total > 1).then(|| {
-            let pb = ProgressBar::with_draw_target(None, ProgressDrawTarget::hidden());
-            pb.set_style(ProgressStyle::with_template("{msg}").expect("template"));
-            pb.set_message(queue_text(total - 1, color_enabled()));
-            multi.add(pb)
-        });
+        // The queue line exists from the start, as long as there is more
+        // than the first job to wait for.
+        let queue: QueueText = Arc::new(Mutex::new(
+            (total > 1).then(|| queue_text(total - 1, color_enabled())),
+        ));
+        let live: LiveMap = Arc::new(Mutex::new(BTreeMap::new()));
+        let screen = {
+            let (live, queue) = (live.clone(), queue.clone());
+            let color = color_enabled();
+            Live::new(move |width| {
+                let jobs = live.lock().expect("live lines");
+                let rows: Vec<Row> = jobs
+                    .values()
+                    .map(|l| Row {
+                        stage: l.stage,
+                        name: &l.name,
+                        db: l.db,
+                        fraction: l.fraction,
+                        step_secs: l.step_started.elapsed().as_secs_f64(),
+                    })
+                    .collect();
+                let mut lines: Vec<String> = render_rows(width, &rows, color)
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                drop(jobs);
+                if let Some(text) = queue.lock().expect("queue").as_ref() {
+                    lines.push(text.clone());
+                }
+                lines
+            })
+        };
         Ui {
-            multi,
-            live: Arc::new(Mutex::new(BTreeMap::new())),
+            screen,
+            live,
             total,
-            queue: Mutex::new(Queue {
-                started: 0,
-                pb: queue_pb,
-            }),
+            started: Mutex::new(0),
+            queue,
         }
     }
 
     /// Add a progress line for the job `index` above the queue line.
     pub fn add_bar(&self, index: usize, name: &str) -> Bar {
-        let color = color_enabled();
-        let mut queue = self.queue.lock().expect("queue");
+        let mut started = self.started.lock().expect("started");
         self.live.lock().expect("live lines").insert(
             index,
-            Live {
+            Job {
                 name: name.to_string(),
                 stage: Stage::Starting,
                 db: None,
@@ -632,25 +629,13 @@ impl Ui {
                 step_started: Instant::now(),
             },
         );
-        let pb = ProgressBar::with_draw_target(None, ProgressDrawTarget::hidden());
-        pb.set_style(style(self.live.clone(), index));
-        let pb = match &queue.pb {
-            Some(queue_pb) => self.multi.insert_before(queue_pb, pb),
-            None => self.multi.add(pb),
-        };
-        pb.enable_steady_tick(Duration::from_millis(125));
-        queue.started += 1;
-        let waiting = self.total.saturating_sub(queue.started);
-        if waiting == 0 {
-            if let Some(queue_pb) = queue.pb.take() {
-                queue_pb.finish_and_clear();
-                self.multi.remove(&queue_pb);
-            }
-        } else if let Some(queue_pb) = &queue.pb {
-            queue_pb.set_message(queue_text(waiting, color));
+        *started += 1;
+        let waiting = self.total.saturating_sub(*started);
+        let mut queue = self.queue.lock().expect("queue");
+        if queue.is_some() {
+            *queue = (waiting > 0).then(|| queue_text(waiting, color_enabled()));
         }
         Bar {
-            pb,
             index,
             name: name.to_string(),
             started: Instant::now(),
@@ -668,13 +653,12 @@ impl Ui {
     /// The job is over: remove its live line and print the result above
     /// the others.
     pub fn finish(&self, bar: Bar, end: End) {
-        bar.pb.disable_steady_tick();
         let db = self
             .live
             .lock()
             .expect("live lines")
             .remove(&bar.index)
-            .and_then(|live| live.db);
+            .and_then(|job| job.db);
         events::done(bar.index);
         let color = color_enabled();
         let line = match end {
@@ -687,12 +671,10 @@ impl Ui {
             End::Failed(error) => Some(failed_text(&bar.name, error, color)),
             End::Stopped => None,
         };
-        if let Some(line) = line {
-            self.say_raw(&line);
+        match line {
+            Some(line) => self.say_raw(&line),
+            None => self.screen.redraw(),
         }
-        // clear its lines now, a removed bar is not redrawn
-        bar.pb.finish_and_clear();
-        self.multi.remove(&bar.pb);
     }
 
     /// Print a line above the progress lines. `markup` is rendered, plain
@@ -704,33 +686,20 @@ impl Ui {
 
     /// A function that prints like [`Ui::say`], for other threads.
     pub fn printer(&self) -> impl Fn(&str) + Send + 'static {
-        let multi = self.multi.clone();
-        move |markup| {
-            let text = render(markup, color_enabled());
-            if multi.is_hidden() {
-                println!("{text}");
-            } else {
-                let _ = multi.println(text);
-            }
-        }
+        let print = self.screen.printer();
+        move |markup| print(&render(markup, color_enabled()))
     }
 
     /// Print text that is not parsed as markup.
     pub fn say_raw(&self, text: &str) {
-        if self.multi.is_hidden() {
-            println!("{text}");
-        } else {
-            let _ = self.multi.println(text);
-        }
+        self.screen.println(text);
     }
 
     /// All jobs are over: remove what is left of the queue line (jobs that
-    /// were never started after Ctrl-C).
+    /// were never started after Ctrl-C) and the live lines.
     pub fn flush(self) {
-        if let Some(queue_pb) = self.queue.lock().expect("queue").pb.take() {
-            queue_pb.finish_and_clear();
-            self.multi.remove(&queue_pb);
-        }
+        *self.queue.lock().expect("queue") = None;
+        self.screen.finish(false);
     }
 }
 
