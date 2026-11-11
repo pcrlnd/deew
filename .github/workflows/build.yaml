@@ -18,7 +18,7 @@ on:
         description: macOS (universal Apple silicon + x86_64 binaries)
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   actions: write
@@ -489,6 +489,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.setup.outputs.version }}
         run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.setup.outputs.version }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$repo" --json assets -q '.assets[].name' > assets.txt
+          python3 dev_scripts/telegram.py notes --version "$TAG" --repo "$repo" --assets assets.txt > notes.md
+          gh release edit "$TAG" --repo "$repo" --notes-file notes.md
+          echo "Updated the description of release $TAG"
 
       # Posting is best effort: a failure is logged as a warning, the run stays green.
       - name: Set up Python

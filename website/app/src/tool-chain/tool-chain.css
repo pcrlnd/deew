@@ -337,6 +337,87 @@
     gap: 4px;
   }
 
+  /* ---------- loudness decision trees ---------- */
+  .ltrees {
+    display: grid;
+    gap: 12px;
+  }
+  .ltree {
+    display: flex;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 12px 16px 12px 16px;
+  }
+  .lt-root {
+    position: relative;
+    flex: none;
+    margin-right: 16px;
+  }
+  .lt-root::after {
+    content: "";
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    width: 16px;
+    border-top: 2px solid var(--line);
+  }
+  .lt-rows {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+  }
+  .lt-row {
+    position: relative;
+    min-width: 0;
+    padding: 6px 0 6px 18px;
+  }
+  .lt-row::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 12px;
+    border-top: 2px solid var(--line);
+  }
+  .lt-row::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    bottom: 0;
+    border-left: 2px solid var(--line);
+  }
+  .lt-row:first-child::after {
+    top: 50%;
+    bottom: 0;
+  }
+  .lt-row:last-child::after {
+    top: 0;
+    bottom: 50%;
+  }
+  .lt-cond {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cond-fg);
+    margin-bottom: 4px;
+  }
+  .lt-note {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+  .lt-foot code,
+  .sec-head p code {
+    white-space: nowrap;
+  }
+  .lt-foot {
+    margin: 12px 0 0;
+    font-size: 13px;
+    color: var(--muted-foreground);
+  }
+
   /* ---------- module cards ---------- */
   .modules {
     display: grid;
@@ -489,6 +570,18 @@
   }
 
   @media (max-width: 640px) {
+    .ltree {
+      padding: 12px 10px;
+    }
+    .lt-root {
+      margin-right: 14px;
+    }
+    .lt-root::after {
+      width: 14px;
+    }
+    .lt-row {
+      padding-left: 14px;
+    }
     .chain {
       grid-template-columns: 1fr;
     }

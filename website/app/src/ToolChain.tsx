@@ -28,7 +28,7 @@ import {
 } from "lucide-react"
 
 import { SiteFooter, SiteHeader } from "@/components/site-shell"
-import { chains } from "./tool-chain/chains"
+import { chains, loudnessTrees } from "./tool-chain/chains"
 import { Chip } from "./tool-chain/chip"
 import "./tool-chain/tool-chain.css"
 
@@ -127,6 +127,33 @@ function ChainList() {
   )
 }
 
+function LoudnessTree() {
+  return (
+    <div className="ltrees">
+      {loudnessTrees.map((t) => (
+        <div className="ltree" key={t.option}>
+          <div className="lt-root">
+            <Chip item={{ type: "chip", kind: "step", text: t.option }} />
+          </div>
+          <div className="lt-rows">
+            {t.rows.map((r) => (
+              <div className="lt-row" key={r.cond}>
+                <div className="lt-cond">{r.cond}</div>
+                <div className="flow">
+                  {r.flow.map((item, i) => (
+                    <Chip key={i} item={item} />
+                  ))}
+                </div>
+                {r.note && <div className="lt-note">{r.note}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function ToolChain() {
   return (
     <div className="min-h-screen">
@@ -134,7 +161,9 @@ export default function ToolChain() {
       <div className="tc">
         <div className="wrap">
           <header>
-            <div className="eyebrow">deew 5.0.0 · how the tools are wired</div>
+            <div className="eyebrow">
+              deew {__DEEW_VERSION__} · how the tools are wired
+            </div>
             <h1>deew tool chain</h1>
             <p className="lede">
               deew itself never touches audio. It probes the input, then chains
@@ -462,30 +491,32 @@ export default function ToolChain() {
                     RF64 PCM, TEMP
                   </text>
                 </DiagramNode>
-                <DiagramNode
-                  kind="tool"
-                  icon={GaugeIcon}
-                  textClass="t-tool"
-                  x={635}
-                  y={122}
-                  name="dee_measure_loudness"
-                >
-                  <rect
-                    className="b-tool dash"
-                    x="540"
-                    y="100"
-                    width="190"
-                    height="50"
-                  />
-                  <text
-                    className="t-tool t-sub"
-                    x="635"
-                    y="139"
-                    textAnchor="middle"
+                <a href="#loudness">
+                  <DiagramNode
+                    kind="tool"
+                    icon={GaugeIcon}
+                    textClass="t-tool"
+                    x={635}
+                    y={122}
+                    name="dee_measure_loudness"
                   >
-                    only with -mo or -dn
-                  </text>
-                </DiagramNode>
+                    <rect
+                      className="b-tool dash"
+                      x="540"
+                      y="100"
+                      width="190"
+                      height="50"
+                    />
+                    <text
+                      className="t-tool t-sub"
+                      x="635"
+                      y="139"
+                      textAnchor="middle"
+                    >
+                      -mo / AC4 -dn · see Loudness
+                    </text>
+                  </DiagramNode>
+                </a>
                 <DiagramNode
                   kind="file"
                   icon={FileJsonIcon}
@@ -720,6 +751,25 @@ export default function ToolChain() {
               </p>
             </div>
             <ChainList />
+          </section>
+          <section id="loudness">
+            <div className="sec-head">
+              <h2>
+                <GaugeIcon />
+                Loudness: -mo and -dn
+              </h2>
+              <p>
+                What deew runs for <code>-mo</code> (measure only) and{" "}
+                <code>-dn</code> (custom dialnorm), by channel count and format.
+              </p>
+            </div>
+            <LoudnessTree />
+            <p className="lt-foot">
+              <code>-dn</code> has no effect for AAC and AC4 Atmos, and{" "}
+              <code>-mo</code> is not available for the Atmos formats.{" "}
+              <code>-dn 0</code> keeps the default: DEE measures while it
+              encodes.
+            </p>
           </section>
           <section>
             <div className="sec-head">
@@ -1290,12 +1340,11 @@ export default function ToolChain() {
                     <GaugeIcon />
                     dee_measure_loudness
                   </h3>
-                  <span className="tag">DEE · only with -mo or -dn</span>
+                  <span className="tag">DEE · -mo / AC4 -dn</span>
                   <p>
-                    A separate loudness pass. With <code>-dn</code>, deew then
-                    writes your dialnorm into the manifest and hands it to the
-                    encoder, which skips its own measurement. Doesn't take 7.1,
-                    and has no <code>--temp-dir</code>.
+                    A separate loudness pass, used by <code>-mo</code> and AC4{" "}
+                    <code>-dn</code> (see <a href="#loudness">Loudness</a>).
+                    Doesn't take 7.1, and has no <code>--temp-dir</code>.
                   </p>
                 </div>
                 <div className="ports">
@@ -1339,7 +1388,10 @@ export default function ToolChain() {
                     <code>--progress 1 --overwrite 1</code> and ends with the
                     delay and temp options. DEE's <code>[===&gt;] N %</code>{" "}
                     lines drive the bar; <code>[Source loudness]</code> shows
-                    the measured dB.
+                    the measured dB. With <code>-dn</code> (not AC4) the
+                    loudness option is{" "}
+                    <code>--loudness-management skip:dialnorm=N</code> instead
+                    of <code>measure_only</code>.
                   </p>
                 </div>
                 <div className="ports">
@@ -1350,7 +1402,7 @@ export default function ToolChain() {
                         <code>NAME.wav</code> or <code>NAME.atmos</code>
                       </li>
                       <li>
-                        <code>loudness.json</code> with <code>-dn</code>
+                        <code>loudness.json</code> with AC4 <code>-dn</code>
                       </li>
                     </ul>
                   </div>
@@ -1781,7 +1833,7 @@ export default function ToolChain() {
                     <h4>Writes</h4>
                     <ul>
                       <li>
-                        the dialnorm into <code>loudness.json</code> (
+                        the dialnorm into <code>loudness.json</code> (AC4{" "}
                         <code>-dn</code>)
                       </li>
                       <li>
@@ -1810,9 +1862,10 @@ export default function ToolChain() {
             </div>
           </section>
           <footer>
-            Built from the deew source on 2026-11-08 (5.0.0): src/commands.rs,
-            src/probe.rs, src/pipeline.rs, src/encode.rs. Tool lookup: next to
-            deew (DEE in the <code>dee</code> folder), then PATH.
+            Built from the deew source on 2026-11-11 ({__DEEW_VERSION__}):
+            src/commands.rs, src/probe.rs, src/pipeline.rs, src/encode.rs. Tool
+            lookup: next to deew (DEE in the <code>dee</code> folder), then
+            PATH.
           </footer>
         </div>
       </div>

@@ -169,18 +169,19 @@ describe("validate", () => {
   })
 
   it("rejects dialnorm and measure only where the format cannot do them", () => {
-    for (const format of ["dd", "ddp", "ac4"] as const) {
+    for (const format of [
+      "dd",
+      "ddp",
+      "thd",
+      "ddp-atmos",
+      "thd-atmos",
+      "ac4",
+    ] as const) {
       expect(
         validate(opts({ format, drc: "music_light", dialnorm: "-27" }))
       ).toEqual([])
     }
-    for (const format of [
-      "aac",
-      "thd",
-      "ddp-atmos",
-      "thd-atmos",
-      "ac4-atmos",
-    ] as const) {
+    for (const format of ["aac", "ac4-atmos"] as const) {
       expect(
         validate(opts({ format, drc: "music_light", dialnorm: "-27" }))
       ).toHaveLength(1)
@@ -313,7 +314,7 @@ describe("formats", () => {
     })
     expect(setFormat(o, "ddp-atmos")).toMatchObject({
       downmix: "none",
-      dialnorm: "0",
+      dialnorm: "-27",
       measureOnly: false,
     })
   })
@@ -326,7 +327,7 @@ describe("thd-atmos", () => {
     )
   })
 
-  it("has no bitrate, downmix, dialnorm or measure only", () => {
+  it("has no bitrate, downmix or measure only", () => {
     expect(bitrateOptions("thd-atmos")).toEqual([])
     const info = relevantBitrates({
       format: "thd-atmos",
@@ -338,7 +339,7 @@ describe("thd-atmos", () => {
     expect(info.defaultKey).toBeUndefined()
     expect(info.warnings).toEqual([])
     expect(relevantDownmixes("thd-atmos", 8)).toEqual(["none"])
-    expect(supportsDialnorm("thd-atmos")).toBe(false)
+    expect(supportsDialnorm("thd-atmos")).toBe(true)
     expect(supportsMeasureOnly("thd-atmos")).toBe(false)
     expect(isAtmos("thd-atmos")).toBe(true)
     expect(drcChoices("thd-atmos")).toEqual([...DRC_VALUES])
@@ -356,9 +357,7 @@ describe("thd-atmos", () => {
 
   it("validates like the other Atmos formats", () => {
     expect(validate(opts({ format: "thd-atmos" }))).toEqual([])
-    expect(
-      validate(opts({ format: "thd-atmos", dialnorm: "-27" }))
-    ).toHaveLength(1)
+    expect(validate(opts({ format: "thd-atmos", dialnorm: "-27" }))).toEqual([])
     expect(
       validate(opts({ format: "thd-atmos", measureOnly: true }))
     ).toHaveLength(1)
@@ -376,7 +375,7 @@ describe("thd-atmos", () => {
     expect(setFormat(o, "thd-atmos")).toMatchObject({
       bitrate: "default",
       downmix: "none",
-      dialnorm: "0",
+      dialnorm: "-27",
       measureOnly: false,
       drc: "speech",
     })

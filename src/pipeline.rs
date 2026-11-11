@@ -3,8 +3,8 @@
 use crate::cli::Args;
 use crate::commands::{
     AudioPlan, EncodeParams, INTERMEDIATE_EXISTS_PRINT, audio_plan, decode_args, encode_args,
-    ffmpeg_args, ffmpeg_print, ffmpeg_print_short, intermediate_variant, measure_args, pipe_args,
-    print_command,
+    ffmpeg_args, ffmpeg_print, ffmpeg_print_short, intermediate_variant, measure_args,
+    measure_with_encoder_args, pipe_args, print_command,
 };
 use crate::config::{Config, DdpAtmosMode, Paths};
 use crate::data::ErrorKind;
@@ -16,8 +16,8 @@ use crate::inputs::{self, Input, Problem};
 use crate::interrupt;
 use crate::markup;
 use crate::plan::{
-    self, Format, InputInfo, Layout, Lfe, Modes, Profile71, Validated, check_atmos_inputs,
-    check_input_layouts, check_inputs, check_measurable, check_shim_for_ddp, compute_instances,
+    self, Format, InputInfo, Layout, Lfe, Modes, Profile71, Validated, check_ac4_dialnorm_channels,
+    check_atmos_inputs, check_input_layouts, check_inputs, check_shim_for_ddp, compute_instances,
     input_delay, notices, profile_71, resolve_layout, select_bitrate, validate_args,
 };
 use crate::probe::{self, Probe, ProbeError};
@@ -157,9 +157,10 @@ fn find_programs(
 ) -> Programs {
     let cwd = std::env::current_dir().unwrap_or_default();
     let dee = |tool: &str| tools::require_dee_tool(tool, &cwd, exe_dir);
-    let measure = needs_measure.then(|| dee("dee_measure_loudness"));
+    // `-mo` picks its tool once the channels are known, see `measure_tool`.
+    let measure = (needs_measure && !measure_only).then(|| dee("dee_measure_loudness"));
     let encoder = if measure_only {
-        measure.clone().unwrap_or_default()
+        String::new()
     } else {
         dee(format.dee_tool())
     };
@@ -181,6 +182,23 @@ fn find_programs(
         },
         shim,
     }
+}
+
+/// The tool of `-mo`: `dee_measure_loudness` does not take 8 channels, the
+/// DDP encoder measures those.
+fn measure_tool(exe_dir: &Path, channels: i64) -> String {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let tool = if measure_by_encoder(true, channels) {
+        "dee_ddp_encoder"
+    } else {
+        "dee_measure_loudness"
+    };
+    tools::require_dee_tool(tool, &cwd, exe_dir)
+}
+
+/// Whether `-mo` of this input is run by the DDP encoder.
+fn measure_by_encoder(measure_only: bool, channels: i64) -> bool {
+    measure_only && plan::wav_channels(channels) == 8
 }
 
 struct Context<'a> {
@@ -511,8 +529,16 @@ fn build_job(
             true,
         ),
     );
-    let measuring = measure_only || dialnorm != 0;
+    let via_manifest = dialnorm != 0 && format.dialnorm_via_manifest();
+    let measuring = measure_only || via_manifest;
+    let skip_dialnorm =
+        (dialnorm != 0 && !measure_only && !format.dialnorm_via_manifest()).then_some(dialnorm);
+    let by_encoder = measure_by_encoder(measure_only, ctx.info.channels);
     let measure_args = match (&ctx.programs.measure, measuring) {
+        (Some(tool), true) if by_encoder => {
+            let throwaway = join(&dee_temp, "measure.ec3");
+            measure_with_encoder_args(tool, &names.wav, &throwaway, &dee_temp)
+        }
         (Some(tool), true) => measure_args(tool, &names.wav, &names.loudness),
         _ => Vec::new(),
     };
@@ -531,7 +557,8 @@ fn build_job(
             drc: &ctx.validated.drc,
             outchannels: ctx.layout.outchannels,
             layout_arg: ctx.layout.layout_arg,
-            input_manifest: (dialnorm != 0).then_some(names.loudness.as_str()),
+            input_manifest: via_manifest.then_some(names.loudness.as_str()),
+            skip_dialnorm,
             output_manifest: &names.ac4_manifest,
             delay: &delay,
             temp: &dee_temp,
@@ -552,7 +579,7 @@ fn build_job(
     } else {
         vec![names.wav.clone()]
     };
-    if !measure_args.is_empty() {
+    if !measure_args.is_empty() && !by_encoder {
         temp_files.push(names.loudness.clone());
     }
     if matches!(format, Format::Ac4 | Format::Ac4Atmos) && !encode_args.is_empty() {
@@ -570,10 +597,12 @@ fn build_job(
         decode_args,
         measure_args,
         encode_args,
+        stop_when_measured: by_encoder,
         intermediate_exists,
         intermediate: intermediate.clone(),
         loudness_path: names.loudness,
         dialnorm,
+        skip_dialnorm,
         output_path,
         output_dir,
         temp_files,
@@ -734,8 +763,9 @@ pub fn run(args: Args, config: Config, paths: Paths) {
 
     let validated = validate_args(&args, &config.default_modes).unwrap_or_else(|fail| fail.exit());
     let format = validated.format;
-    let needs_measure = args.measure_only || validated.dialnorm != 0;
-    let programs = find_programs(
+    let needs_measure =
+        args.measure_only || (validated.dialnorm != 0 && validated.format.dialnorm_via_manifest());
+    let mut programs = find_programs(
         binaries,
         &paths.exe_dir,
         format,
@@ -775,7 +805,14 @@ pub fn run(args: Args, config: Config, paths: Paths) {
             rprintln!("{}", note);
         }
     }
-    check_measurable(info.channels, needs_measure).unwrap_or_else(|fail| fail.exit());
+    if args.measure_only {
+        let tool = measure_tool(&paths.exe_dir, info.channels);
+        programs.dee = tool.clone();
+        programs.measure = Some(tool);
+    }
+    // only the AC4 `-dn` is bound to dee_measure_loudness
+    check_ac4_dialnorm_channels(info.channels, needs_measure && !args.measure_only)
+        .unwrap_or_else(|fail| fail.exit());
 
     let profile = if args.measure_only {
         None

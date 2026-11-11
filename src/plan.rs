@@ -84,7 +84,21 @@ impl Format {
 
     /// Formats that accept a custom dialnorm.
     pub fn has_dialnorm(self) -> bool {
-        matches!(self, Format::Dd | Format::Ddp | Format::Ac4)
+        matches!(
+            self,
+            Format::Dd
+                | Format::Ddp
+                | Format::DdpAtmos
+                | Format::Thd
+                | Format::ThdAtmos
+                | Format::Ac4
+        )
+    }
+
+    /// DEE's AC4 encoders don't accept `skip:dialnorm`, so AC4 measures and
+    /// gets the value through the loudness manifest.
+    pub fn dialnorm_via_manifest(self) -> bool {
+        matches!(self, Format::Ac4)
     }
 
     /// The encoder's output delay in samples at 48 kHz that deew trims from
@@ -350,10 +364,13 @@ pub fn check_atmos_inputs(files: &[String], probes: &[Probe]) -> Result<(), Fail
     }
 }
 
-/// `dee_measure_loudness` (`-mo`, `-dn`) does not take 7.1 audio.
-pub fn check_measurable(channels: i64, measures: bool) -> Result<(), Fail> {
+/// The AC4 `-dn` flow measures the wav with `dee_measure_loudness`, which
+/// does not take 7.1 audio; and DEE's AC4 encoder downmixes 7.1 to 5.1 itself,
+/// so a measurement of the 7.1 wav (or of a downmix) would not match what is
+/// encoded. `measures` is true when that manifest flow is used.
+pub fn check_ac4_dialnorm_channels(channels: i64, measures: bool) -> Result<(), Fail> {
     if measures && wav_channels(channels) == 8 {
-        return Err(Fail::new(ErrorKind::MeasureChannels));
+        return Err(Fail::new(ErrorKind::Ac4DialnormChannels));
     }
     Ok(())
 }
@@ -920,7 +937,7 @@ mod tests {
             }))
             .is_ok()
         );
-        for format in ["aac", "thd", "ddp-atmos", "ac4-atmos"] {
+        for format in ["aac", "ac4-atmos"] {
             let e = validate_args_d(&args(|a| {
                 a.format = format.into();
                 a.dialnorm = -27
@@ -928,7 +945,7 @@ mod tests {
             .unwrap_err();
             assert_eq!(e.kind, ErrorKind::DialnormFormat, "{format}");
         }
-        for format in ["dd", "ddp", "ac4"] {
+        for format in ["dd", "ddp", "ddp-atmos", "thd", "thd-atmos", "ac4"] {
             let v = validate_args_d(&args(|a| {
                 a.format = format.into();
                 a.dialnorm = -27
@@ -1011,11 +1028,11 @@ mod tests {
 
     #[test]
     fn measuring_needs_at_most_5_1() {
-        assert!(check_measurable(8, false).is_ok());
-        assert!(check_measurable(6, true).is_ok());
+        assert!(check_ac4_dialnorm_channels(8, false).is_ok());
+        assert!(check_ac4_dialnorm_channels(6, true).is_ok());
         assert_eq!(
-            check_measurable(8, true).unwrap_err().kind,
-            ErrorKind::MeasureChannels
+            check_ac4_dialnorm_channels(8, true).unwrap_err().kind,
+            ErrorKind::Ac4DialnormChannels
         );
     }
 
@@ -1249,10 +1266,10 @@ mod tests {
             assert!(e.insert.unwrap().starts_with(l), "{l}");
         }
         assert_eq!(
-            check_measurable(7, true).unwrap_err().kind,
-            ErrorKind::MeasureChannels
+            check_ac4_dialnorm_channels(7, true).unwrap_err().kind,
+            ErrorKind::Ac4DialnormChannels
         );
-        assert!(check_measurable(5, true).is_ok());
+        assert!(check_ac4_dialnorm_channels(5, true).is_ok());
     }
 
     #[test]

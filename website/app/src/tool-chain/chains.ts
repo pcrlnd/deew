@@ -45,8 +45,8 @@ export const chains: Chain[] = [
     ],
   },
   {
-    title: "any channel format with -dn",
-    note: "separate measurement, deew writes the dialnorm",
+    title: "ac4 with -dn",
+    note: "separate measurement, deew writes the dialnorm into the manifest",
     flow: [
       file("IN"),
       arrow(),
@@ -66,8 +66,23 @@ export const chains: Chain[] = [
     ],
   },
   {
+    title: "dd · ddp · thd · ddp-atmos · thd-atmos with -dn",
+    note: "no measurement: the encoder gets --loudness-management skip:dialnorm=N",
+    flow: [
+      file("IN"),
+      arrow(),
+      tool("ffmpeg / truehdd decode"),
+      arrow(),
+      file("NAME.wav / .atmos"),
+      arrow("→ skip:dialnorm=N →"),
+      tool("DEE encoder"),
+      arrow(),
+      file("OUT"),
+    ],
+  },
+  {
     title: "-mo",
-    note: "no encoder runs",
+    note: "2.0 and 5.1 · no encoder runs",
     flow: [
       file("IN"),
       arrow(),
@@ -79,6 +94,21 @@ export const chains: Chain[] = [
       arrow(),
       file("loudness.json"),
       arrow(),
+      step("loudness in the bar"),
+    ],
+  },
+  {
+    title: "-mo with 7.1",
+    note: "dee_ddp_encoder measure_only, stopped as soon as the loudness is known",
+    flow: [
+      file("IN"),
+      arrow(),
+      tool("ffmpeg"),
+      arrow(),
+      file("NAME.wav"),
+      arrow(),
+      tool("dee_ddp_encoder measure_only"),
+      arrow("measured loudness, then killed →"),
       step("loudness in the bar"),
     ],
   },
@@ -184,6 +214,63 @@ export const chains: Chain[] = [
       tool("dee_ac4ajoc_encoder"),
       arrow(),
       file("OUT.ac4"),
+    ],
+  },
+]
+
+export type LoudnessRow = { cond: string; flow: FlowItem[]; note?: string }
+export type LoudnessTree = { option: string; rows: LoudnessRow[] }
+
+export const loudnessTrees: LoudnessTree[] = [
+  {
+    option: "-mo",
+    rows: [
+      {
+        cond: "≤ 5.1",
+        flow: [
+          tool("dee_measure_loudness"),
+          arrow(),
+          file("loudness.json"),
+          arrow(),
+          step("loudness in the bar"),
+        ],
+      },
+      {
+        cond: "7.1",
+        flow: [
+          tool("dee_ddp_encoder measure_only"),
+          arrow("killed once measured →"),
+          step("loudness in the bar"),
+        ],
+      },
+    ],
+  },
+  {
+    option: "-dn",
+    rows: [
+      {
+        cond: "DD · DDP · DDP Atmos · TrueHD · TrueHD Atmos",
+        flow: [
+          step("--loudness-management"),
+          step("skip:dialnorm=N"),
+          arrow(),
+          tool("DEE encoder"),
+        ],
+        note: "no measurement",
+      },
+      {
+        cond: "AC4",
+        flow: [
+          tool("dee_measure_loudness"),
+          arrow(),
+          file("loudness.json"),
+          arrow(),
+          step("deew writes the dialnorm"),
+          arrow(),
+          tool("dee_ac4_encoder --input-manifest"),
+        ],
+        note: "7.1 input is rejected",
+      },
     ],
   },
 ]

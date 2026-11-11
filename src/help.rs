@@ -52,7 +52,8 @@ pub const HELP: &str = concat!(
                             [bold bright_blue]none[/bold bright_blue] uses dee_shim for TrueHD, not available for AC4
   [green]-dn[/green], [green]--dialnorm[/green] [bold color(231)]DIALNORM[/bold color(231)]  [underline magenta]options:[/underline magenta] between [bold color(231)]-31[/bold color(231)] and [bold color(231)]0[/bold color(231)] (in case of [bold color(231)]0[/bold color(231)] DEE's measurement will be used)
                             [underline magenta]default:[/underline magenta] [bold color(231)]0[/bold color(231)]
-                            applied dialnorm value, only works for DD/DDP/AC4
+                            applied dialnorm value, doesn't work for AAC and
+                            AC4 Atmos
   [green]-in[/green], [green]--instances[/green] [bold color(231)]NUMBER[/bold color(231)]   [underline magenta]examples:[/underline magenta] [bold color(231)]1[/bold color(231)], [bold color(231)]4[/bold color(231)], [bold color(231)]50%[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]50%[/bold color(231)]
                             specifies how many encodes can run at the same time

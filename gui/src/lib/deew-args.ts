@@ -42,9 +42,9 @@ export function isAtmos(format: Format): boolean {
   )
 }
 
-/** Whether `-dn` works: DD, DDP and AC4 only. */
+/** Whether `-dn` works: everything but AAC and AC4 Atmos. */
 export function supportsDialnorm(format: Format): boolean {
-  return format === "dd" || format === "ddp" || format === "ac4"
+  return format !== "aac" && format !== "ac4-atmos"
 }
 
 /** Whether `-r` has an effect (AAC has no DRC). */
@@ -685,7 +685,7 @@ export function validate(o: DeewOptions): string[] {
   if (dn === null || dn < -31 || dn > 0) {
     problems.push("Dialnorm must be between -31 and 0.")
   } else if (dn !== 0 && !supportsDialnorm(o.format)) {
-    problems.push("Dialnorm only works for DD, DDP and AC4.")
+    problems.push("Dialnorm doesn't work for AAC and AC4 Atmos.")
   }
   if (o.drc === "none" && !supportsDrcNone(o.format)) {
     problems.push("DRC none is not supported for AC4.")

@@ -1,8 +1,20 @@
+import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig, type Plugin } from "vite"
 import { viteSingleFile } from "vite-plugin-singlefile"
+
+// The deew version comes from the repo root Cargo.toml ([package] version).
+function deewVersion(): string {
+  const toml = readFileSync(
+    resolve(import.meta.dirname, "../../Cargo.toml"),
+    "utf8"
+  )
+  const m = toml.match(/^version\s*=\s*"([^"]+)"/m)
+  if (!m) throw new Error("Could not find the version in ../../Cargo.toml")
+  return m[1]
+}
 
 // GitHub Pages serves /tool-chain for tool-chain.html; do the same in dev.
 function devCleanUrls(): Plugin {
@@ -26,6 +38,7 @@ export default defineConfig(({ mode }) => {
   const toolChain = mode === "tool-chain"
   return {
     base: "./",
+    define: { __DEEW_VERSION__: JSON.stringify(deewVersion()) },
     // public/ is copied by the index.html build only.
     publicDir: toolChain ? false : "public",
     plugins: [react(), tailwindcss(), viteSingleFile(), devCleanUrls()],

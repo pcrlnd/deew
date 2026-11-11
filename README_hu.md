@@ -161,7 +161,8 @@ FLAGS:
   -dn, --dialnorm DIALNORM  options: between -31 and 0 (in case of 0 DEE's
                             measurement will be used)
                             default: 0
-                            applied dialnorm value, only works for DD/DDP/AC4
+                            applied dialnorm value, doesn't work for AAC and
+                            AC4 Atmos
   -in, --instances NUMBER   examples: 1, 4, 50%
                             default: 50%
                             specifies how many encodes can run at the same time

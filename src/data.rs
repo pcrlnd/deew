@@ -127,7 +127,7 @@ pub enum ErrorKind {
     Ac4Drc,
     AtmosInput,
     AtmosNoAtmos,
-    MeasureChannels,
+    Ac4DialnormChannels,
     InputLayout,
     AacInput,
     ShimAtmos,
@@ -173,7 +173,7 @@ impl ErrorKind {
                 "[bold yellow]-dm[/bold yellow]/[bold yellow]--downmix[/bold yellow] can only be [bold yellow]2[/bold yellow] or [bold yellow]6[/bold yellow] for AC4 and [bold yellow]2[/bold yellow] for AAC."
             }
             Self::DialnormFormat => {
-                "custom dialnorm is only supported for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]AC4[/bold yellow] encoding."
+                "custom dialnorm is only supported for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow], [bold yellow]DDP Atmos[/bold yellow], [bold yellow]TrueHD[/bold yellow], [bold yellow]TrueHD Atmos[/bold yellow] and [bold yellow]AC4[/bold yellow] encoding."
             }
             Self::MeasureAtmos => {
                 "[bold yellow]-mo[/bold yellow]/[bold yellow]--measure-only[/bold yellow] can't be used with the Atmos formats."
@@ -193,8 +193,8 @@ impl ErrorKind {
             Self::ShimDdp70 => {
                 "dee_shim is required for 7.0 DDP, put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
             }
-            Self::MeasureChannels => {
-                "loudness measurement ([bold yellow]-mo[/bold yellow] and [bold yellow]-dn[/bold yellow]) doesn't work with 7.1 input."
+            Self::Ac4DialnormChannels => {
+                "custom dialnorm ([bold yellow]-dn[/bold yellow]) doesn't work for [bold yellow]AC4[/bold yellow] with 7.1 input, DEE's AC4 encoder downmixes it to 5.1 itself."
             }
             Self::AacInput => {
                 "AAC needs a 2.0, 5.1 or 7.1 input (DEE's AAC encoder always outputs 2.0)"

@@ -95,12 +95,9 @@ def md_escape(text):
     return "".join("\\" + c if c in "[]()|*_`\\" else c for c in text)
 
 
-def done_markdown(args):
+def binaries_table(args, assets):
+    """The markdown table of the release's binaries, or "" when there are none."""
     base = f"https://github.com/{args.repo}/releases"
-    info = built_platforms(args)
-    if args.started_at:
-        info += f" - ⏱️ {duration(args.started_at)}"
-    assets = read_assets(args.assets)
     rows = []
     for emoji, label, names in ROWS:
         if not any(n in assets for n in names):
@@ -110,12 +107,33 @@ def done_markdown(args):
             for n in names
         ]
         rows.append(f"| {emoji} **{label}** | " + " | ".join(cells) + " |")
+    if not rows:
+        return ""
+    return "| | CLI | GUI | Web |\n|:--|:--|:--|:--|\n" + "\n".join(rows) + "\n"
+
+
+def release_notes(args):
+    table = binaries_table(args, read_assets(args.assets))
+    body = "\n".join(latest_changelog(args.changelog).split("\n")[1:]).strip("\n")
+    return (
+        (table + "\n" if table else "")
+        + f"<details>\n<summary>Changelog</summary>\n\n{body}\n\n</details>\n"
+    )
+
+
+def done_markdown(args):
+    base = f"https://github.com/{args.repo}/releases"
+    info = built_platforms(args)
+    if args.started_at:
+        info += f" - ⏱️ {duration(args.started_at)}"
+    assets = read_assets(args.assets)
     out = (
         f"✅ **[{md_escape('deew ' + args.version)}]({base}/tag/{args.version})**"
         f" is out! ({components(args)})\n\n{info}\n\n"
     )
-    if rows:
-        out += "| | CLI | GUI | Web |\n|:--|:--|:--|:--|\n" + "\n".join(rows) + "\n\n"
+    table = binaries_table(args, assets)
+    if table:
+        out += table + "\n"
     return out + "![](tg://document?id=chlog)\n"
 
 
@@ -185,12 +203,12 @@ def main():
 
 def run():
     p = argparse.ArgumentParser()
-    p.add_argument("command", choices=["start", "done"])
+    p.add_argument("command", choices=["start", "done", "notes"])
     p.add_argument("--token", default="")
     p.add_argument("--chat", default="")
     p.add_argument("--version", required=True)
     for flag in ("cli", "gui-web", "macos"):
-        p.add_argument(f"--{flag}", required=True, type=lambda s: s == "true")
+        p.add_argument(f"--{flag}", default=False, type=lambda s: s == "true")
     p.add_argument("--run-url", default="")
     p.add_argument("--started-at", default="")
     p.add_argument("--assets", default="")
@@ -198,6 +216,10 @@ def run():
     p.add_argument("--changelog", default="changelog.md")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
+
+    if args.command == "notes":
+        sys.stdout.write(release_notes(args))
+        return
 
     if args.command == "start":
         text = start_text(args)

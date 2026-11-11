@@ -36,6 +36,9 @@ pub struct Job {
     pub measure_args: Vec<String>,
     /// The encoder (empty for `-mo`).
     pub encode_args: Vec<String>,
+    /// The measurement is run by the DDP encoder (8 channels), which is
+    /// stopped when it has printed the loudness.
+    pub stop_when_measured: bool,
     /// The wav, or the `.atmos` file, already exists.
     pub intermediate_exists: bool,
     /// The wav, or the `.atmos` file.
@@ -44,6 +47,8 @@ pub struct Job {
     pub loudness_path: String,
     /// Custom dialnorm that goes into the manifest, 0 for none.
     pub dialnorm: i64,
+    /// Custom dialnorm given to DEE with `skip:dialnorm=N` (not for AC4).
+    pub skip_dialnorm: Option<i64>,
     pub output_path: String,
     pub output_dir: String,
     /// Files in the temp directory that are removed afterwards (not with `-k`).
@@ -252,7 +257,7 @@ impl DeeParser {
         let mut events = Vec::new();
         if let Some(c) = DEE_STEP.captures(line) {
             let name = c[3].to_lowercase();
-            if name.contains("measurement") {
+            if name.contains("measurement") || name.contains("preprocessing") {
                 events.push(DeeEvent::Step(Stage::Measure));
             } else if name.contains("encoding") {
                 events.push(DeeEvent::Step(Stage::Encode));
@@ -920,6 +925,10 @@ struct Phase<'a> {
     stage: Stage,
     /// Where the first of two steps ends.
     first: FirstStep,
+    /// The dialnorm shown, when DEE does not measure it.
+    db: Option<i64>,
+    /// Kill the tool as soon as it printed the loudness; that is a success.
+    stop_when_measured: bool,
 }
 
 /// Run a DEE tool (also through dee_shim) and follow its output.
@@ -929,8 +938,9 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = drain_stream(child.stderr.take().expect("piped stderr"), "stderr");
     let mut stage = phase.stage;
-    let mut db = None;
+    let mut db = phase.db;
     let mut errors: Vec<String> = Vec::new();
+    let mut stopped = false;
     // the last line of stdout that is none of the output the parser knows
     let mut last_other: Option<String> = None;
     bar.describe(stage, db);
@@ -958,6 +968,10 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                     db = Some(measured);
                     log.measured.get_or_insert(measured);
                     bar.describe(stage, db);
+                    if phase.stop_when_measured && !stopped {
+                        stopped = true;
+                        let _ = child.kill();
+                    }
                 }
                 DeeEvent::Progress(percent) => show(bar, map.progress(percent)),
                 DeeEvent::Error(message) => errors.push(message),
@@ -981,6 +995,11 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
         .or_else(|| stderr_detail(&stderr.lines, is_shim(&phase.args[0])))
         .or(last_other);
     log.streams.push(stderr);
+    if stopped {
+        // killed on purpose, the measurement is what was wanted
+        bar.percent(100.0);
+        return Ok(());
+    }
     if !status.success() {
         return Err(failure_message(tool, status, detail.as_deref()));
     }
@@ -1035,7 +1054,13 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
         let phase = Phase {
             args: &job.measure_args,
             stage: Stage::Measure,
-            first: FirstStep::EndsAt(100.0),
+            first: if job.stop_when_measured {
+                FirstStep::EndsAt(50.0)
+            } else {
+                FirstStep::EndsAt(100.0)
+            },
+            db: None,
+            stop_when_measured: job.stop_when_measured,
         };
         staged(stages, "measure", &[&job.measure_args], on, |log| {
             run_dee(&phase, bar, ui, log)
@@ -1046,8 +1071,10 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
     }
     if encoding {
         // DEE only measures itself when it got no loudness manifest, and
-        // AAC and TrueHD are not measured at all.
-        let measures = !measuring && !matches!(job.format, Format::Aac | Format::Thd);
+        // AAC and TrueHD are not measured at all, and `skip` does not measure.
+        let skipped = job.skip_dialnorm.is_some()
+            && matches!(job.format, Format::Dd | Format::Ddp | Format::DdpAtmos);
+        let measures = !measuring && !skipped && !matches!(job.format, Format::Aac | Format::Thd);
         let phase = Phase {
             args: &job.encode_args,
             stage: if measures {
@@ -1056,6 +1083,8 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
                 Stage::Encode
             },
             first: FirstStep::of_format(job.format),
+            db: job.skip_dialnorm,
+            stop_when_measured: false,
         };
         staged(stages, "encode", &[&job.encode_args], on, |log| {
             run_dee(&phase, bar, ui, log)
@@ -1138,7 +1167,12 @@ pub fn run_job(job: &Job, options: &Options, bar: &Bar, ui: &Ui) -> Outcome {
     let started = SystemTime::now();
     bar.describe(Stage::Starting, None);
     let mut stages = Vec::new();
-    if job.encode_args.iter().any(|a| a == "--temp-dir") {
+    if job
+        .encode_args
+        .iter()
+        .chain(&job.measure_args)
+        .any(|a| a == "--temp-dir")
+    {
         let _ = std::fs::create_dir_all(&job.dee_temp);
     }
     let result = run_stages(job, bar, ui, &mut stages);
@@ -1267,6 +1301,17 @@ mod tests {
         assert_eq!(m("measured_loudness=-23.5"), [DeeEvent::Measured(-24)]);
         assert_eq!(m("measured_loudness"), []);
         assert_eq!(m("measured_loudness=abc"), []);
+    }
+
+    #[test]
+    fn preprocessing_steps_are_the_first_step() {
+        let mut p = DeeParser::new();
+        for name in ["6-channel preprocessing", "Atmos preprocessing"] {
+            assert_eq!(
+                p.feed(&format!("[2026-11-01 22:01:24.690] Step 1/2 : {name}")),
+                [DeeEvent::Step(Stage::Measure)]
+            );
+        }
     }
 
     #[test]

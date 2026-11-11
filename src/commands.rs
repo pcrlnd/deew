@@ -307,6 +307,9 @@ pub struct EncodeParams<'a> {
     pub layout_arg: Option<&'a str>,
     /// Loudness manifest with the custom dialnorm.
     pub input_manifest: Option<&'a str>,
+    /// Custom dialnorm given to DEE with `--loudness-management
+    /// skip:dialnorm=N`, for every format but AC4.
+    pub skip_dialnorm: Option<i64>,
     /// Manifest the AC4 encoders write.
     pub output_manifest: &'a str,
     /// `--start` / `--add-silence` (see `util::delay_options`).
@@ -477,7 +480,13 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             args.extend(strings(&["-e", &format!("{mode}:drc_profile={}", p.drc)]));
             args.extend(strings(&["--input-format", "wav", "-i", p.input]));
             args.extend(strings(&["-o", p.output]));
-            args.extend(strings(&["--loudness-management", "measure_only"]));
+            match p.skip_dialnorm {
+                Some(n) => args.extend(strings(&[
+                    "--loudness-management",
+                    &format!("skip:dialnorm={n}"),
+                ])),
+                None => args.extend(strings(&["--loudness-management", "measure_only"])),
+            }
             if let Some(manifest) = p.input_manifest {
                 args.extend(strings(&["--input-manifest", manifest]));
             }
@@ -508,16 +517,24 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             if let Some(layout) = p.layout_arg {
                 args.extend(strings(&["-c", layout]));
             }
-            let management = if p.format == Format::Aac {
-                "skip"
-            } else {
-                "measure_only"
+            let management = match (p.format, p.skip_dialnorm) {
+                (Format::Aac, _) => "skip".to_string(),
+                (_, Some(n)) => format!("skip:dialnorm={n}"),
+                _ => "measure_only".to_string(),
             };
-            args.extend(strings(&["--loudness-management", management]));
+            args.extend(strings(&["--loudness-management", &management]));
             if let Some(manifest) = p.input_manifest {
                 args.extend(strings(&["--input-manifest", manifest]));
             }
         }
+    }
+    if let Some(n) = p.skip_dialnorm
+        && matches!(p.format, Format::DdpAtmos | Format::Thd | Format::ThdAtmos)
+    {
+        args.extend(strings(&[
+            "--loudness-management",
+            &format!("skip:dialnorm={n}"),
+        ]));
     }
     args.extend(p.delay.iter().cloned());
     // The DDP and AC4 Atmos encoders don't know the option.
@@ -542,6 +559,33 @@ pub fn measure_args(tool: &str, wav: &str, manifest: &str) -> Vec<String> {
         wav,
         "--output-manifest",
         manifest,
+    ])
+}
+
+/// `-mo` for 8-channel input, which `dee_measure_loudness` rejects: the DDP
+/// encoder in the Blu-ray profile with `measure_only`. The caller stops it
+/// once it has printed the loudness, `output` is a throwaway file.
+pub fn measure_with_encoder_args(tool: &str, wav: &str, output: &str, temp: &str) -> Vec<String> {
+    strings(&[
+        tool,
+        "--progress",
+        "1",
+        "--overwrite",
+        "1",
+        "--input-format",
+        "wav",
+        "-i",
+        wav,
+        "-o",
+        output,
+        "-e",
+        "bluray:drc_profile=none",
+        "--data-rate",
+        "1024",
+        "--loudness-management",
+        "measure_only",
+        "--temp-dir",
+        temp,
     ])
 }
 
@@ -986,6 +1030,7 @@ mod tests {
             outchannels: 6,
             layout_arg: None,
             input_manifest: None,
+            skip_dialnorm: None,
             output_manifest: "/t/a.ac4.json",
             delay: &[],
             temp: "/t",
@@ -1511,6 +1556,100 @@ mod tests {
                 "--output-path",
                 "/t/a",
                 "/in/a.thd"
+            ])
+        );
+    }
+
+    fn assert_skip(args: &[String], after: Option<&str>) {
+        let hits: Vec<usize> = (0..args.len())
+            .filter(|&i| args[i] == "--loudness-management")
+            .collect();
+        assert_eq!(hits.len(), 1, "{args:?}");
+        assert_eq!(args[hits[0] + 1], "skip:dialnorm=-20", "{args:?}");
+        assert!(!args.contains(&"measure_only".to_string()), "{args:?}");
+        assert!(!args.contains(&"--input-manifest".to_string()), "{args:?}");
+        if let Some(marker) = after {
+            let at = args.iter().position(|a| a == marker).unwrap();
+            assert!(hits[0] > at, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn skip_dialnorm_commands() {
+        let shim = Shim {
+            run: "/shim/dee_shim".into(),
+        };
+        let mut p = params(Format::Dd);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), None);
+        let mut p = params(Format::Ddp);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), None);
+        let mut p = params(Format::Ddp);
+        p.outchannels = 8;
+        p.shim = Some(&shim);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), Some("--"));
+        let mut p = params(Format::DdpAtmos);
+        p.input = "/t/a.atmos";
+        p.shim = Some(&shim);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), Some("--"));
+        let mut p = params(Format::Thd);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), None);
+        let mut p = params(Format::Thd);
+        p.drc = "none";
+        p.shim = Some(&shim);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), Some("--"));
+        let mut p = params(Format::ThdAtmos);
+        p.input = "/t/a.atmos";
+        p.shim = Some(&shim);
+        p.skip_dialnorm = Some(-20);
+        assert_skip(&encode_args(&p), Some("--"));
+        let args = encode_args(&params(Format::Thd));
+        assert!(!args.contains(&"--loudness-management".to_string()));
+    }
+
+    #[test]
+    fn ac4_keeps_the_manifest() {
+        let mut p = params(Format::Ac4);
+        p.input_manifest = Some("/t/a.loudness.json");
+        let args = encode_args(&p);
+        let at = args
+            .iter()
+            .position(|a| a == "--loudness-management")
+            .unwrap();
+        assert_eq!(args[at + 1], "measure_only");
+        assert_eq!(args[at + 2], "--input-manifest");
+        assert_eq!(args[at + 3], "/t/a.loudness.json");
+    }
+
+    #[test]
+    fn measuring_with_the_encoder() {
+        assert_eq!(
+            measure_with_encoder_args("/dee/dee_ddp_encoder", "/t/a.wav", "/t/d/m.ec3", "/t/d"),
+            v(&[
+                "/dee/dee_ddp_encoder",
+                "--progress",
+                "1",
+                "--overwrite",
+                "1",
+                "--input-format",
+                "wav",
+                "-i",
+                "/t/a.wav",
+                "-o",
+                "/t/d/m.ec3",
+                "-e",
+                "bluray:drc_profile=none",
+                "--data-rate",
+                "1024",
+                "--loudness-management",
+                "measure_only",
+                "--temp-dir",
+                "/t/d",
             ])
         );
     }

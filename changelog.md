@@ -1,3 +1,17 @@
+# deew 5.1.0:
+- `-dn`: the custom dialnorm is given to DEE directly
+  (`--loudness-management skip:dialnorm=N`) for DD and DDP, so there is no
+  separate loudness measurement before the encode anymore
+- `-dn` works for DDP Atmos, TrueHD and TrueHD Atmos too (the same way),
+  and with 7.1 input for DDP and TrueHD; AC4 still measures and edits the
+  loudness manifest, and rejects 7.1 input (DEE's AC4 encoder downmixes it
+  to 5.1 itself)
+- `-mo` works with 7.1 input: DEE's DDP encoder measures it and is stopped
+  as soon as the loudness is known (`dee_measure_loudness` doesn't take 7.1)
+- `deew-gui`/`deew-web` 0.5.1:
+  - `-dn` is available for DDP Atmos, TrueHD and TrueHD Atmos too (needs
+    deew 5.1.0 or newer)
+
 # deew 5.0.3:
 - resizing the terminal quickly during encoding or `-gt` no longer leaves
   stale progress bar lines behind or overwrites the lines above them

@@ -119,6 +119,7 @@ else
   echo "[2026-11-01 22:01:24.690] Step 1/2 : Loudness Measurement"
   printf '[>          ] 0 %%\r[=====>     ] 12 %%\r[==========>] 50 %%\r\n'
   echo "[2026-11-01 22:01:24.838] [Source loudness] measured_loudness=-23.4"
+  if [ -n "$FAKE_HANG_AFTER_MEASURED" ]; then exec sleep 120; fi
   echo "[2026-11-01 22:01:24.838] [Source loudness] gating=dialogue"
   echo "[2026-11-01 22:01:24.900] Step 2/2 : Encoding"
   printf '[==========>] 50 %%\r[=======>    ] 75 %%\r[==========>] 100 %%\r\n'
@@ -933,7 +934,7 @@ fn aac_has_no_drc_or_dialnorm_and_trims_the_priming() {
     }
     assert_error(
         &env.deew(&["-i", "in.wav", "-f", "aac", "-dn", "-27"]),
-        "custom dialnorm is only supported for DD, DDP and AC4 encoding.",
+        "custom dialnorm is only supported for DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos and AC4 encoding.",
     );
 }
 
@@ -969,10 +970,15 @@ fn thd_presentation_and_leftovers() {
         &env.deew(&["-i", "in.wav", "-f", "thd-atmos", "-dm", "2"]),
         "-dm/--downmix only works for DD/DDP/AC4/AAC encoding and for TrueHD (2 or 6), not for the Atmos formats.",
     );
-    assert_error(
-        &env.deew(&["-i", "in.wav", "-f", "thd", "-dn", "-3"]),
-        "custom dialnorm is only supported for DD, DDP and AC4 encoding.",
-    );
+    // TrueHD takes the dialnorm through skip:dialnorm
+    ok(&env.deew(&["-i", "in.wav", "-f", "thd", "-dn", "-3"]));
+    let args = env.run("dee_dthd_encoder");
+    let at = args
+        .iter()
+        .position(|a| a == "--loudness-management")
+        .unwrap();
+    assert_eq!(args[at + 1], "skip:dialnorm=-3");
+    assert!(env.last_run("dee_measure_loudness").is_none());
 }
 
 #[test]
@@ -1457,10 +1463,12 @@ fn atmos_input_rules() {
             &env.deew(&["-i", "atmos.thd", "-f", format, "-mo"]),
             "-mo/--measure-only can't be used with the Atmos formats.",
         );
-        assert_error(
-            &env.deew(&["-i", "atmos.thd", "-f", format, "-dn", "-27"]),
-            "custom dialnorm is only supported for DD, DDP and AC4 encoding.",
-        );
+        if format == "ac4-atmos" {
+            assert_error(
+                &env.deew(&["-i", "atmos.thd", "-f", format, "-dn", "-27"]),
+                "custom dialnorm is only supported for DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos and AC4 encoding.",
+            );
+        }
     }
     assert!(env.truehdd_run().is_none());
     // truehd is no input for the other formats' downmix checks: a missing
@@ -1525,10 +1533,31 @@ fn missing_truehdd_is_only_needed_for_atmos() {
 }
 
 #[test]
+fn dd_and_ddp_dialnorm_is_skipped_to_dee() {
+    let env = env_or_skip!();
+    env.media("a.wav", "5.1", 48000, "pcm_s24le");
+    for format in ["dd", "ddp"] {
+        let out = env.deew(&["-i", "a.wav", "-f", format, "-dn", "-27", "-k"]);
+        ok(&out);
+        assert_eq!(summary_row(&stdout(&out), "Dialnorm"), "-27 dB");
+        let args = env.run("dee_ddp_encoder");
+        let at = args
+            .iter()
+            .position(|a| a == "--loudness-management")
+            .unwrap();
+        assert_eq!(args[at + 1], "skip:dialnorm=-27");
+        assert!(!has(&args, "--input-manifest"));
+        assert!(!args.contains(&"measure_only".to_string()));
+        assert!(!env.temp().join("a.loudness.json").exists());
+    }
+    assert!(env.last_run("dee_measure_loudness").is_none());
+}
+
+#[test]
 fn custom_dialnorm_goes_through_a_loudness_manifest() {
     let env = env_or_skip!();
     env.media("a.wav", "5.1", 48000, "pcm_s24le");
-    let out = env.deew(&["-i", "a.wav", "-dn", "-27", "-k"]);
+    let out = env.deew(&["-i", "a.wav", "-f", "ac4", "-dn", "-27", "-k"]);
     ok(&out);
     assert!(stdout(&out).contains(
         "Consider leaving the dialnorm value at 0 (auto), setting it manually can be dangerous."
@@ -1545,7 +1574,7 @@ fn custom_dialnorm_goes_through_a_loudness_manifest() {
         manifest.to_str().unwrap()
     );
     assert!(!has(&measure, "--temp-dir"));
-    let args = env.run("dee_ddp_encoder");
+    let args = env.run("dee_ac4_encoder");
     assert_eq!(opt(&args, "--input-manifest"), manifest.to_str().unwrap());
     // the dialnorm replaced the measured loudness
     let value: serde_json::Value =
@@ -1600,22 +1629,27 @@ fn dialnorm_shows_in_the_events() {
 }
 
 #[test]
-fn dialnorm_needs_at_most_5_1() {
+fn ac4_dialnorm_needs_at_most_5_1() {
     let env = env_or_skip!();
     env.media("sur.wav", "7.1", 48000, "pcm_s24le");
-    for extra in [vec!["-dn", "-27"], vec!["-mo"]] {
-        let mut args = vec!["-i", "sur.wav"];
-        args.extend(extra);
-        assert_error(
-            &env.deew(&args),
-            "loudness measurement (-mo and -dn) doesn't work with 7.1 input.",
+    // AC4 still measures for -dn with dee_measure_loudness
+    assert_error(
+        &env.deew(&["-i", "sur.wav", "-f", "ac4", "-dn", "-27"]),
+        "custom dialnorm (-dn) doesn't work for AC4 with 7.1 input, DEE's AC4 encoder downmixes it to 5.1 itself.",
+    );
+    // -mo measures 7.1 with the DDP encoder
+    ok(&env.deew(&["-i", "sur.wav", "-mo"]));
+    // DD and DDP give the dialnorm to DEE, which needs no measurement
+    for format in ["dd", "ddp"] {
+        ok(&env.deew(&["-i", "sur.wav", "-f", format, "-dn", "-27"]));
+        let encoder = env
+            .dshim_run()
+            .unwrap_or_else(|| env.run("dee_ddp_encoder"));
+        assert!(
+            encoder.contains(&"skip:dialnorm=-27".to_string()),
+            "{encoder:?}"
         );
     }
-    // 5.1 downmixed from 7.1 is still a 7.1 wav for the measurement
-    assert_error(
-        &env.deew(&["-i", "sur.wav", "-f", "dd", "-dn", "-27"]),
-        "loudness measurement (-mo and -dn) doesn't work with 7.1 input.",
-    );
 }
 
 #[test]
@@ -1651,6 +1685,33 @@ fn measure_only_runs_the_measurement_tool() {
     );
     assert!(!all.iter().any(|e| e["stage"] == "encode"));
     assert!(text.contains("finished: in.wav (-23 dB) - took "), "{text}");
+}
+
+#[test]
+fn measure_only_of_7_1_stops_the_ddp_encoder() {
+    let env = env_or_skip!();
+    env.media("sur.wav", "7.1", 48000, "pcm_s24le");
+    let started = std::time::Instant::now();
+    // the fake encoder would sleep for two minutes after the loudness
+    let out = env.deew_env(
+        &["-i", "sur.wav", "-mo", "-la"],
+        &[("FAKE_HANG_AFTER_MEASURED", "1")],
+    );
+    ok(&out);
+    assert!(started.elapsed().as_secs() < 60);
+    let text = stdout(&out);
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(opt(&args, "-e"), "bluray:drc_profile=none");
+    assert_eq!(opt(&args, "--loudness-management"), "measure_only");
+    assert_eq!(opt(&args, "--data-rate"), "1024");
+    assert!(env.last_run("dee_measure_loudness").is_none());
+    assert!(text.contains("dee_ddp_encoder --progress 1"), "{text}");
+    assert!(
+        text.contains("finished: sur.wav (-23 dB) - took "),
+        "{text}"
+    );
+    assert!(!env.out().join("sur.ec3").exists());
+    assert!(temp_is_empty(&env));
 }
 
 #[test]
@@ -1728,7 +1789,7 @@ fn failing_measurement_stops_before_the_encode() {
     let env = env_or_skip!();
     env.media("in.wav", "5.1", 48000, "pcm_s24le");
     let out = env.deew_env(
-        &["-i", "in.wav", "-dn", "-27"],
+        &["-i", "in.wav", "-f", "ac4", "-dn", "-27"],
         &[
             ("FAKE_FAIL_TOOL", "dee_measure_loudness"),
             ("FAKE_ERROR", "cannot measure"),
@@ -1738,7 +1799,7 @@ fn failing_measurement_stops_before_the_encode() {
         &out,
         "dee_measure_loudness failed (exit code 1): cannot measure",
     );
-    assert!(env.last_run("dee_ddp_encoder").is_none());
+    assert!(env.last_run("dee_ac4_encoder").is_none());
 }
 
 #[test]
@@ -1859,7 +1920,7 @@ fn long_argument_prints_every_command() {
     let env = env_or_skip!();
     env.media("a.wav", "5.1", 48000, "pcm_s24le");
     env.media("b.wav", "5.1", 48000, "pcm_s24le");
-    let out = env.deew(&["-i", "a.wav", "b.wav", "-la", "-dn", "-27"]);
+    let out = env.deew(&["-i", "a.wav", "b.wav", "-la", "-f", "ac4", "-dn", "-27"]);
     ok(&out);
     let text = stdout(&out);
     let commands: Vec<&str> = text
@@ -1881,7 +1942,7 @@ fn long_argument_prints_every_command() {
         commands[0]
     );
     assert!(
-        commands[0].contains(" && dee_ddp_encoder --progress 1 "),
+        commands[0].contains(" && dee_ac4_encoder --progress 1 "),
         "{}",
         commands[0]
     );
@@ -2569,7 +2630,7 @@ fn read_log(env: &Env, name: &str) -> String {
 fn keep_log_writes_a_report() {
     let env = env_or_skip!();
     env.media("a & <b>.wav", "5.1", 48000, "pcm_s24le");
-    ok(&env.deew(&["-i", "a & <b>.wav", "-kl", "-dn", "-27"]));
+    ok(&env.deew(&["-i", "a & <b>.wav", "-kl", "-f", "ac4", "-dn", "-27"]));
     let html = read_log(&env, "a & <b>.deew-log.html");
     // the status and the file name, escaped
     assert!(html.contains("a &amp; &lt;b&gt;.wav"), "{html}");
@@ -2583,7 +2644,7 @@ fn keep_log_writes_a_report() {
         );
     }
     assert!(html.contains("dee_measure_loudness --progress 1"));
-    assert!(html.contains("dee_ddp_encoder --progress 1"));
+    assert!(html.contains("dee_ac4_encoder --progress 1"));
     assert!(html.contains("--input-manifest"));
     assert!(html.contains("measured_loudness=-23.4"));
     assert!(html.contains("measured loudness -23 dB") || html.contains("-23 dB"));
@@ -2592,7 +2653,7 @@ fn keep_log_writes_a_report() {
     assert!(!html.contains("] 12 %"));
     // versions, settings
     assert!(html.contains("6.7.0") && html.contains("0.6.2"));
-    assert!(html.contains("<td>DRC</td><td class=\"mono\">none</td>"));
+    assert!(html.contains("<td>DRC</td><td class=\"mono\">music_light</td>"));
     assert!(html.contains("-27 dB"));
     // output
     assert!(
@@ -2771,10 +2832,14 @@ fn thd_atmos_needs_its_inputs_and_tools() {
         &env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-mo"]),
         "-mo/--measure-only can't be used with the Atmos formats.",
     );
-    assert_error(
-        &env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-dn", "-3"]),
-        "custom dialnorm is only supported for DD, DDP and AC4 encoding.",
-    );
+    ok(&env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-dn", "-3"]));
+    let shim = env.dshim_run().unwrap();
+    let encoder = env.run("dee_dthd_encoder");
+    let dash = shim.iter().position(|a| a == "--").unwrap();
+    let at = shim.iter().position(|a| a == "skip:dialnorm=-3").unwrap();
+    assert!(at > dash && shim[at - 1] == "--loudness-management");
+    assert!(env.last_run("dee_measure_loudness").is_none());
+    drop(encoder);
     let out = env.deew_env(
         &["-i", "atmos.thd", "-f", "thd-atmos"],
         &[("FAKE_NO_ATMOS", "1")],

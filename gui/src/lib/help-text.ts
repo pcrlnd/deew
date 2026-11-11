@@ -17,7 +17,7 @@ export const HELP = {
     "Specifies delay as ms, s or frame@FPS.\nFPS can be a number, division or ntsc / pal.\nExamples: -5.1ms, +1,52s, -24@pal, +10@24000/1001\nDefault: 0ms or parsed from filename.\nNegative values are passed as -d=-0ms automatically.",
   drc: "Specifies drc profile.\nOptions: none / film_light / film_standard / music_light / music_standard / speech\nnone (default): no DRC, uses dee_shim for TrueHD; not available for AC4 (music_light is used there).\nNot used for AAC.",
   dialnorm:
-    "Applied dialnorm value, between -31 and 0 (in case of 0 DEE's measurement will be used).\nOnly works for DD/DDP/AC4.\nDefault: 0",
+    "Applied dialnorm value, between -31 and 0 (in case of 0 DEE's measurement will be used).\nDoesn't work for AAC and AC4 Atmos.\nDefault: 0",
   instances:
     "Specifies how many encodes can run at the same time.\nExamples: 1, 4, 50%\n50% means 4 on a cpu with 8 threads. One DEE can use 2 threads so 50% can utilize all threads.\nThis option overrides the config's number. Default: 50% (see config).",
   ddpMode:
