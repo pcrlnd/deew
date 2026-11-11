@@ -209,7 +209,7 @@ pub fn version_of(program: &str, args: &[&str]) -> Version {
 }
 
 static DEE_VERSION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Dolby Encoding Engine version (\d+\.\d+\.\d+)").expect("valid regex")
+    Regex::new(r"Dolby Encoding Engine version ([0-9]+\.[0-9]+\.[0-9]+)").expect("valid regex")
 });
 
 /// `6.7.0` from `This tool belongs to the Dolby Encoding Engine version 6.7.0+8e353f99`.
@@ -284,6 +284,11 @@ pub fn probe_versions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_regexes_compile() {
+        LazyLock::force(&DEE_VERSION);
+    }
 
     #[cfg(unix)]
     #[test]

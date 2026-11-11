@@ -9,6 +9,13 @@
 //! screen last. Stdout is a `LineWriter`, so the terminal can see the text up
 //! to the last newline before the rest; clearing first would let it show a
 //! blank last line in between (a flicker).
+//!
+//! Each old row is erased whole (`\x1b[2K`) before it is written. A row the
+//! terminal wrapped on a narrowing resize is marked as continuing on the
+//! next row, and tmux keeps that mark when the row is only overwritten, so
+//! a later widening resize would join it with the row below and the frame
+//! would take fewer rows than counted (stale rows above it). Erasing the
+//! whole row drops the mark.
 
 use std::io::{IsTerminal, Write};
 use std::sync::{Arc, Condvar, Mutex};
@@ -60,8 +67,10 @@ fn rows_on_screen(widths: &[usize], terminal: usize) -> usize {
 ///
 /// The old rows are overwritten, never cleared first: the cursor goes back
 /// to the top of the old frame, `before` (text printed above the frame, not
-/// cut) and the lines are written, each clearing its own leftover tail with
-/// `\x1b[K`, and `\x1b[J` comes last to clear what is left below. Stdout is
+/// cut) and the lines are written, each erasing its old row first with
+/// `\x1b[2K` (when there is an old frame) and clearing the leftover tail of a
+/// wrapped `before` part with `\x1b[K`, and `\x1b[J` comes last to clear what
+/// is left below. Stdout is
 /// a `LineWriter`, so the terminal may get the text up to the last newline
 /// before the rest. With the clear last, it shows either the old or the new
 /// last line in between, never a blank row. Returns an empty string when
@@ -82,8 +91,12 @@ fn frame_bytes(
     if prev_rows > 0 {
         out.push('\r');
     }
+    // Erase the old rows whole (see the module docs); the first frame keeps
+    // whatever is on the cursor's row.
+    let erase = if prev_rows > 0 { "\x1b[2K" } else { "" };
     if let Some(before) = before {
         for part in before.split('\n') {
+            out.push_str(erase);
             out.push_str(part);
             out.push_str("\x1b[K\n");
         }
@@ -93,6 +106,7 @@ fn frame_bytes(
         if i > 0 {
             out.push_str("\x1b[K\n");
         }
+        out.push_str(erase);
         let cut = console::truncate_str(line, width, "");
         out.push_str(&cut);
         if cut.contains('\x1b') {
@@ -288,13 +302,13 @@ mod tests {
     #[test]
     fn one_row_returns_without_moving_up() {
         let (text, _) = frame_bytes(1, None, &v(&["a", "b"]), 10);
-        assert_eq!(text, "\ra\x1b[K\nb\x1b[J");
+        assert_eq!(text, "\r\x1b[2Ka\x1b[K\n\x1b[2Kb\x1b[J");
     }
 
     #[test]
     fn several_rows_move_up_first() {
         let (text, _) = frame_bytes(3, None, &v(&["a"]), 10);
-        assert_eq!(text, "\x1b[2A\ra\x1b[J");
+        assert_eq!(text, "\x1b[2A\r\x1b[2Ka\x1b[J");
     }
 
     #[test]
@@ -314,9 +328,12 @@ mod tests {
     #[test]
     fn text_above_is_written_over_the_old_rows() {
         let (text, _) = frame_bytes(2, Some("x\ny"), &v(&["a"]), 10);
-        assert_eq!(text, "\x1b[1A\rx\x1b[K\ny\x1b[K\na\x1b[J");
+        assert_eq!(
+            text,
+            "\x1b[1A\r\x1b[2Kx\x1b[K\n\x1b[2Ky\x1b[K\n\x1b[2Ka\x1b[J"
+        );
         let (text, _) = frame_bytes(1, Some("x"), &[], 10);
-        assert_eq!(text, "\rx\x1b[K\n\x1b[J");
+        assert_eq!(text, "\r\x1b[2Kx\x1b[K\n\x1b[J");
     }
 
     #[test]

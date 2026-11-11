@@ -70,7 +70,7 @@ fn basename_for(
         name = DELAY_RE.replace_all(&name, "").into_owned();
     }
     if sanitize {
-        name = deunicode::deunicode(&name).replace(' ', "_");
+        name = name.replace(' ', "_");
     }
     if quote {
         name = format!("\"{name}\"");
@@ -373,6 +373,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn static_regexes_compile() {
+        LazyLock::force(&DELAY_RE);
+    }
+
+    #[test]
     fn shell_quote_unix() {
         let q = |a: &str| shell_quote_for(a, false);
         assert_eq!(q("/tmp/a.wav"), "/tmp/a.wav");
@@ -572,8 +577,8 @@ mod tests {
         ("/a/b/My Movie DELAY +1500ms.dts", "wav", true, false, false, "\"My Movie DELAY +1500ms.wav\""),
         ("Éléphant ünïcode.wav", "wav", false, false, false, "Éléphant ünïcode.wav"),
         ("Éléphant ünïcode.wav", "wav", false, false, true, "Éléphant ünïcode.wav"),
-        ("Éléphant ünïcode.wav", "wav", false, true, false, "Elephant_unicode.wav"),
-        ("Éléphant ünïcode.wav", "wav", true, true, true, "\"Elephant_unicode.wav\""),
+        ("Éléphant ünïcode.wav", "wav", false, true, false, "Éléphant_ünïcode.wav"),
+        ("Éléphant ünïcode.wav", "wav", true, true, true, "\"Éléphant_ünïcode.wav\""),
         ("Éléphant ünïcode.wav", "wav", true, false, false, "\"Éléphant ünïcode.wav\""),
         ("noext", "wav", false, false, false, "noext.wav"),
         ("noext", "wav", false, false, true, "noext.wav"),
@@ -647,8 +652,8 @@ mod tests {
         ("File.name.with.dots.ac3", "wav", true, false, false, "\"File.name.with.dots.wav\""),
         ("/mnt/c/Movie Ünï.mkv", "wav", false, false, false, "Movie Ünï.wav"),
         ("/mnt/c/Movie Ünï.mkv", "wav", false, false, true, "Movie Ünï.wav"),
-        ("/mnt/c/Movie Ünï.mkv", "wav", false, true, false, "Movie_Uni.wav"),
-        ("/mnt/c/Movie Ünï.mkv", "wav", true, true, true, "\"Movie_Uni.wav\""),
+        ("/mnt/c/Movie Ünï.mkv", "wav", false, true, false, "Movie_Ünï.wav"),
+        ("/mnt/c/Movie Ünï.mkv", "wav", true, true, true, "\"Movie_Ünï.wav\""),
         ("/mnt/c/Movie Ünï.mkv", "wav", true, false, false, "\"Movie Ünï.wav\""),
     ];
 

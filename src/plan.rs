@@ -665,14 +665,13 @@ pub fn check_shim_for_ddp(
     }
 }
 
+static FILENAME_DELAY_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^.+DELAY ([-|+]?[0-9]+m?s)\..+").expect("valid regex")
+});
+
 /// The delay parsed from a `... DELAY -24ms.ext` file name, if it has one.
 pub fn filename_delay(path: &str) -> Option<String> {
-    use regex::Regex;
-    use std::sync::LazyLock;
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^.+DELAY ([-|+]?[0-9]+m?s)\..+").expect("valid regex"));
-
-    RE.captures(path).map(|c| {
+    FILENAME_DELAY_RE.captures(path).map(|c| {
         let delay = &c[1];
         if delay.starts_with(['-', '+']) {
             delay.to_string()
@@ -695,6 +694,11 @@ pub fn input_delay(path: &str, arg: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::config::DefaultBitrates;
+
+    #[test]
+    fn static_regexes_compile() {
+        std::sync::LazyLock::force(&super::FILENAME_DELAY_RE);
+    }
 
     fn defaults() -> DefaultBitrates {
         DefaultBitrates {

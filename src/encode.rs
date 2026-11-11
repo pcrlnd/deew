@@ -168,23 +168,25 @@ fn show(bar: &Bar, shown: Shown) {
 // Output parsing
 
 static FFMPEG_TIME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"time=(\S+)").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"time=([^ \t\r\n]+)").expect("valid regex"));
 static FFMPEG_PREFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[[^\]]*@ 0x[0-9a-fA-F]+\]\s*").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^\[[^\]]*@ 0x[0-9a-fA-F]+\][ \t\r\n]*").expect("valid regex"));
 static DEE_PROGRESS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[[=> ]*\]\s*(\d+) %").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\[[=> ]*\][ \t\r\n]*([0-9]+) %").expect("valid regex"));
 static DEE_STEP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Step (\d+)/(\d+) : (.+)").expect("valid regex"));
-static DEE_LOUDNESS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"measured_loudness=(-?\d+(?:\.\d+)?)").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"Step ([0-9]+)/([0-9]+) : (.+)").expect("valid regex"));
+static DEE_LOUDNESS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"measured_loudness=(-?[0-9]+(?:\.[0-9]+)?)").expect("valid regex")
+});
 static DEE_ERROR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"ERROR: (.*)").expect("valid regex"));
 static DEE_WARNING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"WARNING: (.*)").expect("valid regex"));
 static ATMOS_FRAMES: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Found (\d+) extractable frames").expect("valid regex"));
-static ATMOS_CHANNELS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d+) bed channels? \+ (\d+) objects?").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"Found ([0-9]+) extractable frames").expect("valid regex"));
+static ATMOS_CHANNELS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"([0-9]+) bed channels? \+ ([0-9]+) objects?").expect("valid regex")
+});
 
 /// `HH:MM:SS.xx` to seconds.
 pub fn stamp_to_sec(stamp: &str) -> Option<f64> {
@@ -1161,6 +1163,19 @@ pub fn run_job(job: &Job, options: &Options, bar: &Bar, ui: &Ui) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_regexes_compile() {
+        LazyLock::force(&FFMPEG_TIME);
+        LazyLock::force(&FFMPEG_PREFIX);
+        LazyLock::force(&DEE_PROGRESS);
+        LazyLock::force(&DEE_STEP);
+        LazyLock::force(&DEE_LOUDNESS);
+        LazyLock::force(&DEE_ERROR);
+        LazyLock::force(&DEE_WARNING);
+        LazyLock::force(&ATMOS_FRAMES);
+        LazyLock::force(&ATMOS_CHANNELS);
+    }
 
     #[test]
     fn stamps() {

@@ -14,7 +14,7 @@ const MAX_LINES: usize = 20_000;
 static ANSI: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").expect("valid regex"));
 static DEE_BAR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[[=> ]*\]\s*\d+ %").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\[[=> ]*\][ \t\r\n]*[0-9]+ %").expect("valid regex"));
 
 pub fn strip_ansi(text: &str) -> String {
     ANSI.replace_all(text, "").into_owned()
@@ -393,6 +393,12 @@ pub fn render(data: &LogData) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_regexes_compile() {
+        LazyLock::force(&ANSI);
+        LazyLock::force(&DEE_BAR);
+    }
 
     fn data() -> LogData {
         let mut stage = StageLog::new(

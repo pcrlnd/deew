@@ -1,3 +1,13 @@
+# deew 5.0.3:
+- resizing the terminal quickly during encoding or `-gt` no longer leaves
+  stale progress bar lines behind or overwrites the lines above them
+  (or much less likely)
+- the temporary `.atmos` files keep the non-ASCII characters of the input's
+  name (they were transliterated to ASCII, so e.g. `Film_é` and `Film_e`
+  got the same name)
+- smaller binaries (~1.4 MB less): `deunicode` was removed and `regex` is
+  built without its Unicode tables and speed-ups
+
 # deew 5.0.2:
 - resizing the terminal (or deew-gui) during encoding or `-gt` no longer
   duplicates or garbles the progress bars, deew draws them itself now
