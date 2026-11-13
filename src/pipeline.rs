@@ -3,8 +3,10 @@
 use crate::cli::Args;
 use crate::commands::{
     AudioPlan, EncodeParams, INTERMEDIATE_EXISTS_PRINT, audio_plan, decode_args, encode_args,
-    ffmpeg_args, ffmpeg_print, ffmpeg_print_short, intermediate_variant, measure_args,
-    measure_with_encoder_args, pipe_args, print_command,
+    ffmpeg_args, ffmpeg_pipe_args, ffmpeg_pipe_print, ffmpeg_pipe_print_short, ffmpeg_print,
+    ffmpeg_print_short, intermediate_variant, measure_args, measure_atmos_args,
+    measure_with_encoder_args, pcm_input_format, pcm_rate, pipe_args, pipe_sample_count,
+    print_command,
 };
 use crate::config::{Config, DdpAtmosMode, Paths};
 use crate::data::ErrorKind;
@@ -15,6 +17,7 @@ use crate::events;
 use crate::inputs::{self, Input, Problem};
 use crate::interrupt;
 use crate::markup;
+use crate::pipe;
 use crate::plan::{
     self, Format, InputInfo, Layout, Lfe, Modes, Profile71, Validated, check_ac4_dialnorm_channels,
     check_atmos_inputs, check_input_layouts, check_inputs, check_shim_for_ddp, compute_instances,
@@ -142,6 +145,8 @@ struct Programs {
     dee: String,
     /// `dee_measure_loudness`, for `-mo` and a custom dialnorm.
     measure: Option<String>,
+    /// `dee_ddpjoc_encoder`, measures the TrueHD Atmos sources of `-mo`.
+    measure_atmos: Option<String>,
     truehdd: Option<String>,
     shim: Option<Shim>,
 }
@@ -175,6 +180,7 @@ fn find_programs(
         ffprobe: binaries.ffprobe,
         dee: encoder,
         measure,
+        measure_atmos: None,
         truehdd: if format.is_atmos() {
             Some(tools::require_truehdd(exe_dir, &cwd))
         } else {
@@ -194,6 +200,11 @@ fn measure_tool(exe_dir: &Path, channels: i64) -> String {
         "dee_measure_loudness"
     };
     tools::require_dee_tool(tool, &cwd, exe_dir)
+}
+
+/// Whether `-mo` measures this source as Atmos: TrueHD with an Atmos presentation.
+fn atmos_source(probe: &Probe) -> bool {
+    probe.is_truehd && probe.is_atmos
 }
 
 /// Whether `-mo` of this input is run by the DDP encoder.
@@ -388,7 +399,44 @@ fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpe
                 && ctx.layout.outchannels == 8)
             || matches!(format, Format::DdpAtmos | Format::ThdAtmos)
             || (format == Format::Thd && ctx.validated.drc == "none"));
-    let settings = vec![
+    let settings = if ctx.args.measure_only {
+        let meter = if atmos_source(probe) {
+            "DDP Atmos encoder (dee_ddpjoc_encoder)"
+        } else if measure_by_encoder(true, ctx.info.channels) {
+            "DDP encoder (dee_ddp_encoder)"
+        } else {
+            "dee_measure_loudness"
+        };
+        vec![
+            row("Measure only", meter.to_string()),
+            row("Temp path", ctx.temp.to_string()),
+        ]
+    } else {
+        encode_settings(ctx, file, shim_used)
+    };
+    LogSpec {
+        path: join(
+            &ctx.output_dir(file),
+            &basename(file, "deew-log.html", false, false, true),
+        ),
+        versions,
+        input,
+        settings,
+        notices: ctx.notices.to_vec(),
+    }
+}
+
+/// DEE's surround phase shift is off: `-nps` or the config, DD/DDP only.
+fn phase_shift_off(ctx: &Context) -> bool {
+    ctx.validated.format.has_phase_shift()
+        && (ctx.validated.no_phase_shift || !ctx.config.surround_phase_shift)
+}
+
+/// The settings table of the report of an encode.
+fn encode_settings(ctx: &Context, file: &str, shim_used: bool) -> Vec<(String, String)> {
+    let row = |k: &str, v: String| (k.to_string(), v);
+    let format = ctx.validated.format;
+    let mut rows = vec![
         row("Format", format.summary_name().to_string()),
         row(
             "Bitrate",
@@ -429,28 +477,35 @@ fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpe
                 .map_or("none".to_string(), |d| d.to_string()),
         ),
         row("Delay", input_delay(file, ctx.args.delay.as_deref())),
-        row("Measure only", ctx.args.measure_only.to_string()),
         row("Temp path", ctx.temp.to_string()),
         row(
             "dee_shim used",
             if shim_used { "yes" } else { "no" }.to_string(),
         ),
     ];
-    LogSpec {
-        path: join(
-            &ctx.output_dir(file),
-            &basename(file, "deew-log.html", false, false, true),
-        ),
-        versions,
-        input,
-        settings,
-        notices: ctx.notices.to_vec(),
+    if phase_shift_off(ctx) {
+        // after the Downmix row
+        let at = rows
+            .iter()
+            .position(|(k, _)| k == "Downmix")
+            .map_or(rows.len(), |i| i + 1);
+        rows.insert(at, row("Surround phase shift", "off".to_string()));
     }
+    rows
 }
 
 /// DEE's own temp directory of job `index`: unique per deew process and job.
 fn dee_temp_dir(temp: &str, pid: u32, index: usize) -> String {
     join(temp, &format!("dee-{pid}-{index}"))
+}
+
+/// The installed dee_shim passes a `named_pipe://` input on unchanged (asked
+/// once per run, see `tools::shim_takes_named_pipe`).
+fn shim_takes_named_pipe(ctx: &Context) -> bool {
+    ctx.programs
+        .shim
+        .as_ref()
+        .is_some_and(|shim| tools::shim_takes_named_pipe(&shim.run, &ctx.programs.dee))
 }
 
 fn build_job(
@@ -464,8 +519,10 @@ fn build_job(
     let format = ctx.validated.format;
     let measure_only = ctx.args.measure_only;
     let dialnorm = ctx.validated.dialnorm;
-    // `-mo` measures a wav as made for DDP.
+    // `-mo` measures a wav as made for DDP, no downmix; a TrueHD Atmos source
+    // is decoded like for DDP Atmos (`format` is DDP then, see `validate_args`).
     let plan_format = if measure_only { Format::Ddp } else { format };
+    let measure_atmos = measure_only && atmos_source(probe);
     let downmix = if measure_only {
         None
     } else {
@@ -480,10 +537,32 @@ fn build_job(
         downmix,
     );
     let names = temp_names(ctx.temp, file, &variant);
+    let format = if measure_atmos {
+        Format::DdpAtmos
+    } else {
+        format
+    };
     let atmos = format.is_atmos();
     let intermediate = if atmos { &names.atmos } else { &names.wav };
-    let intermediate_exists = Path::new(intermediate).exists();
-
+    let via_manifest = dialnorm != 0 && format.dialnorm_via_manifest();
+    // ffmpeg feeds DEE directly, there is no wav: not for TrueHD (its encoder
+    // reads wav only), nor for the Atmos formats, nor when the audio is read
+    // twice (AC4's manifest for a custom dialnorm: the measurement and then
+    // the encode)
+    // Windows: dee_shim 0.1.0 makes the `-i` path absolute and breaks
+    // `named_pipe://`, so its layouts (standard 7.1, both 7.0) read the wav
+    // unless the installed dee_shim keeps the value (asked once, only here)
+    let shim_layout = !measure_only
+        && format == Format::Ddp
+        && ctx.layout.outchannels == 8
+        && (ctx.profile == Some(Profile71::Standard) || ctx.layout.lfe == Lfe::Removed);
+    let pcm_pipe = ctx.config.pipe
+        && !atmos
+        && plan_format != Format::Thd
+        && !via_manifest
+        && !(pipe::NAMED && shim_layout && !shim_takes_named_pipe(ctx));
+    let pipe_path = pcm_pipe.then(|| pipe::path(index));
+    let intermediate_exists = !pcm_pipe && Path::new(intermediate).exists();
     let plan = (!atmos).then(|| {
         audio_plan(
             plan_format,
@@ -500,11 +579,34 @@ fn build_job(
             },
         )
     });
+    let pcm_format = pcm_pipe.then(|| {
+        let rate = pcm_rate(plan_format, ctx.info.samplerate);
+        pcm_input_format(
+            plan.as_ref().map_or(24, |plan| plan.bit_depth),
+            rate,
+            plan::wav_channels(ctx.info.channels),
+            pipe_sample_count(probe.duration, rate),
+        )
+    });
+    let input_format = pcm_format.as_deref().unwrap_or("wav");
+    // what DEE reads: the wav, the pipe, or the `.atmos` file
+    let dee_input = pipe_path.as_deref().unwrap_or(intermediate);
     // truehdd reads raw streams only: a raw .thd goes to it directly, a track
     // of a container is copied into its stdin by ffmpeg.
     let piped = atmos && !probe.raw_truehd;
     let ffmpeg_args = if piped {
         pipe_args(&ctx.programs.ffmpeg, file, ctx.validated.track_index)
+    } else if pcm_pipe {
+        plan.as_ref()
+            .map(|plan| {
+                ffmpeg_pipe_args(
+                    &ctx.programs.ffmpeg,
+                    plan,
+                    file,
+                    &pipe::ffmpeg_output(index),
+                )
+            })
+            .unwrap_or_default()
     } else {
         plan.as_ref()
             .map(|plan| ffmpeg_args(&ctx.programs.ffmpeg, plan, file, &names.wav))
@@ -529,17 +631,21 @@ fn build_job(
             true,
         ),
     );
-    let via_manifest = dialnorm != 0 && format.dialnorm_via_manifest();
     let measuring = measure_only || via_manifest;
     let skip_dialnorm =
         (dialnorm != 0 && !measure_only && !format.dialnorm_via_manifest()).then_some(dialnorm);
-    let by_encoder = measure_by_encoder(measure_only, ctx.info.channels);
+    let by_encoder = measure_atmos || measure_by_encoder(measure_only, ctx.info.channels);
     let measure_args = match (&ctx.programs.measure, measuring) {
+        _ if measure_atmos => {
+            let throwaway = join(&dee_temp, "measure.ec3");
+            let tool = ctx.programs.measure_atmos.as_deref().unwrap_or_default();
+            measure_atmos_args(tool, &names.atmos, &throwaway)
+        }
         (Some(tool), true) if by_encoder => {
             let throwaway = join(&dee_temp, "measure.ec3");
-            measure_with_encoder_args(tool, &names.wav, &throwaway, &dee_temp)
+            measure_with_encoder_args(tool, input_format, dee_input, &throwaway, &dee_temp)
         }
-        (Some(tool), true) => measure_args(tool, &names.wav, &names.loudness),
+        (Some(tool), true) => measure_args(tool, input_format, dee_input, &names.loudness),
         _ => Vec::new(),
     };
     let encode_args = if measure_only {
@@ -551,7 +657,8 @@ fn build_job(
         encode_args(&EncodeParams {
             format,
             tool: &ctx.programs.dee,
-            input: intermediate,
+            input: dee_input,
+            input_format,
             output: &output_path,
             bitrate: ctx.bitrate.unwrap_or(0),
             drc: &ctx.validated.drc,
@@ -571,11 +678,14 @@ fn build_job(
             bluray: ctx.profile != Some(Profile71::Standard),
             atmos_mode: ctx.validated.atmos_mode,
             lfe_removed: ctx.layout.lfe == Lfe::Removed,
+            no_phase_shift: phase_shift_off(ctx),
         })
     };
 
     let mut temp_files = if atmos {
         atmos_files(&names.atmos)
+    } else if pcm_pipe {
+        Vec::new()
     } else {
         vec![names.wav.clone()]
     };
@@ -594,10 +704,12 @@ fn build_job(
         length: probe.duration,
         format,
         ffmpeg_args,
+        pipe: pipe_path,
         decode_args,
         measure_args,
         encode_args,
         stop_when_measured: by_encoder,
+        measure_only,
         intermediate_exists,
         intermediate: intermediate.clone(),
         loudness_path: names.loudness,
@@ -638,6 +750,23 @@ fn job_commands(
     short: bool,
     ffmpeg_print: Option<String>,
 ) -> String {
+    if job.pipe.is_some() {
+        // ffmpeg and DEE run at the same time, the one DEE command of the job
+        // reads the pipe
+        let output = job.ffmpeg_args.last().map_or("-", String::as_str);
+        let ffmpeg = ffmpeg_print.unwrap_or_else(|| ffmpeg_pipe_print_short(&plans[0], output));
+        let dee = [&job.measure_args, &job.encode_args]
+            .into_iter()
+            .find(|args| !args.is_empty())
+            .map_or_else(String::new, |args| print_command(args, short));
+        return if pipe::NAMED {
+            // DEE creates the pipe, so it starts first
+            format!("{dee} && {ffmpeg}")
+        } else {
+            // the stdout of ffmpeg is the stdin of DEE
+            format!("{ffmpeg} | {dee}")
+        };
+    }
     let mut parts = Vec::new();
     if job.intermediate_exists && !short {
         parts.push(INTERMEDIATE_EXISTS_PRINT.to_string());
@@ -672,9 +801,17 @@ fn print_commands(prepared: &Prepared, long: bool) {
             let ffmpeg = if job.format.is_atmos() {
                 None
             } else {
-                plans
-                    .next()
-                    .map(|plan| ffmpeg_print(plan, &job.input, &job.intermediate))
+                plans.next().map(|plan| {
+                    if job.pipe.is_some() {
+                        ffmpeg_pipe_print(
+                            plan,
+                            &job.input,
+                            job.ffmpeg_args.last().map_or("-", String::as_str),
+                        )
+                    } else {
+                        ffmpeg_print(plan, &job.input, &job.intermediate)
+                    }
+                })
             };
             rprintln!("{}", job_commands(job, &prepared.plans, false, ffmpeg));
         }
@@ -785,7 +922,7 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         inputs,
     );
     let info = check_inputs(&probes).unwrap_or_else(|fail| fail.exit());
-    if format.is_atmos() {
+    if format.is_atmos() && !args.measure_only {
         check_atmos_inputs(&files, &probes).unwrap_or_else(|fail| fail.exit());
     }
     check_input_layouts(&files, &probes).unwrap_or_else(|fail| fail.exit());
@@ -806,9 +943,18 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         }
     }
     if args.measure_only {
-        let tool = measure_tool(&paths.exe_dir, info.channels);
-        programs.dee = tool.clone();
-        programs.measure = Some(tool);
+        let atmos = probes.iter().any(atmos_source);
+        if atmos {
+            let tool = tools::require_dee_tool("dee_ddpjoc_encoder", &cwd, &paths.exe_dir);
+            programs.dee = tool.clone();
+            programs.measure_atmos = Some(tool);
+            programs.truehdd = Some(tools::require_truehdd(&paths.exe_dir, &cwd));
+        }
+        if !probes.iter().all(atmos_source) {
+            let tool = measure_tool(&paths.exe_dir, info.channels);
+            programs.dee = tool.clone();
+            programs.measure = Some(tool);
+        }
     }
     // only the AC4 `-dn` is bound to dee_measure_loudness
     check_ac4_dialnorm_channels(info.channels, needs_measure && !args.measure_only)
@@ -917,18 +1063,24 @@ mod tests {
     #[test]
     fn temp_files_are_named_after_the_input() {
         let names = temp_names("/t", "/in/My Song DELAY -5ms.flac", "");
-        assert_eq!(names.wav, "/t/My Song DELAY -5ms.wav");
-        assert_eq!(names.atmos, "/t/My_Song_DELAY_-5ms.atmos");
-        assert_eq!(names.loudness, "/t/My Song DELAY -5ms.loudness.json");
-        assert_eq!(names.ac4_manifest, "/t/My Song DELAY -5ms.ac4.json");
+        assert_eq!(names.wav, join("/t", "My Song DELAY -5ms.wav"));
+        assert_eq!(names.atmos, join("/t", "My_Song_DELAY_-5ms.atmos"));
+        assert_eq!(
+            names.loudness,
+            join("/t", "My Song DELAY -5ms.loudness.json")
+        );
+        assert_eq!(
+            names.ac4_manifest,
+            join("/t", "My Song DELAY -5ms.ac4.json")
+        );
         let names = temp_names("/t", "/in/a [1].flac", "thd.dm6.dl");
-        assert_eq!(names.wav, "/t/a [1].thd.dm6.dl.wav");
-        assert_eq!(names.atmos, "/t/a_[1].atmos");
+        assert_eq!(names.wav, join("/t", "a [1].thd.dm6.dl.wav"));
+        assert_eq!(names.atmos, join("/t", "a_[1].atmos"));
     }
 
     #[test]
     fn dee_temp_dir_is_per_process_and_job() {
-        assert_eq!(dee_temp_dir("/t", 42, 3), "/t/dee-42-3");
+        assert_eq!(dee_temp_dir("/t", 42, 3), join("/t", "dee-42-3"));
         assert_ne!(dee_temp_dir("/t", 42, 0), dee_temp_dir("/t", 43, 0));
     }
 
@@ -942,6 +1094,399 @@ mod tests {
                 "/t/a.atmos.audio",
                 "/t/a.caf"
             ]
+        );
+    }
+
+    fn test_probe(channels: i64, atmos: bool) -> Probe {
+        Probe {
+            sample_rate: 48000,
+            channels,
+            duration: 10.0,
+            bit_depth: 24,
+            is_truehd: atmos,
+            channel_layout: String::new(),
+            codec: if atmos { "truehd" } else { "pcm_s24le" }.into(),
+            raw_truehd: false,
+            profile: if atmos {
+                "Dolby TrueHD + Dolby Atmos"
+            } else {
+                ""
+            }
+            .into(),
+            is_atmos: atmos,
+        }
+    }
+
+    /// The job `-mo` makes of `file`, with the given other options.
+    fn measure_job(file: &str, probe: &Probe, edit: impl FnOnce(&mut Args)) -> Job {
+        let mut args = Args {
+            measure_only: true,
+            ..Args::default()
+        };
+        edit(&mut args);
+        test_job(file, probe, args, true)
+    }
+
+    /// The job of `file` for `args`, with `pipe` in the config.
+    fn test_job(file: &str, probe: &Probe, args: Args, pipe: bool) -> Job {
+        test_job_with(file, probe, args, pipe, None)
+    }
+
+    /// `test_job` with the 7.1 profile of the run; a profile comes with dee_shim.
+    fn test_job_with(
+        file: &str,
+        probe: &Probe,
+        args: Args,
+        pipe: bool,
+        profile: Option<Profile71>,
+    ) -> Job {
+        let mut config: Config = toml::from_str(crate::config::CONFIG_TEMPLATE).unwrap();
+        config.pipe = pipe;
+        let validated = validate_args(&args, &config.default_modes).unwrap();
+        let layout = resolve_layout(
+            validated.format,
+            validated.downmix,
+            probe.channels,
+            args.disable_lfe,
+        )
+        .unwrap();
+        let programs = Programs {
+            ffmpeg: "ffmpeg".into(),
+            ffprobe: "ffprobe".into(),
+            dee: "dee_x".into(),
+            measure: Some("dee_measure_loudness".into()),
+            measure_atmos: Some("dee_ddpjoc_encoder".into()),
+            truehdd: Some("truehdd".into()),
+            shim: profile.map(|_| crate::tools::Shim {
+                run: "dee_shim".into(),
+            }),
+        };
+        let versions = Versions::default();
+        let ctx = Context {
+            info: check_inputs(std::slice::from_ref(probe)).unwrap(),
+            args: &args,
+            config: &config,
+            validated: &validated,
+            layout: &layout,
+            programs: &programs,
+            bitrate: None,
+            temp: "/t",
+            output: "/o",
+            to_input: false,
+            profile,
+            versions: &versions,
+            notices: &[],
+        };
+        build_job(&ctx, 0, file, probe, 24).0
+    }
+
+    #[test]
+    fn measuring_an_atmos_source_decodes_and_measures_like_ddp_atmos() {
+        let probe = test_probe(8, true);
+        for format in ["ddp", "ddp-atmos", "thd"] {
+            let job = measure_job("/in/a.mkv", &probe, |a| a.format = format.into());
+            assert!(job.format.is_atmos(), "{format}");
+            // a container track is copied into truehdd
+            assert_eq!(job.ffmpeg_args[0], "ffmpeg");
+            assert_eq!(job.decode_args[0], "truehdd");
+            assert_eq!(job.decode_args.last().map(String::as_str), Some("-"));
+            assert!(job.decode_args.contains(&join("/t", "a")));
+            assert_eq!(
+                job.measure_args,
+                measure_atmos_args(
+                    "dee_ddpjoc_encoder",
+                    &join("/t", "a.atmos"),
+                    &join(&job.dee_temp, "measure.ec3")
+                )
+            );
+            assert!(!job.measure_args.contains(&"--temp-dir".to_string()));
+            assert!(job.encode_args.is_empty());
+            assert!(job.stop_when_measured && job.measure_only);
+            assert!(job.temp_files.contains(&join("/t", "a.atmos")));
+        }
+        // a raw stream goes to truehdd directly
+        let mut raw = probe.clone();
+        raw.raw_truehd = true;
+        let job = measure_job("/in/a.thd", &raw, |_| {});
+        assert!(job.ffmpeg_args.is_empty());
+        assert!(job.decode_args.contains(&"/in/a.thd".to_string()));
+    }
+
+    #[test]
+    fn measuring_other_sources_is_chosen_by_the_source() {
+        // E-AC-3 JOC is channel based
+        let mut joc = test_probe(6, true);
+        joc.is_truehd = false;
+        joc.codec = "eac3".into();
+        let job = measure_job("/in/a.ec3", &joc, |a| a.format = "ddp-atmos".into());
+        assert!(!job.format.is_atmos() && job.decode_args.is_empty());
+        assert_eq!(job.measure_args[0], "dee_measure_loudness");
+        assert!(!job.stop_when_measured);
+        let job = measure_job("/in/a.wav", &test_probe(8, false), |a| {
+            a.format = "ac4".into()
+        });
+        assert!(job.stop_when_measured);
+        assert!(job.measure_args.contains(&"--temp-dir".to_string()));
+    }
+
+    #[test]
+    fn measuring_ignores_the_downmix() {
+        let plain = measure_job("/in/a.wav", &test_probe(6, false), |_| {});
+        let downmixed = measure_job("/in/a.wav", &test_probe(6, false), |a| {
+            a.downmix = Some(2);
+            a.format = "thd".into();
+        });
+        assert_eq!(plain.ffmpeg_args, downmixed.ffmpeg_args);
+        assert!(
+            !downmixed.ffmpeg_args.iter().any(|a| a.contains("pan=")),
+            "{:?}",
+            downmixed.ffmpeg_args
+        );
+        assert_eq!(plain.intermediate, downmixed.intermediate);
+    }
+
+    fn encode_job(file: &str, probe: &Probe, pipe: bool, edit: impl FnOnce(&mut Args)) -> Job {
+        let mut args = Args::default();
+        edit(&mut args);
+        test_job(file, probe, args, pipe)
+    }
+
+    fn pipe_input_format(args: &[String]) -> &str {
+        let i = args.iter().position(|a| a == "--input-format").unwrap();
+        &args[i + 1]
+    }
+
+    #[test]
+    fn dd_ddp_ac4_and_aac_are_piped() {
+        for (format, channels) in [("ddp", 6), ("dd", 6), ("ac4", 6), ("aac", 2), ("ddp", 8)] {
+            let probe = test_probe(channels, false);
+            let job = encode_job("/in/a.wav", &probe, true, |a| a.format = format.into());
+            assert_eq!(job.pipe.as_deref(), Some(crate::pipe::path(0).as_str()));
+            assert!(!job.intermediate_exists, "{format}");
+            // no wav to make or to clean up
+            assert!(
+                job.temp_files.iter().all(|f| !f.ends_with(".wav")),
+                "{format}: {:?}",
+                job.temp_files
+            );
+            assert!(job.ffmpeg_args.ends_with(&[
+                "-f".into(),
+                "s24le".into(),
+                crate::pipe::ffmpeg_output(0)
+            ]));
+            assert!(!job.ffmpeg_args.contains(&"-rf64".to_string()));
+            let i = job.encode_args.iter().position(|a| a == "-i").unwrap();
+            assert_eq!(job.encode_args[i + 1], crate::pipe::path(0));
+            // 10 s and a second at 48 kHz
+            assert_eq!(
+                pipe_input_format(&job.encode_args),
+                format!(
+                    "pcm_s24le:sample_rate=48000:channels={channels}:streaming=1:sample_count=528000"
+                )
+            );
+            assert!(job.measure_args.is_empty());
+        }
+    }
+
+    #[test]
+    fn dee_shim_layouts_need_a_shim_that_keeps_the_pipe_on_windows() {
+        let probe = test_probe(8, false);
+        let job = |profile| {
+            let args = Args {
+                format: "ddp".into(),
+                ..Args::default()
+            };
+            test_job_with("/in/a.wav", &probe, args, true, Some(profile))
+        };
+        // standard 7.1 is a shim layout; the shim of the test does not exist,
+        // so on Windows (where it would be asked) it is not trusted
+        let standard = job(Profile71::Standard);
+        assert_eq!(standard.encode_args[0], "dee_shim");
+        assert_eq!(standard.pipe.is_some(), !cfg!(windows));
+        // Blu-ray 7.1 is native
+        let bluray = job(Profile71::Bluray);
+        assert_eq!(bluray.encode_args[0], "dee_x");
+        assert!(bluray.pipe.is_some());
+    }
+
+    #[test]
+    fn pipe_false_keeps_the_wav() {
+        let job = encode_job("/in/a.wav", &test_probe(6, false), false, |_| {});
+        assert!(job.pipe.is_none());
+        assert!(
+            job.ffmpeg_args
+                .ends_with(&["-rf64".into(), "always".into(), join("/t", "a.wav")])
+        );
+        assert_eq!(pipe_input_format(&job.encode_args), "wav");
+        assert_eq!(job.temp_files, [join("/t", "a.wav")]);
+        let job = measure_job("/in/a.wav", &test_probe(6, false), |_| {});
+        assert!(job.pipe.is_some());
+        let mut args = Args {
+            measure_only: true,
+            ..Args::default()
+        };
+        args.format = "ddp".into();
+        let job = test_job("/in/a.wav", &test_probe(6, false), args, false);
+        assert!(job.pipe.is_none());
+        assert_eq!(pipe_input_format(&job.measure_args), "wav");
+    }
+
+    #[test]
+    fn truehd_and_the_ac4_manifest_keep_the_wav() {
+        let probe = test_probe(6, false);
+        // TrueHD, also the downmixes
+        for edit in [
+            (|a: &mut Args| a.format = "thd".into()) as fn(&mut Args),
+            |a| {
+                a.format = "thd".into();
+                a.downmix = Some(2);
+            },
+        ] {
+            let job = encode_job("/in/a.wav", &probe, true, edit);
+            assert!(job.pipe.is_none());
+            assert_eq!(pipe_input_format(&job.encode_args), "wav");
+            assert!(job.temp_files.iter().any(|f| f.ends_with(".wav")));
+        }
+        // AC4 reads the audio twice with a custom dialnorm
+        let job = encode_job("/in/a.wav", &probe, true, |a| {
+            a.format = "ac4".into();
+            a.dialnorm = -20;
+        });
+        assert!(job.pipe.is_none());
+        assert_eq!(pipe_input_format(&job.measure_args), "wav");
+        assert_eq!(pipe_input_format(&job.encode_args), "wav");
+        assert!(job.temp_files.contains(&join("/t", "a.wav")));
+        // DD takes the dialnorm directly, one read
+        let job = encode_job("/in/a.wav", &probe, true, |a| {
+            a.format = "dd".into();
+            a.dialnorm = -20;
+        });
+        assert!(job.pipe.is_some());
+    }
+
+    #[test]
+    fn atmos_is_not_piped() {
+        let probe = test_probe(8, true);
+        let job = measure_job("/in/a.mkv", &probe, |_| {});
+        assert!(job.pipe.is_none());
+        let job = encode_job("/in/a.mkv", &probe, true, |a| a.format = "ac4-atmos".into());
+        assert!(job.pipe.is_none());
+        // the ffmpeg of truehdd copies the track
+        assert!(job.ffmpeg_args.contains(&"truehd".to_string()));
+    }
+
+    #[test]
+    fn measuring_is_piped_with_the_channels_of_the_wav() {
+        // dee_measure_loudness up to 5.1, the DDP encoder for 7.1
+        let job = measure_job("/in/a.wav", &test_probe(6, false), |_| {});
+        assert_eq!(job.measure_args[0], "dee_measure_loudness");
+        assert_eq!(
+            pipe_input_format(&job.measure_args),
+            "pcm_s24le:sample_rate=48000:channels=6:streaming=1:sample_count=528000"
+        );
+        let job = measure_job("/in/a.wav", &test_probe(8, false), |_| {});
+        assert!(job.stop_when_measured);
+        assert_eq!(
+            pipe_input_format(&job.measure_args),
+            "pcm_s24le:sample_rate=48000:channels=8:streaming=1:sample_count=528000"
+        );
+        // 5.0 and 7.0 are written as 5.1 and 7.1
+        let job = measure_job("/in/a.wav", &test_probe(5, false), |_| {});
+        assert!(pipe_input_format(&job.measure_args).contains("channels=6"));
+        let job = measure_job("/in/a.wav", &test_probe(7, false), |_| {});
+        assert!(pipe_input_format(&job.measure_args).contains("channels=8"));
+    }
+
+    #[test]
+    fn the_pipe_rate_is_the_output_rate() {
+        let mut probe = test_probe(6, false);
+        probe.sample_rate = 44100;
+        let job = encode_job("/in/a.wav", &probe, true, |_| {});
+        assert!(pipe_input_format(&job.encode_args).starts_with("pcm_f32le:sample_rate=48000:"));
+        assert!(pipe_input_format(&job.encode_args).ends_with(":sample_count=528000"));
+        assert!(job.ffmpeg_args.ends_with(&[
+            "-f".into(),
+            "f32le".into(),
+            crate::pipe::ffmpeg_output(0)
+        ]));
+        // without a duration there is no sample count
+        probe.duration = -1.0;
+        let job = encode_job("/in/a.wav", &probe, true, |_| {});
+        assert_eq!(
+            pipe_input_format(&job.encode_args),
+            "pcm_f32le:sample_rate=48000:channels=6:streaming=1"
+        );
+    }
+
+    #[test]
+    fn piped_jobs_print_one_command() {
+        let probe = test_probe(6, false);
+        let prepared = |pipe: bool| {
+            let job = encode_job("/in/a.wav", &probe, pipe, |_| {});
+            let plan = audio_plan(Format::Ddp, 48000, 6, 24, 0, false, None);
+            Prepared {
+                jobs: vec![job],
+                plans: vec![plan],
+            }
+        };
+        let piped = prepared(true);
+        let long = markup::strip(&job_commands(
+            &piped.jobs[0],
+            &piped.plans,
+            false,
+            Some(ffmpeg_pipe_print(
+                &piped.plans[0],
+                "/in/a.wav",
+                piped.jobs[0].ffmpeg_args.last().unwrap(),
+            )),
+        ));
+        let out = crate::pipe::ffmpeg_output(0);
+        let dee_input = format!("-i {} -o ", crate::pipe::path(0));
+        if cfg!(windows) {
+            // DEE creates the pipe and starts first; no shell pipe
+            assert!(long.starts_with("dee_x --progress 1"), "{long}");
+            assert!(
+                long.contains(&format!(
+                    " && ffmpeg -y -drc_scale 0 -i /in/a.wav -map 0:a:0 -c pcm_s24le -f s24le {out}"
+                )),
+                "{long}"
+            );
+            assert!(long.contains("-i named_pipe://"), "{long}");
+            assert!(!long.contains('|'), "{long}");
+        } else {
+            assert!(
+                long.starts_with("ffmpeg -y -drc_scale 0 -i /in/a.wav "),
+                "{long}"
+            );
+            assert!(long.contains(" -f s24le - | dee_x --progress 1"), "{long}");
+            assert!(!long.contains("&&"), "{long}");
+        }
+        assert!(long.contains(&dee_input), "{long}");
+        let short = markup::strip(&job_commands(&piped.jobs[0], &piped.plans, true, None));
+        assert!(
+            short.contains("ffmpeg -y -drc_scale 0 -i [input] "),
+            "{short}"
+        );
+        assert!(short.contains(&format!("-f s24le {out}")), "{short}");
+        assert!(
+            short.contains(&format!("-i {} -o [output]", crate::pipe::path(0))),
+            "{short}"
+        );
+        // without the pipe: the wav, then the encoder
+        let wav = prepared(false);
+        let long = markup::strip(&job_commands(
+            &wav.jobs[0],
+            &wav.plans,
+            false,
+            Some(ffmpeg_print(
+                &wav.plans[0],
+                "/in/a.wav",
+                &join("/t", "a.wav"),
+            )),
+        ));
+        assert!(
+            long.contains(&format!("-rf64 always {} && dee_x", join("/t", "a.wav"))),
+            "{long}"
         );
     }
 }

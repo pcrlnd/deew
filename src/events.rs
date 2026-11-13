@@ -1,6 +1,7 @@
 //! Structured events for deew-gui and deew-web: when `DEEW_EVENTS_FILE` is
 //! set, one compact JSON object per line is appended to that file.
 
+use crate::util::{Gating, Level};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
@@ -55,13 +56,15 @@ fn jobs_value(files: &[&str]) -> Value {
     json!({"type": "jobs", "files": files})
 }
 
-fn progress_value(job: usize, stage: Stage, percent: Option<f64>, db: Option<i64>) -> Value {
+fn progress_value(job: usize, stage: Stage, percent: Option<f64>, level: Option<Level>) -> Value {
     json!({
         "type": "progress",
         "job": job,
         "stage": stage,
         "percent": percent.map(round2),
-        "db": db,
+        "db": level.map(|l| l.db),
+        "gating": level.and_then(|l| l.gating).map(Gating::name),
+        "speech": level.and_then(|l| l.speech),
     })
 }
 
@@ -77,9 +80,9 @@ pub fn jobs(files: &[&str]) {
 }
 
 /// Progress of a job; `percent` is 0 to 100, `None` for an unknown total.
-pub fn progress(job: usize, stage: Stage, percent: Option<f64>, db: Option<i64>) {
+pub fn progress(job: usize, stage: Stage, percent: Option<f64>, level: Option<Level>) {
     if enabled() {
-        emit(progress_value(job, stage, percent, db));
+        emit(progress_value(job, stage, percent, level));
     }
 }
 
@@ -140,12 +143,21 @@ mod tests {
 
     #[test]
     fn progress_shape() {
-        let v = progress_value(2, Stage::Encode, Some(12.3456), Some(-24));
+        let v = progress_value(2, Stage::Encode, Some(12.3456), Some(Level::new(-24)));
         assert_eq!(v["type"], "progress");
         assert_eq!(v["job"], 2);
         assert_eq!(v["stage"], "encode");
         assert_eq!(v["percent"], 12.35);
         assert_eq!(v["db"], -24);
+        assert!(v["gating"].is_null() && v["speech"].is_null());
+        let level = Level {
+            db: -33,
+            gating: Some(Gating::Dialogue),
+            speech: Some(16),
+        };
+        let v = progress_value(0, Stage::Measure, Some(1.0), Some(level));
+        assert_eq!(v["gating"], "dialogue");
+        assert_eq!(v["speech"], 16);
         let v = progress_value(0, Stage::Starting, None, None);
         assert_eq!(v["stage"], "starting");
         assert!(v["percent"].is_null() && v["db"].is_null());

@@ -6,7 +6,7 @@
 @source ".";
 @source "../index.html";
 
-/* Only the latin and latin-ext subsets, to keep the single file small. */
+/* Only the latin and latin-ext subsets, to keep the font downloads small. */
 @font-face {
   font-family: "IBM Plex Sans Variable";
   font-style: normal;

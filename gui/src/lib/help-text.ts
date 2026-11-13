@@ -26,11 +26,13 @@ export const HELP = {
     "Profile of DDP Atmos.\nstreaming: 5.1 with Atmos, 384-1024 kbps, the format of streaming services, best device support.\nstandard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps.\nbluray: 7.1 with Atmos, AC-3 core + E-AC-3, 1152-1664 kbps.\nDefault: from the config's [default_modes] (see Utilities > Show config).",
   disableLfe:
     "Removes the LFE channel from a 5.1 or 7.1 input. DD and DDP output real 5.0 / 7.0 (7.0 DDP needs dee_shim); TrueHD and AC4 can't leave the LFE out, so it is kept silent. Not used for AAC (always stereo) or Atmos.",
+  noPhaseShift:
+    "Turns off DEE's 90° phase shift of the surround channels (DD and DDP only, no effect on mono and stereo).\nDEE applies it by default; the config's surround_phase_shift = false turns it off for every run.\nUnchecked: the default or the config's setting.",
   keepTemp: "Keep temp files.",
   keepLog:
     "Keep TrueHD's encode log and write a .deew-log.html report next to each output.",
   measureOnly:
-    "Only measures the loudness with DEE, no encoding.\nNot available for the Atmos formats.",
+    "Only measures the loudness of the source with DEE, no encoding.\nThe format and the encoding options are ignored.\nTrueHD Atmos sources are measured as Atmos.",
   longArgument: "Print ffmpeg and DEE arguments for each input.",
   noPrompt: "Skip confirmation questions, print them as notes and continue.",
   info: {
@@ -41,6 +43,7 @@ export const HELP = {
     "-cl": "Show changelog.",
     "-c": "Show config and config location.",
     "-gc": "Generate a new config next to the deew CLI.",
-    "-gt": "Download ffmpeg, ffprobe, truehdd and dee_shim next to the deew CLI (everything except DEE).",
+    "-gt":
+      "Download ffmpeg, ffprobe, truehdd and dee_shim next to the deew CLI (everything except DEE).",
   },
 } as const

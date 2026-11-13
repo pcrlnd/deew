@@ -1,6 +1,7 @@
 //! The `.deew-log.html` report of `-kl`: one standalone HTML file per job
 //! with the settings, the command lines and the output of every stage.
 
+use crate::util::Level;
 use regex::Regex;
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -98,7 +99,7 @@ pub struct StageLog {
     pub duration: f64,
     pub exit: Option<i32>,
     pub streams: Vec<Stream>,
-    pub measured: Option<i64>,
+    pub measured: Option<Level>,
     pub warnings: Vec<String>,
     /// Without `-kl` nothing is recorded.
     pub enabled: bool,
@@ -314,9 +315,10 @@ fn stage_html(index: usize, stage: &StageLog) -> String {
         icon("copy"),
         escape_html(&stage.command)
     ));
-    if let Some(db) = stage.measured {
+    if let Some(level) = stage.measured {
         html.push_str(&format!(
-            "<div class=\"label\"><span class=\"badge sec\">measured loudness {db} dB</span></div>"
+            "<div class=\"label\"><span class=\"badge sec\">measured loudness {}</span></div>",
+            level.text()
         ));
     }
     for stream in &stage.streams {
@@ -413,7 +415,7 @@ mod tests {
         let out = stage.stream("stdout");
         stage.line(out, "\x1b[31mred\x1b[0m & <tag>");
         stage.exit = Some(1);
-        stage.measured = Some(-27);
+        stage.measured = Some(Level::new(-27));
         LogData {
             file_name: "a <b> & \"c\".wav".into(),
             ok: false,

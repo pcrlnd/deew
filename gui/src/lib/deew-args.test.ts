@@ -13,10 +13,10 @@ import {
   ddpModeApplies,
   parseDefaultModes,
   disableLfeApplies,
+  noPhaseShiftApplies,
   drcChoices,
   isAtmos,
   supportsDialnorm,
-  supportsMeasureOnly,
   FORMAT_LABELS,
   INFO_COMMANDS,
   TEMPLATE_DEFAULT_BITRATES,
@@ -90,6 +90,7 @@ describe("buildArgs", () => {
         ddpMode: "default",
         ddpAtmosMode: "default",
         disableLfe: false,
+        noPhaseShift: false,
         keepTemp: true,
         keepLog: true,
         measureOnly: true,
@@ -191,11 +192,17 @@ describe("validate", () => {
     }
     expect(validate(opts({ format: "aac", measureOnly: true }))).toEqual([])
     expect(validate(opts({ format: "thd", measureOnly: true }))).toEqual([])
-    for (const format of ["ddp-atmos", "ac4-atmos"] as const) {
+    // -mo ignores the format and the encoding options
+    for (const format of ["ddp-atmos", "ac4-atmos", "ac4"] as const) {
       expect(
-        validate(opts({ format, drc: "music_light", measureOnly: true }))
-      ).toHaveLength(1)
+        validate(
+          opts({ format, drc: "none", dialnorm: "-27", measureOnly: true })
+        )
+      ).toEqual([])
     }
+    expect(validate(opts({ trackIndex: "x", measureOnly: true }))).toHaveLength(
+      1
+    )
   })
 })
 
@@ -315,7 +322,7 @@ describe("formats", () => {
     expect(setFormat(o, "ddp-atmos")).toMatchObject({
       downmix: "none",
       dialnorm: "-27",
-      measureOnly: false,
+      measureOnly: true,
     })
   })
 })
@@ -340,7 +347,6 @@ describe("thd-atmos", () => {
     expect(info.warnings).toEqual([])
     expect(relevantDownmixes("thd-atmos", 8)).toEqual(["none"])
     expect(supportsDialnorm("thd-atmos")).toBe(true)
-    expect(supportsMeasureOnly("thd-atmos")).toBe(false)
     expect(isAtmos("thd-atmos")).toBe(true)
     expect(drcChoices("thd-atmos")).toEqual([...DRC_VALUES])
   })
@@ -358,9 +364,9 @@ describe("thd-atmos", () => {
   it("validates like the other Atmos formats", () => {
     expect(validate(opts({ format: "thd-atmos" }))).toEqual([])
     expect(validate(opts({ format: "thd-atmos", dialnorm: "-27" }))).toEqual([])
-    expect(
-      validate(opts({ format: "thd-atmos", measureOnly: true }))
-    ).toHaveLength(1)
+    expect(validate(opts({ format: "thd-atmos", measureOnly: true }))).toEqual(
+      []
+    )
     expect(validate(opts({ format: "thd-atmos", drc: "speech" }))).toEqual([])
   })
 
@@ -376,7 +382,7 @@ describe("thd-atmos", () => {
       bitrate: "default",
       downmix: "none",
       dialnorm: "-27",
-      measureOnly: false,
+      measureOnly: true,
       drc: "speech",
     })
     expect(setFormat(opts({ drc: "none" }), "thd-atmos").drc).toBe("none")
@@ -573,6 +579,43 @@ describe("-dl (disable LFE)", () => {
         channels: 8,
       })
     ).toEqual(["--ddp-mode", "bluray", "-dl", "-k"])
+  })
+})
+
+describe("-nps (no surround phase shift)", () => {
+  const nps = (format: Parameters<typeof noPhaseShiftApplies>[0]) =>
+    buildArgs(opts({ noPhaseShift: true, format }))
+
+  it("is passed for DD and DDP", () => {
+    expect(nps("ddp")).toEqual(["-nps"])
+    expect(nps("dd")).toEqual(["-f", "dd", "-nps"])
+    expect(noPhaseShiftApplies("dd")).toBe(true)
+    expect(noPhaseShiftApplies("ddp")).toBe(true)
+  })
+
+  it("is not passed for other formats, so the CLI never fails on it", () => {
+    for (const format of [
+      "ddp-atmos",
+      "thd",
+      "thd-atmos",
+      "ac4",
+      "ac4-atmos",
+      "aac",
+    ] as const) {
+      expect(nps(format)).not.toContain("-nps")
+      expect(noPhaseShiftApplies(format)).toBe(false)
+    }
+  })
+
+  it("is off by default and comes after -dl and before -k", () => {
+    expect(buildArgs(opts({}))).toEqual([])
+    expect(
+      buildArgs(
+        opts({ noPhaseShift: true, disableLfe: true, keepTemp: true }),
+        { channels: 6 }
+      )
+    ).toEqual(["-dl", "-nps", "-k"])
+    expect(validate(opts({ noPhaseShift: true, format: "thd" }))).toEqual([])
   })
 })
 

@@ -24,6 +24,7 @@ fn spawn_retry(command: &mut Command) -> std::process::Child {
 
 /// Hard link the binary (same filesystem as the temp dirs), else copy it via
 /// a temporary name and rename it into place.
+#[cfg(target_os = "linux")]
 fn install_bin(dest: &Path) {
     if std::fs::hard_link(BIN, dest).is_err() {
         let tmp = dest.with_extension("tmp");

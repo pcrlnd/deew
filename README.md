@@ -33,7 +33,7 @@
 - automatic channel swapping for 7.1 sources (DEE swaps Ls Rs with Lrs Rrs for some reason)
 - automatically compensates for the delay of the encoders: 256 samples for DD/DDP, 2048 for AC4 and 1600 for AAC (TrueHD has none)
 - works even with video inputs
-- `-mo` and `-dn` (loudness measurement) don't support 7.1 sources
+- AC4 `-dn` (loudness measurement) doesn't support 7.1 sources
 - versatile delay option that supports ms, s and also frame@fps formats, parsing delay from filenames also supported
 
 The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects ffprobe, ffmpeg, truehdd, dee_shim and the DEE tools, with the exact options it passes to each one for every format.
@@ -56,6 +56,12 @@ The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects 
   - standard: 7.1 with Atmos, E-AC-3 independent and dependent substreams, 768-2048 kbps, `.ec3` output
   - bluray: 7.1 with Atmos, AC-3 core and E-AC-3 dependent substream, 1152-1664 kbps, `.eb3` output
 - in `-h` and `-lb` the values that use dee_shim are blue (`blue: uses dee_shim`)
+
+# Surround phase shift
+DEE's DD and DDP encoders apply a 90° phase shift to the surround channels by default. `-nps`/`--no-phase-shift` turns it off for one run (`surround_90deg_phase_shift=0` in DEE's `-e` option), setting `surround_phase_shift = false` in the config turns it off for every run. It only affects DD and DDP with surround channels (5.1, 5.0, 7.1, 7.0), other formats don't have it (`-nps` with them is an error, the config value is ignored).
+
+# Piping into DEE
+For DD, DDP, AC4, AAC and `-mo`, ffmpeg's decoded audio goes straight into DEE (raw PCM through a pipe, a named pipe on Windows) instead of a temp `.wav`, so no large intermediate file is written. TrueHD, Atmos and AC4 with a custom dialnorm (`-dn`) still use the temp `.wav`. Resampled and 32-bit audio is piped as 32-bit float. Setting `pipe = false` in the config turns this off if it causes problems.
 
 # Where deew looks for the programs
 deew looks for the programs in this order, there is nothing to set in the config:
@@ -104,8 +110,9 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 ```
 USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
             [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-d DELAY] [-r DRC] [-dn DIALNORM] [-in NUMBER]
-            [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c] [-gc] [-gt]
+            [-dm CHANNELS] [-dl] [-nps] [-d DELAY] [-r DRC] [-dn DIALNORM]
+            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
+            [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
@@ -147,6 +154,8 @@ FLAGS:
                             DD and DDP get a real 5.0 or 7.0, the others keep a
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
+  -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
+                            only works for DD/DDP, config: surround_phase_shift
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -172,7 +181,9 @@ FLAGS:
   -k, --keeptemp            keep temp files
   -kl, --keep-log           keep TrueHD's log and write a .deew-log.html report
                             for each output
-  -mo, --measure-only       only measures the loudness with DEE, no encoding
+  -mo, --measure-only       only measures the loudness of the source with DEE,
+                            no encoding, -f and the encoding options are
+                            ignored, TrueHD Atmos sources are measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
   -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
                             input

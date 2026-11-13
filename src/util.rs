@@ -13,6 +13,63 @@ pub fn clamp_i(v: i64, lo: i64, hi: i64) -> i64 {
     v.max(lo).min(hi)
 }
 
+/// How DEE gated the loudness measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gating {
+    Dialogue,
+    Level,
+}
+
+impl Gating {
+    pub fn parse(text: &str) -> Option<Gating> {
+        match text {
+            "dialogue" => Some(Gating::Dialogue),
+            "level" => Some(Gating::Level),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Gating::Dialogue => "dialogue",
+            Gating::Level => "level",
+        }
+    }
+}
+
+/// A measured loudness with what DEE reported next to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Level {
+    /// Rounded and clamped to -31..0.
+    pub db: i64,
+    pub gating: Option<Gating>,
+    /// Share of speech in percent, rounded; `None` if DEE did not measure it.
+    pub speech: Option<i64>,
+}
+
+impl Level {
+    /// A bare loudness (also a dialnorm that was given, not measured).
+    pub fn new(db: i64) -> Level {
+        Level {
+            db,
+            gating: None,
+            speech: None,
+        }
+    }
+
+    /// `-33 dB, dialogue-gated, 16% speech`
+    pub fn text(&self) -> String {
+        let mut text = format!("{} dB", self.db);
+        if let Some(gating) = self.gating {
+            text.push_str(&format!(", {}-gated", gating.name()));
+        }
+        if let Some(speech) = self.speech {
+            text.push_str(&format!(", {speech}% speech"));
+        }
+        text
+    }
+}
+
 /// Value of `allowed` closest to `value`; the first one wins on ties.
 pub fn find_closest_allowed(value: i64, allowed: &[u32]) -> u32 {
     *allowed
@@ -900,5 +957,34 @@ mod tests {
         assert_eq!(py_int_list(&[48000, 44100]), "[48000, 44100]");
         assert_eq!(py_int_list(&[]), "[]");
         assert_eq!(py_int_list(&[-1]), "[-1]");
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    #[test]
+    fn level_text() {
+        assert_eq!(Level::new(-27).text(), "-27 dB");
+        let level = Level {
+            db: -33,
+            gating: Some(Gating::Dialogue),
+            speech: Some(16),
+        };
+        assert_eq!(level.text(), "-33 dB, dialogue-gated, 16% speech");
+        let level = Level {
+            db: -25,
+            gating: Some(Gating::Level),
+            speech: Some(6),
+        };
+        assert_eq!(level.text(), "-25 dB, level-gated, 6% speech");
+        let level = Level {
+            db: -25,
+            gating: Some(Gating::Level),
+            speech: None,
+        };
+        assert_eq!(level.text(), "-25 dB, level-gated");
+        assert_eq!(Gating::parse("other"), None);
     }
 }

@@ -1,3 +1,25 @@
+# deew 5.2.0:
+- ffmpeg's audio goes to DEE through a pipe instead of a temporary `.wav`
+  (DD, DDP, AC4, AAC and `-mo`), so encodes need much less disk space and
+  start sooner; on Windows DEE creates a named pipe that ffmpeg writes
+  to. TrueHD, AC4 `-dn` and Atmos keep using temporary files.
+  `pipe = false` in the config switches back to the `.wav`. On Windows
+  7.1 DDP with the standard profile and 7.0 DDP (encoded with dee_shim)
+  need `dee_shim 0.2.0` or newer for the named pipe, with an older one they
+  use the `.wav`
+- `-mo` measures the source as it is: `-f`, `-dm`, `-r` and `-dn` are
+  ignored, and a TrueHD Atmos source is decoded with truehdd and measured
+  by DEE's DDP Atmos encoder
+- `-mo` shows how the loudness was gated, e.g. `-33 dB, dialogue-gated,
+  16% speech`
+- new `-nps`/`--no-phase-shift`: turns off the 90° phase shift of the
+  surround channels for DD and DDP (`surround_phase_shift = false` in the
+  config turns it off for every encode)
+- `deew-gui`/`deew-web` 0.6.0:
+  - new "No surround phase shift" option (DD and DDP)
+  - `-mo` is available for Atmos sources and shows the gating and the
+    speech share (needs deew 5.2.0 or newer)
+
 # deew 5.1.0:
 - `-dn`: the custom dialnorm is given to DEE directly
   (`--loudness-management skip:dialnorm=N`) for DD and DDP, so there is no

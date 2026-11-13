@@ -1,9 +1,10 @@
-deew 5.1.0
+deew 5.2.0
 
 USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
             [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-d DELAY] [-r DRC] [-dn DIALNORM] [-in NUMBER]
-            [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c] [-gc] [-gt]
+            [-dm CHANNELS] [-dl] [-nps] [-d DELAY] [-r DRC] [-dn DIALNORM]
+            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
+            [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
@@ -45,6 +46,8 @@ FLAGS:
                             DD and DDP get a real 5.0 or 7.0, the others keep a
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
+  -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
+                            only works for DD/DDP, config: surround_phase_shift
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -70,7 +73,9 @@ FLAGS:
   -k, --keeptemp            keep temp files
   -kl, --keep-log           keep TrueHD's log and write a .deew-log.html report
                             for each output
-  -mo, --measure-only       only measures the loudness with DEE, no encoding
+  -mo, --measure-only       only measures the loudness of the source with DEE,
+                            no encoding, -f and the encoding options are
+                            ignored, TrueHD Atmos sources are measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
   -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
                             input

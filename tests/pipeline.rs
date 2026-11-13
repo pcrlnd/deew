@@ -75,7 +75,22 @@ fail() {
   echo "Exit code: 1"
   exit 1
 }
-if [ ! -f "$input" ]; then fail "File \"$input\" does not exist."; fi
+if [ "$input" = /dev/stdin ]; then
+  # the piped audio: count what ffmpeg sends, a failing ffmpeg sends nothing
+  bytes=$(wc -c)
+  echo "$bytes" > "$dir/$tool.stdin"
+  if [ "$bytes" -eq 0 ]; then fail "The input is too short."; fi
+elif [ "$input" = /dev/stdin ]; then
+  # a failing tool does not read its input, ffmpeg then finds the pipe closed
+  if [ "$FAKE_FAIL_TOOL" = "$tool" ]; then fail "$FAKE_ERROR"; fi
+  # the piped audio: count what ffmpeg sends, a failing ffmpeg sends nothing
+  # (`FAKE_NO_READ`: leave it to the pipe)
+  if [ -z "$FAKE_NO_READ" ]; then
+    bytes=$(wc -c)
+    echo "$bytes" > "$dir/$tool.stdin"
+    if [ "$bytes" -eq 0 ]; then fail "The input is too short."; fi
+  fi
+elif [ ! -f "$input" ]; then fail "File \"$input\" does not exist."; fi
 if [ "$FAKE_FAIL_TOOL" = "$tool" ]; then fail "$FAKE_ERROR"; fi
 if [ -n "$FAKE_WARN" ]; then
   echo "[2026-11-01 22:11:54.300] WARNING: $FAKE_WARN"
@@ -85,6 +100,8 @@ if [ "$tool" = dee_measure_loudness ]; then
   echo "[2026-11-01 22:03:14.420] Step 1/1 : Loudness Measurement"
   printf '[>          ] 0 %%\r[=====>     ] 50 %%\r[==========>] 100 %%\r\n'
   echo "[2026-11-01 22:03:14.570] [Source loudness] measured_loudness=-23.4"
+  echo "[2026-11-01 22:03:14.570] [Source loudness] gating=level"
+  echo "[2026-11-01 22:03:14.570] [Source loudness] speech_percentage=measurement_disabled"
   cat > "$omanifest" <<'EOF'
 {
   "loudness_manifest": {
@@ -118,9 +135,11 @@ elif [ "$tool" = dee_aac_encoder ] || [ "$tool" = dee_dthd_encoder ]; then
 else
   echo "[2026-11-01 22:01:24.690] Step 1/2 : Loudness Measurement"
   printf '[>          ] 0 %%\r[=====>     ] 12 %%\r[==========>] 50 %%\r\n'
-  echo "[2026-11-01 22:01:24.838] [Source loudness] measured_loudness=-23.4"
+  echo "[2026-11-01 22:01:24.838] [Source loudness] measured_loudness=${FAKE_LOUDNESS:--23.4}"
   if [ -n "$FAKE_HANG_AFTER_MEASURED" ]; then exec sleep 120; fi
   echo "[2026-11-01 22:01:24.838] [Source loudness] gating=dialogue"
+  echo "[2026-11-01 22:01:24.838] [Source loudness] speech_percentage=16.1"
+  if [ -n "$FAKE_HANG_AFTER_BLOCK" ]; then exec sleep 120; fi
   echo "[2026-11-01 22:01:24.900] Step 2/2 : Encoding"
   printf '[==========>] 50 %%\r[=======>    ] 75 %%\r[==========>] 100 %%\r\n'
 fi
@@ -129,7 +148,7 @@ if [ "$tool" = dee_dthd_encoder ]; then echo log > "$output.log.html"; echo mll 
 if [ -n "$tempdir" ]; then echo x > "$tempdir/dee-internal"; fi
 if [ -n "$FAKE_SLOW" ]; then
   case "$input" in
-    *slow*) printf partial > "$output"; sleep 30 ;;
+    *slow*|/dev/stdin) printf partial > "$output"; sleep 30 ;;
   esac
 fi
 if [ -z "$FAKE_NO_OUTPUT" ]; then printf 'fake %s' "$tool" > "$output"; fi
@@ -282,11 +301,21 @@ impl Env {
         Some(env)
     }
 
+    /// Feed DEE through the pipe (the config of the tests turns it off).
+    fn set_pipe(&self, on: bool) {
+        let text = fs::read_to_string(self.config()).unwrap();
+        fs::write(
+            self.config(),
+            text.replace("pipe = false", &format!("pipe = {on}")),
+        )
+        .unwrap();
+    }
+
     fn write_config(&self) {
         fs::write(
             self.config(),
             format!(
-                "temp_path = '{}'\nlogo = 0\nmax_instances = 2\n\
+                "temp_path = '{}'\nlogo = 0\nmax_instances = 2\npipe = false\n\
                  [default_bitrates]\ndd_1_0 = 128\ndd_2_0 = 256\ndd_5_1 = 640\n\
                  ddp_1_0 = 128\nddp_2_0 = 256\nddp_5_1 = 1024\nddp_7_1_standard = 1536\nddp_7_1_bluray = 1536\n\
                  ddp_atmos_streaming = 1024\nddp_atmos_standard = 1536\nddp_atmos_bluray = 1536\nac4_2_0 = 256\nac4_5_1 = 448\nac4_atmos = 448\n\
@@ -671,6 +700,118 @@ fn ddp_71_is_standard_through_dee_shim() {
     assert_eq!(opt(&args, "-c"), "5.1");
     assert_eq!(opt(&args, "--data-rate"), "576");
     assert!(env.out().join("sur.ec3").exists());
+}
+
+const PHASE_OFF: &str = ":surround_90deg_phase_shift=0";
+
+#[test]
+fn no_phase_shift_reaches_every_dd_and_ddp_encode() {
+    let env = env_or_skip!();
+    env.media("st.wav", "stereo", 48000, "pcm_s16le");
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    env.media("sur.wav", "7.1", 48000, "pcm_s24le");
+    let e = |env: &Env| opt(&env.run("dee_ddp_encoder"), "-e").to_string();
+    // without the flag nothing is added
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd"]));
+    assert_eq!(e(&env), "dd:drc_profile=none");
+    for flag in ["-nps", "--no-phase-shift"] {
+        // native: DD and DDP, stereo and 5.1, also with -dm and -dl
+        ok(&env.deew(&["-i", "st.wav", "-f", "dd", flag]));
+        assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
+        ok(&env.deew(&["-i", "fv.wav", "-f", "dd", flag]));
+        assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
+        ok(&env.deew(&["-i", "fv.wav", flag]));
+        assert_eq!(e(&env), format!("ddp:drc_profile=none{PHASE_OFF}"));
+        ok(&env.deew(&["-i", "fv.wav", flag, "-dl"]));
+        assert_eq!(e(&env), format!("ddp:drc_profile=none:lfe_on=0{PHASE_OFF}"));
+        ok(&env.deew(&["-i", "fv.wav", flag, "-dm", "2"]));
+        assert_eq!(e(&env), format!("ddp:drc_profile=none{PHASE_OFF}"));
+        // 7.1 Blu-ray: native
+        ok(&env.deew(&["-i", "sur.wav", flag, "--ddp-mode", "bluray"]));
+        assert_eq!(e(&env), format!("bluray:drc_profile=none{PHASE_OFF}"));
+        // the dee_shim layouts, the key is in the string after --
+        for (extra, layout, mode) in [
+            (&[][..], "7.1/eac3", "ddp"),
+            (&["-dl"][..], "7.0/eac3", "ddp"),
+            (&["-dl", "--ddp-mode", "bluray"][..], "7.0", "bluray"),
+        ] {
+            let mut a = vec!["-i", "sur.wav", flag];
+            a.extend(extra);
+            ok(&env.deew(&a));
+            let shim = env.dshim_run().unwrap();
+            assert_eq!(opt(&shim, "--layout"), layout);
+            let rest = &shim[shim.iter().position(|a| a == "--").unwrap() + 1..];
+            assert_eq!(
+                opt(rest, "-e"),
+                format!("{mode}:drc_profile=none{PHASE_OFF}")
+            );
+        }
+    }
+    // the shim layouts without the flag stay as they were
+    ok(&env.deew(&["-i", "sur.wav"]));
+    let shim = env.dshim_run().unwrap();
+    let rest = &shim[shim.iter().position(|a| a == "--").unwrap() + 1..];
+    assert_eq!(opt(rest, "-e"), "ddp:drc_profile=none");
+}
+
+#[test]
+fn config_can_turn_the_phase_shift_off() {
+    let env = env_or_skip!();
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    env.media("sur.wav", "7.1", 48000, "pcm_s24le");
+    let text = fs::read_to_string(env.config()).unwrap();
+    fs::write(
+        env.config(),
+        format!("surround_phase_shift = false\n{text}"),
+    )
+    .unwrap();
+    let e = |env: &Env| opt(&env.run("dee_ddp_encoder"), "-e").to_string();
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd"]));
+    assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
+    ok(&env.deew(&["-i", "sur.wav"]));
+    let shim = env.dshim_run().unwrap();
+    let rest = &shim[shim.iter().position(|a| a == "--").unwrap() + 1..];
+    assert_eq!(opt(rest, "-e"), format!("ddp:drc_profile=none{PHASE_OFF}"));
+    // other formats ignore it, without an error
+    ok(&env.deew(&["-i", "fv.wav", "-f", "ac4"]));
+    assert!(
+        !env.run("dee_ac4_encoder")
+            .iter()
+            .any(|a| a.contains("surround_90deg"))
+    );
+    ok(&env.deew(&["-i", "fv.wav", "-f", "aac"]));
+    // -mo too
+    ok(&env.deew(&["-i", "fv.wav", "-mo"]));
+    // the report lists it
+    ok(&env.deew(&["-i", "fv.wav", "-kl"]));
+    let log = fs::read_to_string(env.out().join("fv.ec3.deew-log.html"))
+        .or_else(|_| fs::read_to_string(env.out().join("fv.deew-log.html")))
+        .unwrap();
+    assert!(log.contains("Surround phase shift"), "{log}");
+    // true is the default
+    let text = fs::read_to_string(env.config()).unwrap();
+    fs::write(
+        env.config(),
+        text.replace(
+            "surround_phase_shift = false",
+            "surround_phase_shift = true",
+        ),
+    )
+    .unwrap();
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd"]));
+    assert_eq!(e(&env), "dd:drc_profile=none");
+}
+
+#[test]
+fn no_phase_shift_only_works_for_dd_and_ddp() {
+    let env = env_or_skip!();
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    for format in ["thd", "ac4", "aac", "ddp-atmos", "thd-atmos", "ac4-atmos"] {
+        let out = env.deew(&["-i", "fv.wav", "-f", format, "-nps"]);
+        assert_error(&out, "-nps/--no-phase-shift only works for DD and DDP.");
+    }
+    // -mo ignores the format rules
+    ok(&env.deew(&["-i", "fv.wav", "-mo", "-f", "thd", "-nps"]));
 }
 
 #[test]
@@ -1205,6 +1346,52 @@ fn missing_dee_tool_is_named() {
 }
 
 #[test]
+fn measure_only_of_an_atmos_source_measures_it_as_atmos() {
+    let env = env_or_skip!();
+    env.truehd("atmos.thd");
+    // the format and the downmix do not matter
+    for (index, extra) in [
+        vec![],
+        vec!["-f", "thd"],
+        vec!["-f", "ddp-atmos", "-dm", "2"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut args = vec!["-i", "atmos.thd", "-mo", "-la"];
+        args.extend(extra);
+        // the fake encoder would sleep for two minutes after the loudness
+        let out = env.deew_env(&args, &[("FAKE_HANG_AFTER_BLOCK", "1")]);
+        ok(&out);
+        let text = stdout(&out);
+        assert!(
+            text.contains("finished: atmos.thd (-23 dB, dialogue-gated, 16% speech) - took "),
+            "{index}: {text}"
+        );
+        let truehdd = env.truehdd_run().unwrap();
+        assert_eq!(
+            opt(&truehdd, "--output-path"),
+            env.temp().join("atmos").to_str().unwrap()
+        );
+        let args = env.run("dee_ddpjoc_encoder");
+        assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+        assert_eq!(
+            opt(&args, "-i"),
+            env.temp().join("atmos.atmos").to_str().unwrap()
+        );
+        assert_eq!(opt(&args, "-e"), "drc_profile=none");
+        assert_eq!(opt(&args, "--data-rate"), "1024");
+        assert_eq!(opt(&args, "--loudness-management"), "measure_only");
+        assert!(!has(&args, "--temp-dir"));
+        assert!(env.dshim_run().is_none());
+        assert!(env.last_run("dee_measure_loudness").is_none());
+        assert!(env.last_run("dee_ddp_encoder").is_none());
+        assert!(!env.out().join("atmos.ec3").exists());
+        assert!(temp_is_empty(&env));
+    }
+}
+
+#[test]
 fn ddp_atmos_with_dee_shim() {
     let env = env_or_skip!();
     env.truehd("atmos.thd");
@@ -1459,10 +1646,6 @@ fn atmos_input_rules() {
             &env.deew(&["-i", "atmos.thd", "-f", format, "-dm", "2"]),
             "-dm/--downmix only works for DD/DDP/AC4/AAC encoding and for TrueHD (2 or 6), not for the Atmos formats.",
         );
-        assert_error(
-            &env.deew(&["-i", "atmos.thd", "-f", format, "-mo"]),
-            "-mo/--measure-only can't be used with the Atmos formats.",
-        );
         if format == "ac4-atmos" {
             assert_error(
                 &env.deew(&["-i", "atmos.thd", "-f", format, "-dn", "-27"]),
@@ -1684,7 +1867,43 @@ fn measure_only_runs_the_measurement_tool() {
             .any(|e| e["type"] == "progress" && e["stage"] == "measure" && e["db"] == -23)
     );
     assert!(!all.iter().any(|e| e["stage"] == "encode"));
-    assert!(text.contains("finished: in.wav (-23 dB) - took "), "{text}");
+    assert!(
+        text.contains("finished: in.wav (-23 dB, level-gated) - took "),
+        "{text}"
+    );
+}
+
+#[test]
+fn measure_only_shows_the_real_loudness_but_encodes_keep_the_dialnorm_range() {
+    let env = env_or_skip!();
+    env.media("sur.wav", "7.1", 48000, "pcm_s24le");
+    let loud = [("FAKE_LOUDNESS", "-33.0")];
+    let out = env.deew_env(&["-i", "sur.wav", "-mo"], &loud);
+    ok(&out);
+    assert!(
+        stdout(&out).contains("finished: sur.wav (-33 dB, dialogue-gated, 16% speech) - took "),
+        "{}",
+        stdout(&out)
+    );
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let out = env.deew_env(&["-i", "in.wav"], &loud);
+    ok(&out);
+    assert!(stdout(&out).contains("finished: in.wav (-31 dB) - took "));
+}
+
+#[test]
+fn measure_only_ends_an_encoder_that_stops_printing_after_the_loudness() {
+    let env = env_or_skip!();
+    env.media("sur.wav", "7.1", 48000, "pcm_s24le");
+    let started = std::time::Instant::now();
+    let out = env.deew_env(
+        &["-i", "sur.wav", "-mo"],
+        &[("FAKE_HANG_AFTER_MEASURED", "1")],
+    );
+    ok(&out);
+    assert!(started.elapsed().as_secs() < 60);
+    assert!(stdout(&out).contains("finished: sur.wav (-23 dB) - took "));
+    assert!(temp_is_empty(&env));
 }
 
 #[test]
@@ -1695,7 +1914,7 @@ fn measure_only_of_7_1_stops_the_ddp_encoder() {
     // the fake encoder would sleep for two minutes after the loudness
     let out = env.deew_env(
         &["-i", "sur.wav", "-mo", "-la"],
-        &[("FAKE_HANG_AFTER_MEASURED", "1")],
+        &[("FAKE_HANG_AFTER_BLOCK", "1")],
     );
     ok(&out);
     assert!(started.elapsed().as_secs() < 60);
@@ -1707,7 +1926,7 @@ fn measure_only_of_7_1_stops_the_ddp_encoder() {
     assert!(env.last_run("dee_measure_loudness").is_none());
     assert!(text.contains("dee_ddp_encoder --progress 1"), "{text}");
     assert!(
-        text.contains("finished: sur.wav (-23 dB) - took "),
+        text.contains("finished: sur.wav (-23 dB, dialogue-gated, 16% speech) - took "),
         "{text}"
     );
     assert!(!env.out().join("sur.ec3").exists());
@@ -2730,6 +2949,10 @@ fn measure_only_report_is_named_after_the_input() {
     assert!(html.contains("dee_measure_loudness --progress 1"));
     assert!(!html.contains("dee_ddp_encoder"));
     assert!(html.contains("Measured loudness"));
+    assert!(html.contains("-23 dB, level-gated"), "{html}");
+    // the settings are about the measurement, not an encode
+    assert!(html.contains("Measure only"));
+    assert!(!html.contains("DDP</td>") && !html.contains("Bitrate"));
 }
 
 #[test]
@@ -2827,10 +3050,6 @@ fn thd_atmos_needs_its_inputs_and_tools() {
     assert_error(
         &env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-dm", "2"]),
         "-dm/--downmix only works for DD/DDP/AC4/AAC encoding and for TrueHD (2 or 6), not for the Atmos formats.",
-    );
-    assert_error(
-        &env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-mo"]),
-        "-mo/--measure-only can't be used with the Atmos formats.",
     );
     ok(&env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-dn", "-3"]));
     let shim = env.dshim_run().unwrap();
@@ -3207,4 +3426,303 @@ fn second_signal_exits_at_once() {
     std::thread::sleep(std::time::Duration::from_millis(300));
     interrupt(&child, libc::SIGINT);
     assert_eq!(child.wait().unwrap().code(), Some(130));
+}
+
+// ---------------------------------------------------------------------------
+// ffmpeg piped straight into DEE (`pipe = true`)
+
+/// What a fake tool read from its stdin, in bytes.
+fn piped_bytes(env: &Env, tool: &str) -> u64 {
+    fs::read_to_string(env.dee().join(format!("{tool}.stdin")))
+        .unwrap_or_else(|e| panic!("{tool} read no pipe: {e}"))
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn piped_ddp_has_no_wav() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "in.wav", "-k"]);
+    ok(&out);
+    let text = stdout(&out);
+    // one command: ffmpeg into the encoder
+    assert!(
+        text.contains("ffmpeg -y -drc_scale 0 -i [input] -map 0:a:0 -c pcm_s24le -f s24le - | dee_ddp_encoder --progress 1 --overwrite 1 --input-format pcm_s24le:sample_rate=48000:channels=6:streaming=1:sample_count=144000 -i /dev/stdin -o [output]"),
+        "{text}"
+    );
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(
+        opt(&args, "--input-format"),
+        "pcm_s24le:sample_rate=48000:channels=6:streaming=1:sample_count=144000"
+    );
+    assert_eq!(opt(&args, "-i"), "/dev/stdin");
+    // 2 s of 24 bit 5.1 came through the pipe
+    assert_eq!(piped_bytes(&env, "dee_ddp_encoder"), 2 * 48000 * 6 * 3);
+    assert_eq!(
+        fs::read(env.out().join("in.ec3")).unwrap(),
+        b"fake dee_ddp_encoder"
+    );
+    // not even -k leaves anything: no wav was written
+    assert!(temp_is_empty(&env), "{:?}", temp_files(&env));
+}
+
+#[test]
+fn piped_jobs_have_no_ffmpeg_stage() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let file = env.path("events.jsonl");
+    let out = env.deew_env(
+        &["-i", "in.wav"],
+        &[("DEEW_EVENTS_FILE", file.to_str().unwrap())],
+    );
+    ok(&out);
+    let all = events(&file);
+    let stages: Vec<&str> = all
+        .iter()
+        .filter(|e| e["type"] == "progress")
+        .filter_map(|e| e["stage"].as_str())
+        .collect();
+    assert!(
+        stages.contains(&"measure") && stages.contains(&"encode"),
+        "{stages:?}"
+    );
+    assert!(!stages.contains(&"ffmpeg"), "{stages:?}");
+    assert!(
+        all.iter()
+            .any(|e| e["type"] == "progress" && e["stage"] == "encode" && e["percent"] == 100.0)
+    );
+}
+
+#[test]
+fn piped_long_print_and_report() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "in.wav", "-la", "-kl"]);
+    ok(&out);
+    let text = stdout(&out);
+    assert!(text.contains(" -f s24le - | dee_ddp_encoder"), "{text}");
+    assert!(text.contains("-i /dev/stdin -o "), "{text}");
+    assert!(!text.contains("-rf64"), "{text}");
+    let log = fs::read_to_string(env.out().join("in.deew-log.html")).unwrap();
+    assert!(log.contains("-f s24le -"), "{log}");
+    assert!(log.contains("/dev/stdin"), "{log}");
+    assert!(!log.contains("-rf64"));
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn piped_resampling_counts_samples_at_the_output_rate() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    env.media("in.wav", "stereo", 44100, "pcm_s24le");
+    ok(&env.deew(&["-i", "in.wav"]));
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(
+        opt(&args, "--input-format"),
+        "pcm_f32le:sample_rate=48000:channels=2:streaming=1:sample_count=144000"
+    );
+    // 2 s resampled to 48 kHz, 32 bit float stereo
+    assert_eq!(piped_bytes(&env, "dee_ddp_encoder"), 2 * 48000 * 2 * 4);
+}
+
+#[test]
+fn piped_encoders_and_measuring() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    for (format, tool) in [
+        ("dd", "dee_ddp_encoder"),
+        ("ac4", "dee_ac4_encoder"),
+        ("aac", "dee_aac_encoder"),
+    ] {
+        let out = env.deew(&["-i", "in.wav", "-f", format]);
+        ok(&out);
+        let args = env.run(tool);
+        assert_eq!(opt(&args, "-i"), "/dev/stdin", "{format}");
+        assert!(
+            opt(&args, "--input-format").starts_with("pcm_s24le:"),
+            "{format}"
+        );
+        assert!(piped_bytes(&env, tool) > 0, "{format}");
+        assert!(temp_is_empty(&env), "{format}: {:?}", temp_files(&env));
+    }
+    // -mo: dee_measure_loudness reads the pipe too
+    let out = env.deew(&["-i", "in.wav", "-mo"]);
+    ok(&out);
+    let args = env.run("dee_measure_loudness");
+    assert_eq!(opt(&args, "-i"), "/dev/stdin");
+    assert_eq!(piped_bytes(&env, "dee_measure_loudness"), 2 * 48000 * 6 * 3);
+    assert!(temp_is_empty(&env), "{:?}", temp_files(&env));
+    // 7.1 is measured by the DDP encoder, which is stopped when it has the loudness
+    env.media("in8.wav", "7.1", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "in8.wav", "-mo"]);
+    ok(&out);
+    assert!(stdout(&out).contains("-23"), "{}", stdout(&out));
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(opt(&args, "-i"), "/dev/stdin");
+    assert!(opt(&args, "--input-format").contains("channels=8"));
+    assert!(temp_is_empty(&env), "{:?}", temp_files(&env));
+}
+
+#[test]
+fn piped_jobs_that_need_the_wav_keep_it() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    // TrueHD reads wav only
+    ok(&env.deew(&["-i", "in.wav", "-f", "thd", "-k"]));
+    let args = env.run("dee_dthd_encoder");
+    assert_eq!(opt(&args, "--input-format"), "wav");
+    assert!(env.temp().join("in.wav").exists());
+    fs::remove_file(env.temp().join("in.wav")).unwrap();
+    // AC4 with a custom dialnorm reads the audio twice
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4", "-dn", "-20", "-k"]));
+    for tool in ["dee_measure_loudness", "dee_ac4_encoder"] {
+        let args = env.run(tool);
+        assert_eq!(opt(&args, "--input-format"), "wav", "{tool}");
+        assert_eq!(
+            opt(&args, "-i"),
+            env.temp().join("in.wav").to_str().unwrap(),
+            "{tool}"
+        );
+    }
+    assert!(env.temp().join("in.wav").exists());
+    // the Atmos formats are unchanged
+    env.truehd("atmos.thd");
+    ok(&env.deew(&["-i", "atmos.thd", "-f", "ac4-atmos"]));
+    assert!(env.truehdd_run().is_some());
+    let args = env.run("dee_ac4ajoc_encoder");
+    assert_ne!(opt(&args, "-i"), "/dev/stdin");
+}
+
+/// A stand-in for ffmpeg that fails on demand and else runs the real one.
+fn fake_ffmpeg(env: &Env) {
+    write_script(
+        &env.path("bin/ffmpeg"),
+        r#"#!/bin/sh
+case "$FAKE_FFMPEG" in
+  fail)
+    echo "[aist#0:0/pcm_s24le @ 0x55d5c1a2b340] Error: Invalid data found when processing input" >&2
+    exit 1 ;;
+  partial)
+    head -c 3000 /dev/zero
+    echo "Error while decoding stream #0:0: Invalid data found" >&2
+    exit 1 ;;
+esac
+exec ffmpeg "$@"
+"#,
+    );
+}
+
+#[test]
+fn a_failing_ffmpeg_is_reported_as_ffmpeg() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    fake_ffmpeg(&env);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    // no audio at all: DEE only sees a short input, but ffmpeg is the reason
+    let out = env.deew_env(&["-i", "in.wav"], &[("FAKE_FFMPEG", "fail")]);
+    assert_error(
+        &out,
+        "ffmpeg failed (exit code 1): Error: Invalid data found when processing input",
+    );
+    assert!(!stdout(&out).contains("too short"), "{}", stdout(&out));
+    assert!(!env.out().join("in.ec3").exists());
+    assert!(temp_is_empty(&env));
+    // some audio, then the failure: DEE ends fine, the job still fails and
+    // leaves no output
+    let out = env.deew_env(&["-i", "in.wav"], &[("FAKE_FFMPEG", "partial")]);
+    assert_error(
+        &out,
+        "ffmpeg failed (exit code 1): Error while decoding stream #0:0: Invalid data found",
+    );
+    assert!(!env.out().join("in.ec3").exists());
+    assert!(temp_is_empty(&env));
+    // the real ffmpeg works as before
+    ok(&env.deew(&["-i", "in.wav"]));
+}
+
+#[test]
+fn a_failing_dee_stops_ffmpeg_and_is_reported() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    fake_ffmpeg(&env);
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    // DEE quits without reading: ffmpeg finds the pipe closed ("Broken pipe"),
+    // which is no error of its own
+    let out = env.deew_env(
+        &["-i", "in.wav", "-kl"],
+        &[
+            ("FAKE_FAIL_TOOL", "dee_ddp_encoder"),
+            ("FAKE_ERROR", "[boom] failed"),
+        ],
+    );
+    assert_error(&out, "dee_ddp_encoder failed (exit code 1): [boom] failed");
+    let text = stdout(&out);
+    assert_eq!(text.matches("[boom] failed").count(), 1, "{text}");
+    assert!(!text.contains("ffmpeg failed"), "{text}");
+    assert!(!env.out().join("in.ec3").exists());
+    assert!(temp_is_empty(&env));
+    let log = fs::read_to_string(env.out().join("in.deew-log.html")).unwrap();
+    assert!(log.contains("ffmpeg stderr"), "{log}");
+}
+
+fn alive(pattern: &str) -> bool {
+    command("pgrep")
+        .args(["-f", pattern])
+        .stdout(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[test]
+fn interrupt_stops_ffmpeg_and_dee_of_a_piped_job() {
+    let env = env_or_skip!();
+    env.set_pipe(true);
+    // a name no other test's ffmpeg has, for pgrep
+    let unique = env
+        .dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let name = format!("a_slow{unique}.wav");
+    env.media(&name, "5.1", 48000, "pcm_s24le");
+    // DEE does not read the pipe, ffmpeg hangs on a full pipe
+    let mut child = {
+        let out = env.out();
+        spawn_retry(
+            command(env.bin())
+                .args(["-np", "-o", out.to_str().unwrap(), "-i", &name])
+                .current_dir(env.work())
+                .env("XDG_CONFIG_HOME", env.path("xdg"))
+                .env("FAKE_SLOW", "1")
+                .env("FAKE_NO_READ", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+    };
+    let output = env.out().join(name.replace(".wav", ".ec3"));
+    wait_for(&output);
+    assert!(alive(&name), "ffmpeg should be running");
+    interrupt(&child, libc::SIGINT);
+    let status = child.wait().unwrap();
+    let mut text = String::new();
+    std::io::Read::read_to_string(child.stdout.as_mut().unwrap(), &mut text).unwrap();
+    assert_eq!(status.code(), Some(130), "{text}");
+    assert!(
+        text.contains("interrupted: 0 jobs finished, 1 stopped, 0 not started"),
+        "{text}"
+    );
+    assert!(!output.exists());
+    assert!(temp_files(&env).is_empty(), "{:?}", temp_files(&env));
+    assert!(!alive(&name), "ffmpeg is still running");
+    assert!(!alive(env.dee().to_str().unwrap()), "DEE is still running");
 }

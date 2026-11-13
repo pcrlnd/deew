@@ -20,6 +20,12 @@ logo = 1
 # examples: 1, 4, '50%'
 max_instances = '50%'
 
+# DD/DDP: DEE's 90° phase shift on the surround channels, set to false to turn it off (-nps turns it off for one run).
+surround_phase_shift = true
+
+# Feed the decoded audio from ffmpeg straight into DEE instead of writing a temp .wav (DD, DDP, AC4, AAC, -mo). Set to false if it causes problems.
+pipe = true
+
 # Where the encoded files are saved.
 # path: the output directory, empty uses the current directory.
 #   You can override it with -o/--output.

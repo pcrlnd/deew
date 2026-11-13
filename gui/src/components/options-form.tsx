@@ -17,12 +17,12 @@ import {
   ddpAtmosModeApplies,
   ddpModeApplies,
   disableLfeApplies,
+  noPhaseShiftApplies,
   drcChoices,
   FORMATS,
   FORMAT_LABELS,
   supportsDialnorm,
   supportsDrc,
-  supportsMeasureOnly,
   setFlag,
   setFormat,
   type BooleanOption,
@@ -113,6 +113,12 @@ const CHECKBOXES: {
     flag: "-dl",
     label: "Disable LFE",
     help: HELP.disableLfe,
+  },
+  {
+    key: "noPhaseShift",
+    flag: "-nps",
+    label: "No surround phase shift",
+    help: HELP.noPhaseShift,
   },
   {
     key: "keepTemp",
@@ -636,9 +642,13 @@ export function OptionsForm({
         {CHECKBOXES.map(({ key, flag, label, help }) => {
           const off =
             disabled ||
-            (key === "measureOnly" && !supportsMeasureOnly(value.format)) ||
             (key === "disableLfe" &&
-              !disableLfeApplies(value.format, probedChannels, value.downmix))
+              !disableLfeApplies(
+                value.format,
+                probedChannels,
+                value.downmix
+              )) ||
+            (key === "noPhaseShift" && !noPhaseShiftApplies(value.format))
           return (
             <div
               key={key}

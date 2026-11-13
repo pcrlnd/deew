@@ -168,10 +168,10 @@ export default function ToolChain() {
             <p className="lede">
               deew itself never touches audio. It probes the input, then chains
               ffmpeg, truehdd, dee_shim and the DEE command line tools through
-              temp files and one pipe, with the options shown below.
-              Placeholders are in capitals: <code>IN</code>, <code>TI</code>{" "}
-              (track index), <code>TEMP/NAME</code>, <code>OUT</code>,{" "}
-              <code>B</code> (bitrate), <code>P</code> (DRC profile).
+              pipes and temp files, with the options shown below. Placeholders
+              are in capitals: <code>IN</code>, <code>TI</code> (track index),{" "}
+              <code>TEMP/NAME</code>, <code>OUT</code>, <code>B</code>{" "}
+              (bitrate), <code>P</code> (DRC profile).
             </p>
             <div className="legend" aria-label="Legend">
               <span>
@@ -211,7 +211,7 @@ export default function ToolChain() {
                 className="dg"
                 viewBox="0 0 1120 450"
                 role="img"
-                aria-label="Block diagram: input file to ffprobe; input to ffmpeg to NAME.wav to an optional dee_measure_loudness and loudness.json, then to the DEE encoder; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
+                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD, AC4 with -dn and pipe = false) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
               >
                 <defs>
                   <marker
@@ -229,7 +229,7 @@ export default function ToolChain() {
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M130,185 C155,185 152,45 178,45"
+                  d="M130,185 C152,185 144,45 166,45 L178,45"
                 />
                 <path
                   className="wire"
@@ -244,7 +244,7 @@ export default function ToolChain() {
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M75,240 L75,355 L178,355"
+                  d="M75,240 L75,335 Q75,355 95,355 L178,355"
                 />
                 <path
                   className="wire"
@@ -264,7 +264,7 @@ export default function ToolChain() {
                 <path
                   className="wire opt"
                   markerEnd="url(#ah)"
-                  d="M500,192 C520,192 516,125 538,125"
+                  d="M500,192 C516,192 510,125 526,125 L538,125"
                 />
                 <path
                   className="wire opt"
@@ -274,7 +274,7 @@ export default function ToolChain() {
                 <path
                   className="wire opt"
                   markerEnd="url(#ah)"
-                  d="M890,125 C906,125 902,168 918,168"
+                  d="M890,125 C902,125 896,168 906,168 L918,168"
                 />
                 <path
                   className="wire"
@@ -294,7 +294,7 @@ export default function ToolChain() {
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M720,355 L800,355 L800,250 L918,250"
+                  d="M720,355 L770,355 C800,355 790,250 820,250 L918,250"
                 />
                 <path
                   className="wire"
@@ -305,10 +305,16 @@ export default function ToolChain() {
                   JSON
                 </text>
                 <text className="lbl" x="344" y="196" textAnchor="middle">
-                  -rf64
+                  PCM
                 </text>
                 <text className="lbl" x="700" y="204" textAnchor="middle">
-                  -i NAME.wav (--input-format wav)
+                  -i /dev/stdin (Windows: named_pipe://\\.\pipe\deew-PID-JOB)
+                </text>
+                <text className="lbl" x="700" y="228" textAnchor="middle">
+                  --input-format pcm_s24le:…
+                </text>
+                <text className="lbl" x="510" y="246" textAnchor="start">
+                  else -i NAME.wav (--input-format wav)
                 </text>
                 <text className="lbl" x="343" y="346" textAnchor="middle">
                   pipe
@@ -473,7 +479,7 @@ export default function ToolChain() {
                   textClass="t-file"
                   x={435}
                   y={202}
-                  name="NAME.wav"
+                  name="PCM pipe"
                 >
                   <rect
                     className="b-file"
@@ -488,7 +494,7 @@ export default function ToolChain() {
                     y="219"
                     textAnchor="middle"
                   >
-                    RF64 PCM, TEMP
+                    or NAME.wav
                   </text>
                 </DiagramNode>
                 <a href="#loudness">
@@ -761,12 +767,13 @@ export default function ToolChain() {
               <p>
                 What deew runs for <code>-mo</code> (measure only) and{" "}
                 <code>-dn</code> (custom dialnorm), by channel count and format.
+                <code>-mo</code> measures the source and ignores <code>-f</code>
+                , <code>-dm</code>, <code>-r</code> and <code>-dn</code>.
               </p>
             </div>
             <LoudnessTree />
             <p className="lt-foot">
-              <code>-dn</code> has no effect for AAC and AC4 Atmos, and{" "}
-              <code>-mo</code> is not available for the Atmos formats.{" "}
+              <code>-dn</code> has no effect for AAC and AC4 Atmos.{" "}
               <code>-dn 0</code> keeps the default: DEE measures while it
               encodes.
             </p>
@@ -1064,9 +1071,12 @@ export default function ToolChain() {
                   </h3>
                   <span className="tag">external · channel formats</span>
                   <p>
-                    Turns track <code>TI</code> into the PCM wav DEE reads, in
-                    DEE's channel order. Skipped when the wav is already in TEMP
-                    from a run with <code>-k</code>.
+                    Turns track <code>TI</code> into the PCM DEE reads, in DEE's
+                    channel order. By default (<code>pipe = true</code>) the raw
+                    samples go straight into DEE; TrueHD, AC4 <code>-dn</code>{" "}
+                    and <code>pipe = false</code> write an RF64 wav instead,
+                    which is skipped when it is already in TEMP from a run with{" "}
+                    <code>-k</code>.
                   </p>
                 </div>
                 <div className="ports">
@@ -1082,7 +1092,12 @@ export default function ToolChain() {
                     <h4>Out</h4>
                     <ul>
                       <li>
-                        <code>TEMP/NAME[.variant].wav</code>, RF64
+                        raw PCM on <b>stdout → DEE</b> (the pipe); on
+                        Windows it is written to DEE's named pipe{" "}
+                        <code>\\.\pipe\deew-PID-JOB</code>
+                      </li>
+                      <li>
+                        or <code>TEMP/NAME[.variant].wav</code>, RF64
                       </li>
                       <li>
                         stderr <code>time=</code> → progress bar
@@ -1125,6 +1140,12 @@ export default function ToolChain() {
                     <span className="m">{"# rate change"}</span>
                     {"\n       -rf64 always "}
                     <span className="v">{"TEMP/NAME.wav"}</span>
+                    {"\n       "}
+                    <span className="m">
+                      {
+                        "# piped: -c pcm_s24le … -f s24le - replaces the -c and -rf64 parts (pcm_f32le / f32le for a 32 bit plan); Windows: \\\\.\\pipe\\deew-PID-JOB instead of -"
+                      }
+                    </span>
                   </pre>
                   <div className="table-wrap">
                     <table>
@@ -1352,7 +1373,8 @@ export default function ToolChain() {
                     <h4>In</h4>
                     <ul>
                       <li>
-                        <code>TEMP/NAME.wav</code>
+                        the PCM pipe (<code>PIPE</code>), or{" "}
+                        <code>TEMP/NAME.wav</code> for AC4 <code>-dn</code>
                       </li>
                     </ul>
                   </div>
@@ -1369,8 +1391,10 @@ export default function ToolChain() {
                 <div className="module-body">
                   <pre className="argv">
                     <span className="p">{"dee_measure_loudness"}</span>
-                    {" --progress 1 --overwrite 1 --input-format wav -i "}
-                    <span className="v">{"TEMP/NAME.wav"}</span>
+                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="v">{"PCMFMT"}</span>
+                    {" -i "}
+                    <span className="v">{"PIPE"}</span>
                     {"\n                     --output-manifest "}
                     <span className="v">{"TEMP/NAME.loudness.json"}</span>
                   </pre>
@@ -1388,8 +1412,20 @@ export default function ToolChain() {
                     <code>--progress 1 --overwrite 1</code> and ends with the
                     delay and temp options. DEE's <code>[===&gt;] N %</code>{" "}
                     lines drive the bar; <code>[Source loudness]</code> shows
-                    the measured dB. With <code>-dn</code> (not AC4) the
-                    loudness option is{" "}
+                    the measured dB. DD, DDP, AC4, AAC and <code>-mo</code> read
+                    ffmpeg's PCM from the pipe: <code>PIPE</code> is{" "}
+                    <code>/dev/stdin</code> (Windows:{" "}
+                    <code>named_pipe://\\.\pipe\deew-PID-JOB</code>, which DEE
+                    creates before ffmpeg is started) and <code>PCMFMT</code>{" "}
+                    is{" "}
+                    <code>
+                      pcm_s24le:sample_rate=R:channels=N:streaming=1:sample_count=C
+                    </code>{" "}
+                    (<code>pcm_f32le</code> for a 32 bit plan). With{" "}
+                    <code>pipe = false</code> they read{" "}
+                    <code>--input-format wav -i TEMP/NAME.wav</code> instead, as
+                    TrueHD and AC4 <code>-dn</code> always do. With{" "}
+                    <code>-dn</code> (not AC4) the loudness option is{" "}
                     <code>--loudness-management skip:dialnorm=N</code> instead
                     of <code>measure_only</code>.
                   </p>
@@ -1399,7 +1435,8 @@ export default function ToolChain() {
                     <h4>In</h4>
                     <ul>
                       <li>
-                        <code>NAME.wav</code> or <code>NAME.atmos</code>
+                        the PCM pipe, <code>NAME.wav</code> or{" "}
+                        <code>NAME.atmos</code>
                       </li>
                       <li>
                         <code>loudness.json</code> with AC4 <code>-dn</code>
@@ -1426,8 +1463,10 @@ export default function ToolChain() {
                   <h4>DD · DDP (≤ 5.1, and 7.1 with --ddp-mode bluray)</h4>
                   <pre className="argv">
                     <span className="p">{"dee_ddp_encoder"}</span>
-                    {" --progress 1 --overwrite 1 --input-format wav -i "}
-                    <span className="v">{"TEMP/NAME.wav"}</span>
+                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="v">{"PCMFMT"}</span>
+                    {" -i "}
+                    <span className="v">{"PIPE"}</span>
                     {" -o "}
                     <span className="v">{"OUT"}</span>
                     {"\n                -e "}
@@ -1435,6 +1474,9 @@ export default function ToolChain() {
                     {":drc_profile="}
                     <span className="v">{"P"}</span>
                     <span className="c">{"[:lfe_on=0]"}</span>
+                    <span className="c">
+                      {"[:surround_90deg_phase_shift=0]"}
+                    </span>
                     {" --data-rate "}
                     <span className="v">{"B"}</span>
                     {"\n                "}
@@ -1453,12 +1495,20 @@ export default function ToolChain() {
                     </span>
                     {" --temp-dir "}
                     <span className="v">{"TEMP/dee-PID-INDEX"}</span>
+                    {"\n                "}
+                    <span className="m">
+                      {
+                        "# -nps (--no-phase-shift) adds :surround_90deg_phase_shift=0 to -e, DD / DDP surround only"
+                      }
+                    </span>
                   </pre>
                   <h4>AC4</h4>
                   <pre className="argv">
                     <span className="p">{"dee_ac4_encoder"}</span>
-                    {" --progress 1 --overwrite 1 --input-format wav -i "}
-                    <span className="v">{"TEMP/NAME.wav"}</span>
+                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="v">{"PCMFMT"}</span>
+                    {" -i "}
+                    <span className="v">{"PIPE"}</span>
                     {" -o "}
                     <span className="v">{"OUT"}</span>
                     {"\n                --output-manifest "}
@@ -1481,8 +1531,10 @@ export default function ToolChain() {
                   <h4>AAC</h4>
                   <pre className="argv">
                     <span className="p">{"dee_aac_encoder"}</span>
-                    {" --progress 1 --overwrite 1 --input-format wav -i "}
-                    <span className="v">{"TEMP/NAME.wav"}</span>
+                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="v">{"PCMFMT"}</span>
+                    {" -i "}
+                    <span className="v">{"PIPE"}</span>
                     {" -o "}
                     <span className="v">{"OUT"}</span>
                     {"\n                -e aaclc --data-rate "}
@@ -1533,6 +1585,42 @@ export default function ToolChain() {
                     </span>
                     {"          "}
                     <span className="m">{"# no --temp-dir"}</span>
+                  </pre>
+                  <h4>-mo, TrueHD Atmos</h4>
+                  <pre className="argv">
+                    <span className="p">{"dee_ddpjoc_encoder"}</span>
+                    {
+                      " --progress 1 --overwrite 1 --input-format atmos_mezz -i "
+                    }
+                    <span className="v">{"TEMP/NAME.atmos"}</span>
+                    {"\n                    -o "}
+                    <span className="v">
+                      {"TEMP/dee-PID-INDEX/measure.ec3"}
+                    </span>
+                    {
+                      " -e drc_profile=none --data-rate 1024\n                    --loudness-management measure_only    "
+                    }
+                    <span className="m">
+                      {"# killed once the loudness is known"}
+                    </span>
+                  </pre>
+                  <h4>-mo, 7.1</h4>
+                  <pre className="argv">
+                    <span className="p">{"dee_ddp_encoder"}</span>
+                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="v">{"PCMFMT"}</span>
+                    {" -i "}
+                    <span className="v">{"PIPE"}</span>
+                    {"\n                -o "}
+                    <span className="v">
+                      {"TEMP/dee-PID-INDEX/measure.ec3"}
+                    </span>
+                    {
+                      " -e bluray:drc_profile=none --data-rate 1024\n                --loudness-management measure_only --temp-dir "
+                    }
+                    <span className="v">{"TEMP/dee-PID-INDEX"}</span>
+                    {"   "}
+                    <span className="m">{"# killed once measured"}</span>
                   </pre>
                   <div className="table-wrap">
                     <table>
@@ -1700,8 +1788,10 @@ export default function ToolChain() {
                     <span className="v">{"ddp|bluray"}</span>
                     {":drc_profile="}
                     <span className="v">{"P"}</span>
-                    {"\n         --input-format wav -i "}
-                    <span className="v">{"TEMP/NAME.wav"}</span>
+                    {"\n         --input-format "}
+                    <span className="v">{"PCMFMT"}</span>
+                    {" -i "}
+                    <span className="v">{"PIPE"}</span>
                     {" -o "}
                     <span className="v">{"OUT"}</span>
                     {" --loudness-management measure_only\n         "}
@@ -1712,6 +1802,10 @@ export default function ToolChain() {
                     </span>
                     {" --temp-dir "}
                     <span className="v">{"TEMP/dee-PID-INDEX"}</span>
+                    {"\n         "}
+                    <span className="m">
+                      {"# -nps adds :surround_90deg_phase_shift=0 to -e"}
+                    </span>
                   </pre>
                   <div className="table-wrap">
                     <table>

@@ -123,7 +123,7 @@ pub enum ErrorKind {
     ThdDownmixMono,
     DownmixValue,
     DialnormFormat,
-    MeasureAtmos,
+    PhaseShiftFormat,
     Ac4Drc,
     AtmosInput,
     AtmosNoAtmos,
@@ -175,8 +175,8 @@ impl ErrorKind {
             Self::DialnormFormat => {
                 "custom dialnorm is only supported for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow], [bold yellow]DDP Atmos[/bold yellow], [bold yellow]TrueHD[/bold yellow], [bold yellow]TrueHD Atmos[/bold yellow] and [bold yellow]AC4[/bold yellow] encoding."
             }
-            Self::MeasureAtmos => {
-                "[bold yellow]-mo[/bold yellow]/[bold yellow]--measure-only[/bold yellow] can't be used with the Atmos formats."
+            Self::PhaseShiftFormat => {
+                "[bold yellow]-nps[/bold yellow]/[bold yellow]--no-phase-shift[/bold yellow] only works for [bold yellow]DD[/bold yellow] and [bold yellow]DDP[/bold yellow]."
             }
             Self::Ac4Drc => {
                 "DRC [bold yellow]none[/bold yellow] is not supported for AC4 encoding."

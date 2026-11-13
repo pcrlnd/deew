@@ -9,6 +9,7 @@
 use crate::events;
 use crate::live::Live;
 use crate::markup::{color_enabled, render};
+use crate::util::Level;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -282,8 +283,8 @@ pub fn queue_text(count: usize, color: bool) -> String {
 }
 
 /// The static line of a finished job.
-pub fn finished_text(name: &str, db: Option<i64>, took: u64, color: bool) -> String {
-    let db = db.map_or(String::new(), |db| format!(" ({db} dB)"));
+pub fn finished_text(name: &str, level: Option<Level>, took: u64, color: bool) -> String {
+    let db = level.map_or(String::new(), |l| format!(" ({})", l.text()));
     let took = format!(" - took {}", clock(took));
     if color {
         format!(
@@ -309,7 +310,7 @@ pub fn failed_text(name: &str, error: &str, color: bool) -> String {
 pub struct Row<'a> {
     pub stage: Stage,
     pub name: &'a str,
-    pub db: Option<i64>,
+    pub db: Option<Level>,
     /// 0 to 1, `None` for an unknown total (a pulsing bar).
     pub fraction: Option<f64>,
     /// Seconds since the current step began.
@@ -333,7 +334,8 @@ impl Row<'_> {
     }
 
     fn suffix(&self) -> String {
-        self.db.map_or(String::new(), |db| format!(" ({db} dB)"))
+        self.db
+            .map_or(String::new(), |l| format!(" ({})", l.text()))
     }
 
     /// The description, the filename cut to at most `max_name` columns.
@@ -444,7 +446,7 @@ fn should_emit(pct: f64, fresh: bool, last: Option<Instant>, now: Instant) -> bo
 /// What was last written as an event of a bar.
 struct EventState {
     stage: Option<Stage>,
-    db: Option<i64>,
+    db: Option<Level>,
     /// `None` while the total is unknown.
     percent: Option<f64>,
     /// A stage change was not followed by a percent event yet.
@@ -456,7 +458,7 @@ struct EventState {
 struct Job {
     name: String,
     stage: Stage,
-    db: Option<i64>,
+    db: Option<Level>,
     fraction: Option<f64>,
     step_started: Instant,
 }
@@ -481,7 +483,7 @@ impl Bar {
 
     /// Set the step; `db` is the measured loudness, once known. A new step
     /// starts at 0 and restarts the step timer.
-    pub fn describe(&self, stage: Stage, db: Option<i64>) {
+    pub fn describe(&self, stage: Stage, db: Option<Level>) {
         let mut new_step = false;
         self.with_live(|live| {
             new_step = live.stage != stage;
@@ -865,7 +867,7 @@ mod tests {
     #[test]
     fn static_lines() {
         assert_eq!(
-            finished_text("a.mlp", Some(-25), 615, false),
+            finished_text("a.mlp", Some(Level::new(-25)), 615, false),
             "finished: a.mlp (-25 dB) - took 10:15"
         );
         assert_eq!(
@@ -876,7 +878,7 @@ mod tests {
             failed_text("b.mlp", "DEE: oops", false),
             "failed: b.mlp - DEE: oops"
         );
-        let colored = finished_text("a.mlp", Some(-25), 5, true);
+        let colored = finished_text("a.mlp", Some(Level::new(-25)), 5, true);
         assert!(colored.starts_with("\x1b[1;32mfinished:"));
         assert_eq!(plain(&colored), "finished: a.mlp (-25 dB) - took 0:05");
         assert!(failed_text("b", "x", true).starts_with("\x1b[1;31mfailed:"));
@@ -885,7 +887,7 @@ mod tests {
     #[test]
     fn one_line_layout_aligns_the_separators() {
         let mut a = row(Stage::Encode, "another_track.mlp");
-        a.db = Some(-27);
+        a.db = Some(Level::new(-27));
         a.fraction = Some(0.7);
         a.step_secs = 100.0;
         let mut b = row(Stage::Decode, "movie_atmos.thd");
@@ -938,7 +940,7 @@ mod tests {
     fn bar_shrinks_then_names_are_cut() {
         let name = "x".repeat(60) + ".thd";
         let mut r = row(Stage::Encode, &name);
-        r.db = Some(-27);
+        r.db = Some(Level::new(-27));
         r.fraction = Some(1.0);
         // D = 11 + 64 + 9 = 84; 84 + 26 + 10 > 100: names are cut
         let line = render_rows(100, &[r.clone()], false)[0][0].clone();
@@ -969,7 +971,7 @@ mod tests {
         let mut r = row(Stage::Encode, "a.mlp");
         r.fraction = Some(0.0001);
         r.step_secs = 1.0e9;
-        r.db = Some(-27);
+        r.db = Some(Level::new(-27));
         for w in 80..200 {
             let line = &render_rows(w, &[r.clone()], false)[0][0];
             assert!(line.chars().count() <= w, "{w}: {line}");
@@ -980,7 +982,7 @@ mod tests {
     fn narrow_consoles_get_two_lines() {
         let name = "really_really_really_really_really_really_long_name.thd";
         let mut r = row(Stage::Encode, name);
-        r.db = Some(-27);
+        r.db = Some(Level::new(-27));
         r.fraction = Some(0.204);
         r.step_secs = 100.0;
         let lines = render_rows(60, &[r.clone()], false);

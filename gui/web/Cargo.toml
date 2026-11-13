@@ -1,6 +1,6 @@
 [package]
 name = "deew-web"
-version = "0.5.1"
+version = "0.6.0"
 description = "Browser version of the deew GUI: serves the frontend and runs the deew CLI"
 authors = ["pcroland <pcroland@protonmail.ch>"]
 license = "MIT"
@@ -23,8 +23,8 @@ dunce = "1.0.5"
 getrandom = "0.4.3"
 hex = "0.4.3"
 mime_guess = "2.0.5"
-rpassword = "7.5.4"
-rust-embed = { version = "8.13.0", features = ["debug-embed"] }
+rpassword = "7.5.5"
+rust-embed = { version = "8.14.0", features = ["debug-embed"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 subtle = "2.6.1"

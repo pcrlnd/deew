@@ -1,7 +1,8 @@
-deew 5.1.0
+deew 5.2.0
 
 USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
             [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-d DELAY] [-r DRC] [-dn DIALNORM] [-in NUMBER]
-            [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c] [-gc] [-gt]
+            [-dm CHANNELS] [-dl] [-nps] [-d DELAY] [-r DRC] [-dn DIALNORM]
+            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
+            [-gc] [-gt]
 deew: error: argument -d/--delay: expected one argument

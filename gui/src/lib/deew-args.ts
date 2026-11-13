@@ -62,11 +62,6 @@ export function drcChoices(format: Format): Drc[] {
   return DRC_VALUES.filter((d) => d !== "none" || supportsDrcNone(format))
 }
 
-/** Whether `-mo` works (not for the Atmos formats). */
-export function supportsMeasureOnly(format: Format): boolean {
-  return !isAtmos(format)
-}
-
 export const DOWNMIX_VALUES = ["none", "1", "2", "6"] as const
 export type Downmix = (typeof DOWNMIX_VALUES)[number]
 
@@ -159,6 +154,8 @@ export interface DeewOptions {
   ddpAtmosMode: DdpAtmosModeChoice
   /** `-dl`: remove the LFE channel. */
   disableLfe: boolean
+  /** `-nps`: turn off DEE's 90° surround phase shift (DD/DDP only). */
+  noPhaseShift: boolean
   keepTemp: boolean
   keepLog: boolean
   measureOnly: boolean
@@ -181,6 +178,7 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
   ddpMode: DEFAULT_MODE,
   ddpAtmosMode: DEFAULT_MODE,
   disableLfe: false,
+  noPhaseShift: false,
   keepTemp: false,
   keepLog: false,
   measureOnly: false,
@@ -190,6 +188,7 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
 
 export type BooleanOption =
   | "disableLfe"
+  | "noPhaseShift"
   | "keepTemp"
   | "keepLog"
   | "measureOnly"
@@ -642,6 +641,11 @@ export function disableLfeApplies(
   )
 }
 
+/** Whether `-nps` is enabled: only DD and DDP have the surround phase shift. */
+export function noPhaseShiftApplies(format: Format): boolean {
+  return format === "dd" || format === "ddp"
+}
+
 /** Changes the format and resets what the new format cannot do. */
 export function setFormat(o: DeewOptions, format: Format): DeewOptions {
   const bitrate =
@@ -656,7 +660,6 @@ export function setFormat(o: DeewOptions, format: Format): DeewOptions {
     downmix: downmixValues(format).includes(o.downmix) ? o.downmix : "none",
     drc: o.drc === "none" && !supportsDrcNone(format) ? "music_light" : o.drc,
     dialnorm: supportsDialnorm(format) ? o.dialnorm : "0",
-    measureOnly: supportsMeasureOnly(format) ? o.measureOnly : false,
   }
 }
 
@@ -681,6 +684,8 @@ export function validate(o: DeewOptions): string[] {
   const problems: string[] = []
   const ti = parseInteger(o.trackIndex)
   if (ti === null || ti < 0) problems.push("Track index must be 0 or more.")
+  // -mo measures the source: the format and the encoding options are ignored.
+  if (o.measureOnly) return problems
   const dn = parseInteger(o.dialnorm)
   if (dn === null || dn < -31 || dn > 0) {
     problems.push("Dialnorm must be between -31 and 0.")
@@ -689,9 +694,6 @@ export function validate(o: DeewOptions): string[] {
   }
   if (o.drc === "none" && !supportsDrcNone(o.format)) {
     problems.push("DRC none is not supported for AC4.")
-  }
-  if (o.measureOnly && !supportsMeasureOnly(o.format)) {
-    problems.push("Measure only does not work for the Atmos formats.")
   }
   return problems
 }
@@ -748,6 +750,7 @@ export function buildArgs(
   if (o.disableLfe && disableLfeApplies(o.format, layout.channels, o.downmix)) {
     args.push("-dl")
   }
+  if (o.noPhaseShift && noPhaseShiftApplies(o.format)) args.push("-nps")
   if (o.keepTemp) args.push("-k")
   if (o.keepLog) args.push("-kl")
   if (o.measureOnly) args.push("-mo")

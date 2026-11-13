@@ -82,6 +82,11 @@ impl Format {
         matches!(self, Format::DdpAtmos | Format::ThdAtmos | Format::Ac4Atmos)
     }
 
+    /// Formats with DEE's 90 degree phase shift of the surround channels.
+    pub fn has_phase_shift(self) -> bool {
+        matches!(self, Format::Dd | Format::Ddp)
+    }
+
     /// Formats that accept a custom dialnorm.
     pub fn has_dialnorm(self) -> bool {
         matches!(
@@ -223,6 +228,8 @@ pub struct Validated {
     pub ddp_mode: DdpMode,
     /// `--ddp-atmos-mode`, else the config's default (DDP Atmos only).
     pub atmos_mode: DdpAtmosMode,
+    /// `-nps` (DD/DDP only; the config's `surround_phase_shift` is applied later).
+    pub no_phase_shift: bool,
 }
 
 pub const DRC_PROFILES: [&str; 6] = [
@@ -248,6 +255,20 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
     let dialnorm = clamp_i(args.dialnorm, -31, 0);
     let track_index = args.track_index.max(0);
     let downmix = args.downmix.filter(|&d| d != 0);
+
+    // `-mo` measures the source: the format and the encoding options are ignored
+    if args.measure_only {
+        return Ok(Validated {
+            format: Format::Ddp,
+            downmix: None,
+            dialnorm: 0,
+            track_index,
+            drc: default_drc(Format::Ddp).to_string(),
+            ddp_mode: modes.ddp,
+            atmos_mode: modes.ddp_atmos,
+            no_phase_shift: false,
+        });
+    }
 
     let format = Format::parse(&args.format.to_lowercase()).ok_or(Fail::new(ErrorKind::Format))?;
     if let Some(d) = downmix {
@@ -280,26 +301,24 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
         Some(m) => DdpAtmosMode::parse(m).ok_or(Fail::new(ErrorKind::DdpAtmosMode))?,
         None => modes.ddp_atmos,
     };
-    if args.measure_only && format.is_atmos() {
-        return Err(Fail::new(ErrorKind::MeasureAtmos));
-    }
-    if matches!(format, Format::Ac4 | Format::Ac4Atmos)
-        && args.drc.as_deref() == Some("none")
-        && !args.measure_only
-    {
+    if matches!(format, Format::Ac4 | Format::Ac4Atmos) && args.drc.as_deref() == Some("none") {
         return Err(Fail::new(ErrorKind::Ac4Drc));
     }
-    if dialnorm != 0 && !args.measure_only && !format.has_dialnorm() {
+    if dialnorm != 0 && !format.has_dialnorm() {
         return Err(Fail::new(ErrorKind::DialnormFormat));
+    }
+    if args.no_phase_shift && !format.has_phase_shift() {
+        return Err(Fail::new(ErrorKind::PhaseShiftFormat));
     }
     Ok(Validated {
         format,
         downmix,
-        dialnorm: if args.measure_only { 0 } else { dialnorm },
+        dialnorm,
         track_index,
         drc,
         ddp_mode,
         atmos_mode,
+        no_phase_shift: args.no_phase_shift,
     })
 }
 
@@ -912,14 +931,6 @@ mod tests {
 
     #[test]
     fn format_specific_restrictions() {
-        let err = |f: fn(&mut Args)| validate_args_d(&args(f)).unwrap_err().kind;
-        assert_eq!(
-            err(|a| {
-                a.format = "ddp-atmos".into();
-                a.measure_only = true
-            }),
-            ErrorKind::MeasureAtmos
-        );
         for format in ["ac4", "ac4-atmos"] {
             let e = validate_args_d(&args(|a| {
                 a.format = format.into();
@@ -956,15 +967,60 @@ mod tests {
     }
 
     #[test]
-    fn measure_only_keeps_the_format() {
+    fn no_phase_shift_is_for_dd_and_ddp() {
+        for format in ["dd", "ddp", "DDP"] {
+            let v = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.no_phase_shift = true
+            }))
+            .unwrap();
+            assert!(v.no_phase_shift, "{format}");
+        }
+        assert!(!validate_args_d(&Args::default()).unwrap().no_phase_shift);
+        for format in ["ddp-atmos", "thd", "thd-atmos", "ac4", "ac4-atmos", "aac"] {
+            let e = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.no_phase_shift = true
+            }))
+            .unwrap_err();
+            assert_eq!(e.kind, ErrorKind::PhaseShiftFormat, "{format}");
+        }
+        // -mo ignores it
+        let v = validate_args_d(&args(|a| {
+            a.measure_only = true;
+            a.format = "thd".into();
+            a.no_phase_shift = true
+        }))
+        .unwrap();
+        assert!(!v.no_phase_shift);
+    }
+
+    #[test]
+    fn measure_only_ignores_the_encoding_options() {
         let v = validate_args_d(&args(|a| {
             a.measure_only = true;
             a.format = "thd".into();
             a.dialnorm = -27
         }))
         .unwrap();
-        assert_eq!(v.format, Format::Thd);
+        assert_eq!(v.format, Format::Ddp);
         assert_eq!(v.dialnorm, 0);
+        // nothing format dependent is checked, not even the format
+        for format in ["ddp-atmos", "thd-atmos", "ac4-atmos", "aac", "nope"] {
+            let v = validate_args_d(&args(|a| {
+                a.measure_only = true;
+                a.format = format.into();
+                a.downmix = Some(2);
+                a.drc = Some("bogus".into());
+                a.ddp_mode = Some("bogus".into());
+                a.ddp_atmos_mode = Some("bogus".into());
+                a.dialnorm = -27;
+            }))
+            .unwrap();
+            assert_eq!(v.format, Format::Ddp, "{format}");
+            assert_eq!(v.downmix, None, "{format}");
+            assert_eq!(v.dialnorm, 0, "{format}");
+        }
     }
 
     fn probe(rate: i64, ch: i64, depth: i64) -> Probe {

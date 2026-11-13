@@ -121,6 +121,10 @@ pub struct DefaultModes {
     pub ddp_atmos: DdpAtmosMode,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_ddp_mode() -> DdpMode {
     DdpMode::Standard
 }
@@ -166,6 +170,12 @@ pub struct Config {
     #[serde(rename = "logo")]
     pub _logo: i64,
     pub max_instances: MaxInstances,
+    /// DD/DDP: DEE's 90 degree phase shift of the surround channels.
+    #[serde(default = "default_true")]
+    pub surround_phase_shift: bool,
+    /// Feed ffmpeg's audio straight into DEE instead of a temp wav.
+    #[serde(default = "default_true")]
+    pub pipe: bool,
     pub default_bitrates: DefaultBitrates,
     pub summary_sections: SummarySections,
     #[serde(default)]
@@ -405,6 +415,44 @@ mod tests {
         assert_eq!(config.default_bitrates.ddp_7_1_standard, 1536);
         assert_eq!(config.default_modes.ddp_atmos, DdpAtmosMode::Streaming);
         assert!(config.output.path.is_empty());
+    }
+
+    #[test]
+    fn surround_phase_shift_defaults_to_true() {
+        let config: Config = toml::from_str(CONFIG_TEMPLATE).unwrap();
+        assert!(config.surround_phase_shift);
+        assert!(CONFIG_TEMPLATE.contains("\nsurround_phase_shift = true\n"));
+        // not required: configs without the key still load
+        assert!(!CONFIG_KEYS.contains(&"surround_phase_shift"));
+        let without = CONFIG_TEMPLATE.replace("surround_phase_shift = true", "");
+        assert!(
+            toml::from_str::<Config>(&without)
+                .unwrap()
+                .surround_phase_shift
+        );
+        let off = CONFIG_TEMPLATE.replace(
+            "surround_phase_shift = true",
+            "surround_phase_shift = false",
+        );
+        assert!(!toml::from_str::<Config>(&off).unwrap().surround_phase_shift);
+        let bad =
+            CONFIG_TEMPLATE.replace("surround_phase_shift = true", "surround_phase_shift = 3");
+        assert!(toml::from_str::<Config>(&bad).is_err());
+    }
+
+    #[test]
+    fn pipe_defaults_to_true() {
+        let config: Config = toml::from_str(CONFIG_TEMPLATE).unwrap();
+        assert!(config.pipe);
+        assert!(CONFIG_TEMPLATE.contains("\npipe = true\n"));
+        // not required: configs without the key still load
+        assert!(!CONFIG_KEYS.contains(&"pipe"));
+        let without = CONFIG_TEMPLATE.replace("\npipe = true\n", "\n");
+        assert!(toml::from_str::<Config>(&without).unwrap().pipe);
+        let off = CONFIG_TEMPLATE.replace("\npipe = true\n", "\npipe = false\n");
+        assert!(!toml::from_str::<Config>(&off).unwrap().pipe);
+        let bad = CONFIG_TEMPLATE.replace("\npipe = true\n", "\npipe = 3\n");
+        assert!(toml::from_str::<Config>(&bad).is_err());
     }
 
     #[test]

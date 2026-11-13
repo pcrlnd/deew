@@ -26,6 +26,7 @@ pub struct Args {
     pub keep_log: bool,
     pub output_to_input: bool,
     pub disable_lfe: bool,
+    pub no_phase_shift: bool,
     pub measure_only: bool,
     pub list_bitrates: bool,
     pub long_argument: bool,
@@ -56,6 +57,7 @@ impl Default for Args {
             keep_log: false,
             output_to_input: false,
             disable_lfe: false,
+            no_phase_shift: false,
             measure_only: false,
             list_bitrates: false,
             long_argument: false,
@@ -94,6 +96,7 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-b", "--bitrate", Kind::Int),
     ("-dm", "--downmix", Kind::Int),
     ("-dl", "--disable-lfe", Kind::Flag),
+    ("-nps", "--no-phase-shift", Kind::Flag),
     ("-d", "--delay", Kind::Str),
     ("-r", "--drc", Kind::Str),
     ("-dn", "--dialnorm", Kind::Int),
@@ -241,6 +244,7 @@ fn set_flag(args: &mut Args, long: &str) {
         "--keep-log" => args.keep_log = true,
         "--output-to-input" => args.output_to_input = true,
         "--disable-lfe" => args.disable_lfe = true,
+        "--no-phase-shift" => args.no_phase_shift = true,
         "--measure-only" => args.measure_only = true,
         "--list-bitrates" => args.list_bitrates = true,
         "--long-argument" => args.long_argument = true,
@@ -440,9 +444,21 @@ mod tests {
         assert!(
             !a.keeptemp && !a.keep_log && !a.measure_only && !a.output_to_input && !a.disable_lfe
         );
+        assert!(!a.no_phase_shift);
         assert!(a.ddp_mode.is_none() && a.ddp_atmos_mode.is_none());
         assert!(!a.list_bitrates && !a.long_argument && !a.no_prompt && !a.print_logos);
         assert!(!a.changelog && !a.get_tools && !a.config && !a.generate_config);
+    }
+
+    #[test]
+    fn no_phase_shift_both_spellings() {
+        assert!(ok(&["-nps"]).no_phase_shift);
+        assert!(ok(&["--no-phase-shift"]).no_phase_shift);
+        assert!(ok(&["-f", "dd", "-dl", "-nps", "-np"]).no_phase_shift);
+        // -np stays a different flag
+        let a = ok(&["-np"]);
+        assert!(a.no_prompt && !a.no_phase_shift);
+        assert!(!ok(&["-nps"]).no_prompt);
     }
 
     #[test]

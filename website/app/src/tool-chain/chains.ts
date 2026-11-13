@@ -25,19 +25,20 @@ const step = (text: string, opt?: boolean): FlowItem => ({
   text,
   opt,
 })
+const pcm = (): FlowItem => file("PCM pipe")
 const arrow = (text = "→"): FlowItem => ({ type: "arrow", text })
 const alt = (rows: FlowItem[][]): FlowItem => ({ type: "alt", rows })
 
 export const chains: Chain[] = [
   {
     title: "dd · ddp ≤ 5.1 · ac4 · aac",
-    note: "DEE measures while encoding",
+    note: "DEE measures while encoding · NAME.wav instead of the pipe with pipe = false",
     flow: [
       file("IN"),
       arrow(),
       tool("ffmpeg"),
-      arrow(),
-      file("NAME.wav"),
+      arrow("raw PCM →"),
+      pcm(),
       arrow(),
       tool("dee_ddp / ac4 / aac_encoder"),
       arrow(),
@@ -46,7 +47,7 @@ export const chains: Chain[] = [
   },
   {
     title: "ac4 with -dn",
-    note: "separate measurement, deew writes the dialnorm into the manifest",
+    note: "separate measurement, deew writes the dialnorm into the manifest · the audio is read twice, so a wav, not the pipe",
     flow: [
       file("IN"),
       arrow(),
@@ -67,13 +68,13 @@ export const chains: Chain[] = [
   },
   {
     title: "dd · ddp · thd · ddp-atmos · thd-atmos with -dn",
-    note: "no measurement: the encoder gets --loudness-management skip:dialnorm=N",
+    note: "no measurement: the encoder gets ‑‑loudness-management skip:dialnorm=N · DD, DDP piped, TrueHD a wav",
     flow: [
       file("IN"),
       arrow(),
       tool("ffmpeg / truehdd decode"),
       arrow(),
-      file("NAME.wav / .atmos"),
+      file("PCM pipe / NAME.wav / .atmos"),
       arrow("→ skip:dialnorm=N →"),
       tool("DEE encoder"),
       arrow(),
@@ -82,13 +83,13 @@ export const chains: Chain[] = [
   },
   {
     title: "-mo",
-    note: "2.0 and 5.1 · no encoder runs",
+    note: "2.0 and 5.1 · no encoder runs · ignores ‑f, ‑dm, ‑r, ‑dn",
     flow: [
       file("IN"),
       arrow(),
       tool("ffmpeg"),
-      arrow(),
-      file("NAME.wav"),
+      arrow("raw PCM →"),
+      pcm(),
       arrow(),
       tool("dee_measure_loudness"),
       arrow(),
@@ -104,10 +105,27 @@ export const chains: Chain[] = [
       file("IN"),
       arrow(),
       tool("ffmpeg"),
-      arrow(),
-      file("NAME.wav"),
+      arrow("raw PCM →"),
+      pcm(),
       arrow(),
       tool("dee_ddp_encoder measure_only"),
+      arrow("measured loudness, then killed →"),
+      step("loudness in the bar"),
+    ],
+  },
+  {
+    title: "-mo with a TrueHD Atmos source",
+    note: "measured as Atmos · raw .thd or a container track",
+    flow: [
+      alt([
+        [file("IN.thd"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+      ]),
+      tool("truehdd decode"),
+      arrow(),
+      file("NAME.atmos"),
+      arrow(),
+      tool("dee_ddpjoc_encoder measure_only"),
       arrow("measured loudness, then killed →"),
       step("loudness in the bar"),
     ],
@@ -119,8 +137,8 @@ export const chains: Chain[] = [
       file("IN"),
       arrow(),
       tool("ffmpeg"),
-      arrow(),
-      file("NAME.wav"),
+      arrow("raw PCM →"),
+      pcm(),
       arrow(),
       tool("dee_ddp_encoder -e bluray"),
       arrow(),
@@ -129,13 +147,13 @@ export const chains: Chain[] = [
   },
   {
     title: "ddp 7.1 standard · ddp 7.0",
-    note: "--ddp-mode standard (the default) · 7.0 in both modes",
+    note: "‑‑ddp-mode standard (the default) · 7.0 in both modes",
     flow: [
       file("IN"),
       arrow(),
       tool("ffmpeg"),
-      arrow(),
-      file("NAME.wav"),
+      arrow("raw PCM →"),
+      pcm(),
       arrow(),
       tool("dee_shim ddp_encoder"),
       arrow("--binary →"),
@@ -146,7 +164,7 @@ export const chains: Chain[] = [
   },
   {
     title: "thd",
-    note: "dee_shim only with DRC none (the default)",
+    note: "dee_shim only with DRC none (the default) · always a wav, never the pipe",
     flow: [
       file("IN"),
       arrow(),
@@ -163,7 +181,7 @@ export const chains: Chain[] = [
   },
   {
     title: "ddp-atmos",
-    note: "--ddp-atmos-mode streaming (5.1 JOC), standard or bluray (7.1) · raw .thd or a container track",
+    note: "‑‑ddp-atmos-mode streaming (5.1 JOC), standard or bluray (7.1) · raw .thd or a container track",
     flow: [
       alt([
         [file("IN.thd"), arrow()],
@@ -228,6 +246,8 @@ export const loudnessTrees: LoudnessTree[] = [
       {
         cond: "≤ 5.1",
         flow: [
+          pcm(),
+          arrow(),
           tool("dee_measure_loudness"),
           arrow(),
           file("loudness.json"),
@@ -238,10 +258,23 @@ export const loudnessTrees: LoudnessTree[] = [
       {
         cond: "7.1",
         flow: [
+          pcm(),
+          arrow(),
           tool("dee_ddp_encoder measure_only"),
           arrow("killed once measured →"),
           step("loudness in the bar"),
         ],
+      },
+      {
+        cond: "TrueHD Atmos",
+        flow: [
+          file("NAME.atmos"),
+          arrow(),
+          tool("dee_ddpjoc_encoder measure_only"),
+          arrow("killed once measured →"),
+          step("loudness in the bar"),
+        ],
+        note: "decoded by truehdd",
       },
     ],
   },

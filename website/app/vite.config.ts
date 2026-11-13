@@ -1,9 +1,8 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, rmSync } from "node:fs"
 import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig, type Plugin } from "vite"
-import { viteSingleFile } from "vite-plugin-singlefile"
 
 // The deew version comes from the repo root Cargo.toml ([package] version).
 function deewVersion(): string {
@@ -30,35 +29,46 @@ function devCleanUrls(): Plugin {
   }
 }
 
-// vite-plugin-singlefile only supports one input per build, so each page is
-// its own build: `vite build` makes index.html, `vite build --mode tool-chain`
-// makes tool-chain.html (the build script runs both).
-// https://vite.dev/config/
-export default defineConfig(({ mode }) => {
-  const toolChain = mode === "tool-chain"
+// Build only: remove website/assets before each build so stale hashed files
+// don't pile up. Deletes that one folder and nothing else.
+function cleanAssets(): Plugin {
   return {
-    base: "./",
-    define: { __DEEW_VERSION__: JSON.stringify(deewVersion()) },
-    // public/ is copied by the index.html build only.
-    publicDir: toolChain ? false : "public",
-    plugins: [react(), tailwindcss(), viteSingleFile(), devCleanUrls()],
-    resolve: {
-      alias: {
-        "@": resolve(import.meta.dirname, "./src"),
-      },
-    },
-    build: {
-      // Write the single-file pages next to app/ (website/index.html, website/tool-chain.html).
-      outDir: "..",
-      emptyOutDir: false,
-      // Big enough that the woff2 fonts become data URIs.
-      assetsInlineLimit: 1024 * 1024,
-      rollupOptions: {
-        input: resolve(
-          import.meta.dirname,
-          toolChain ? "tool-chain.html" : "index.html"
-        ),
-      },
+    name: "clean-assets",
+    apply: "build",
+    buildStart() {
+      rmSync(resolve(import.meta.dirname, "../assets"), {
+        recursive: true,
+        force: true,
+      })
     },
   }
+}
+
+// One multi-page build: index.html and tool-chain.html share hashed chunks in
+// ../assets/ (React, shared components, CSS, fonts).
+// https://vite.dev/config/
+export default defineConfig({
+  base: "./",
+  define: { __DEEW_VERSION__: JSON.stringify(deewVersion()) },
+  publicDir: "public",
+  plugins: [react(), tailwindcss(), devCleanUrls(), cleanAssets()],
+  resolve: {
+    alias: {
+      "@": resolve(import.meta.dirname, "./src"),
+    },
+  },
+  build: {
+    // Write the pages next to app/ (website/index.html, website/tool-chain.html).
+    outDir: "..",
+    emptyOutDir: false,
+    assetsDir: "assets",
+    // Keep the woff2 fonts as separate, cacheable files.
+    assetsInlineLimit: 0,
+    rollupOptions: {
+      input: {
+        index: resolve(import.meta.dirname, "index.html"),
+        "tool-chain": resolve(import.meta.dirname, "tool-chain.html"),
+      },
+    },
+  },
 })

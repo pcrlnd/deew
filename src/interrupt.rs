@@ -94,7 +94,7 @@ fn kill_all() {
 /// Children run in their own process group (see [`isolate`]), so one signal
 /// reaches a tool and everything it started.
 #[cfg(unix)]
-fn kill_tree(pid: u32) {
+pub fn kill_tree(pid: u32) {
     let pid = pid as i32;
     // SAFETY: kill(2) with a PID/process group of a child of this process.
     unsafe {
@@ -104,7 +104,7 @@ fn kill_tree(pid: u32) {
 }
 
 #[cfg(windows)]
-fn kill_tree(pid: u32) {
+pub fn kill_tree(pid: u32) {
     use std::process::{Command, Stdio};
     let _ = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])

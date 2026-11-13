@@ -1,9 +1,7 @@
 # deew website
 
 Static project site for deew, built with Vite + React + TypeScript and the same
-shadcn preset (`base-lyra`, zinc) as the GUI. The built `index.html` is a single
-self-contained file (JS, CSS and fonts inlined), so it can be opened directly
-from disk.
+shadcn preset (`base-lyra`, zinc) as the GUI.
 
 ## Develop
 
@@ -20,5 +18,9 @@ cd app
 npm run build
 ```
 
-This writes `../index.html` (and copies `app/public/*` next to it). Commit the
-result together with the source.
+This writes `../index.html`, `../tool-chain.html` and shared hashed files in
+`../assets/` (JS, CSS, fonts), and copies `app/public/*` next to them. Commit
+all of them together with the source.
+
+The pages must be served over HTTP (e.g. `npm run preview`, or
+`python3 -m http.server` in `website/`); opening them from disk does not work.

@@ -224,6 +224,14 @@ describe("stageLabel", () => {
     expect(stageLabel(job({ stage: "ffmpeg" }))).toBe("ffmpeg decode")
     expect(stageLabel(job({ stage: "decode" }))).toBe("truehdd decode")
     expect(stageLabel(job({ stage: "measure" }))).toBe("DEE measure")
+    expect(
+      stageLabel(
+        job({ stage: "measure", db: -33, gating: "dialogue", speech: 16 })
+      )
+    ).toBe("DEE measure (-33 dB, dialogue-gated, 16% speech)")
+    expect(
+      stageLabel(job({ stage: "measure", db: -25, gating: "level" }))
+    ).toBe("DEE measure (-25 dB, level-gated)")
     expect(stageLabel(job({ stage: "encode", db: -3.5 }))).toBe(
       "DEE encode (-3.5 dB)"
     )

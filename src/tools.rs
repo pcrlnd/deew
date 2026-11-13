@@ -6,7 +6,8 @@ use crate::error::print_exit;
 use regex::Regex;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 
 /// Executable suffix of the platform.
 const EXE_SUFFIX: &str = if cfg!(windows) { ".exe" } else { "" };
@@ -97,6 +98,71 @@ fn shim_at(run: &Path, cwd: &Path) -> Option<Shim> {
     run.is_file().then(|| Shim {
         run: run.to_string_lossy().into_owned(),
     })
+}
+
+/// The input of the dry-run that tells whether dee_shim keeps a DEE
+/// `named_pipe://` input as it is.
+const SHIM_PROBE_INPUT: &str = r"named_pipe://\\.\pipe\deew-probe";
+/// How long the dry-run may take.
+const SHIM_PROBE_SECONDS: u64 = 5;
+
+/// Whether the output of `dee_shim ... --dry-run` has `input` as the value of
+/// the native `-i`. dee_shim 0.1.0 takes `named_pipe://...` for a relative path
+/// and prints `-i <current directory>\named_pipe://...`.
+pub fn shim_keeps_input(dry_run_output: &str, input: &str) -> bool {
+    dry_run_output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("native arguments:"))
+        .and_then(|args| args.split_once(" -i ").map(|(_, rest)| rest))
+        .and_then(|rest| rest.strip_prefix(input))
+        .is_some_and(|after| after.is_empty() || after.starts_with(' '))
+}
+
+/// Run the dry-run once and look at the printed command. Any failure counts
+/// as "does not keep it".
+fn probe_shim(shim: &str, binary: &str) -> bool {
+    let mut command = Command::new(shim);
+    command
+        .args(["ddp_encoder", "--binary", binary])
+        .args([
+            "--layout",
+            "7.1/eac3",
+            "--bitrate",
+            "1536",
+            "--dry-run",
+            "--",
+        ])
+        .args(["--progress", "1", "--input-format"])
+        .arg("pcm_s24le:sample_rate=48000:channels=8:streaming=1")
+        .args(["-i", SHIM_PROBE_INPUT, "-o", "probe.ec3"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let Ok(child) = command.spawn() else {
+        return false;
+    };
+    let pid = child.id();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    match receiver.recv_timeout(Duration::from_secs(SHIM_PROBE_SECONDS)) {
+        Ok(Ok(output)) => {
+            output.status.success()
+                && shim_keeps_input(&String::from_utf8_lossy(&output.stdout), SHIM_PROBE_INPUT)
+        }
+        _ => {
+            crate::interrupt::kill_tree(pid);
+            false
+        }
+    }
+}
+
+/// Whether dee_shim passes a `named_pipe://` input to DEE unchanged, so its
+/// layouts can read the pipe. Asked once per run.
+pub fn shim_takes_named_pipe(shim: &str, binary: &str) -> bool {
+    static KEEPS: OnceLock<bool> = OnceLock::new();
+    *KEEPS.get_or_init(|| probe_shim(shim, binary))
 }
 
 /// Look for dee_shim: `dee_shim` next to the deew executable, else in the
@@ -283,6 +349,39 @@ pub fn probe_versions(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_shim_dry_run_tells_whether_the_pipe_is_kept() {
+        let pipe = r"named_pipe://\\.\pipe\deew-probe";
+        let head = "host X:\\dee\\dee_ddp_encoder.exe in-process\nlevers: DDP_ACMOD=21\n";
+        // dee_shim 0.1.0 prefixes the working directory
+        let mangled = format!(
+            "{head}native arguments: -e ddp --data-rate 768 --progress 1 --input-format pcm_s24le:channels=8:streaming=1 -i X:\\tools\\{pipe} -o X:\\probe.ec3\n"
+        );
+        assert!(!super::shim_keeps_input(&mangled, pipe));
+        // a shim that passes it through
+        let kept = format!(
+            "{head}native arguments: -e ddp --data-rate 768 --progress 1 --input-format pcm_s24le:channels=8:streaming=1 -i {pipe} -o X:\\probe.ec3\n"
+        );
+        assert!(super::shim_keeps_input(&kept, pipe));
+        // the input last, no output option
+        assert!(super::shim_keeps_input(
+            &format!("native arguments: -i {pipe}"),
+            pipe
+        ));
+        // no such line, an error, a longer value, nothing
+        assert!(!super::shim_keeps_input("ERROR: Could not open", pipe));
+        assert!(!super::shim_keeps_input(
+            &format!("native arguments: -i {pipe}x -o a"),
+            pipe
+        ));
+        assert!(!super::shim_keeps_input("", pipe));
+    }
+
+    #[test]
+    fn a_shim_that_does_not_exist_does_not_keep_the_pipe() {
+        assert!(!super::probe_shim("/no/such/dee_shim", "/no/such/dee"));
+    }
+
     use super::*;
 
     #[test]

@@ -13,6 +13,7 @@ mod inputs;
 mod interrupt;
 mod live;
 mod markup;
+mod pipe;
 mod pipeline;
 mod plan;
 mod probe;

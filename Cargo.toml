@@ -1,6 +1,6 @@
 [package]
 name = "deew"
-version = "5.1.0"
+version = "5.2.0"
 edition = "2024"
 description = "Dolby Encoding Engine Wrapper"
 license = "MIT"
@@ -26,12 +26,15 @@ sha2 = "0.11.1"
 tar = { version = "0.4.46", default-features = false }
 toml = "1.2.1"
 unicode-width = "0.2.3"
-ureq = "3.5.1"
+ureq = "3.5.2"
 which = "8.0.6"
-zip = { version = "9.4.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes"] }
 
 [profile.release]
 lto = true

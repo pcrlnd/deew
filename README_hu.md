@@ -33,7 +33,7 @@
 - automatikus csatornafelcserélés 7.1-es forrásoknál (DEE valamiért megcseréli az Ls, Rs csatornákat az Lrs, Rrs-sel)
 - automatikusan kompenzálja az encoderek késleltetését: DD/DDP esetén 256, AC4 esetén 2048, AAC esetén 1600 minta (a TrueHD-nél nincs)
 - akár videó inputokkal is működik
-- az `-mo` és a `-dn` (hangosságmérés) nem támogat 7.1-es forrást
+- az AC4 `-dn` (hangosságmérés) nem támogat 7.1-es forrást
 - sokoldalú delay opció, ami támogat ms, s and és frame@fps formát is, delay parse-olása fájlnévből szintén támogatott
 
 A [deew tool chain](https://deew.app/tool-chain) oldal megmutatja, hogyan köti össze a deew az ffprobe-ot, az ffmpeg-et, a truehdd-t, a dee_shim-et és a DEE eszközeit, és formátumonként pontosan milyen opciókat ad át mindegyiknek.
@@ -57,6 +57,12 @@ A `--ddp-mode` a 7.1 DDP, a `--ddp-atmos-mode` a `ddp-atmos` profilját választ
   - standard: 7.1 Atmosszal, E-AC-3 independent és dependent substream, 768-2048 kbps, `.ec3` kimenet
   - bluray: 7.1 Atmosszal, AC-3 mag és E-AC-3 dependent substream, 1152-1664 kbps, `.eb3` kimenet
 - a `-h` és az `-lb` kékkel jelöli azokat az értékeket, amelyek a dee_shim-et használják (`blue: uses dee_shim`)
+
+# Surround fáziseltolás
+A DEE DD és DDP encoderei alapértelmezetten 90°-os fáziseltolást alkalmaznak a surround csatornákra. A `-nps`/`--no-phase-shift` egy futásra kikapcsolja (`surround_90deg_phase_shift=0` a DEE `-e` opciójában), a configban a `surround_phase_shift = false` beállítás minden futásra. Csak a surround csatornás (5.1, 5.0, 7.1, 7.0) DD és DDP kimenetre hat, a többi formátumnak nincs ilyen (azokkal a `-nps` hiba, a config értéke figyelmen kívül marad).
+
+# Pipe a DEE felé
+DD, DDP, AC4, AAC és `-mo` esetén az ffmpeg dekódolt hangja közvetlenül a DEE-be megy (nyers PCM egy pipe-on, Windowson named pipe-on) ideiglenes `.wav` helyett, így nem készül nagy köztes fájl. A TrueHD, az Atmos és az egyedi dialnormos (`-dn`) AC4 továbbra is ideiglenes `.wav`-ot használ. Az újramintavételezett és a 32 bites hangot 32 bites float-ként küldi. A configban a `pipe = false` kikapcsolja, ha problémát okozna.
 
 # Hol keresi deew a programokat
 A deew ebben a sorrendben keresi a programokat, a configban nincs mit beállítani:
@@ -105,8 +111,9 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 ```
 USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
             [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-d DELAY] [-r DRC] [-dn DIALNORM] [-in NUMBER]
-            [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c] [-gc] [-gt]
+            [-dm CHANNELS] [-dl] [-nps] [-d DELAY] [-r DRC] [-dn DIALNORM]
+            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
+            [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
@@ -148,6 +155,8 @@ FLAGS:
                             DD and DDP get a real 5.0 or 7.0, the others keep a
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
+  -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
+                            only works for DD/DDP, config: surround_phase_shift
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -173,7 +182,9 @@ FLAGS:
   -k, --keeptemp            keep temp files
   -kl, --keep-log           keep TrueHD's log and write a .deew-log.html report
                             for each output
-  -mo, --measure-only       only measures the loudness with DEE, no encoding
+  -mo, --measure-only       only measures the loudness of the source with DEE,
+                            no encoding, -f and the encoding options are
+                            ignored, TrueHD Atmos sources are measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
   -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
                             input

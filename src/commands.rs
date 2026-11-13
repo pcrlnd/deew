@@ -223,6 +223,71 @@ pub fn ffmpeg_args(ffmpeg: &str, plan: &AudioPlan, input: &str, wav: &str) -> Ve
     args
 }
 
+/// The sample format of the raw PCM that ffmpeg pipes into DEE. DEE reads 16
+/// and 24 bit integers and 32 bit floats, no 32 bit integers: 16 and 24 bit
+/// plans pipe 24 bit integers (the same data as their wav), the 32 bit plans
+/// of the wav route (resampled or 32 bit sources) pipe 32 bit floats.
+pub fn pipe_codec(bit_depth: u32) -> &'static str {
+    if bit_depth == 32 {
+        "pcm_f32le"
+    } else {
+        "pcm_s24le"
+    }
+}
+
+/// The raw format name of a pipe codec (`pcm_s24le` is `s24le`).
+fn pipe_format(codec: &str) -> &str {
+    codec.strip_prefix("pcm_").unwrap_or(codec)
+}
+
+/// ffmpeg for a piped job: the same conversion as `ffmpeg_args`, but the
+/// result is raw PCM for DEE, written to `output` (see `pipe::ffmpeg_output`:
+/// `-`, stdout, on Unix, the named pipe of DEE on Windows).
+pub fn ffmpeg_pipe_args(ffmpeg: &str, plan: &AudioPlan, input: &str, output: &str) -> Vec<String> {
+    let mut args: Vec<String> = [ffmpeg, "-y", "-drc_scale", "0", "-i", input]
+        .map(String::from)
+        .to_vec();
+    args.extend(plan.map_args.iter().cloned());
+    args.push("-c".to_string());
+    args.push(pipe_codec(plan.bit_depth).to_string());
+    args.extend(plan.swap_args.iter().cloned());
+    args.extend(plan.resample_args.iter().cloned());
+    args.extend(["-f", pipe_format(pipe_codec(plan.bit_depth)), output].map(String::from));
+    args
+}
+
+/// Sample rate of the audio ffmpeg hands to DEE (48 kHz when it resamples).
+pub fn pcm_rate(format: Format, samplerate: i64) -> i64 {
+    resample_rate(format, samplerate).map_or(samplerate, |rate| rate.parse().unwrap_or(48000))
+}
+
+/// The number of samples DEE is told the pipe carries: DEE needs it for a
+/// progress percentage. A count below the real one truncates the output, one
+/// above it is harmless (the progress stops short), so it is the duration
+/// plus one second. `None` for an unknown duration: DEE then reports no
+/// progress until it is done.
+pub fn pipe_sample_count(duration: f64, rate: i64) -> Option<u64> {
+    (duration > 0.0).then(|| ((duration + 1.0) * rate as f64).ceil() as u64)
+}
+
+/// The value of DEE's `--input-format` for the raw PCM pipe. `streaming=1`
+/// makes DEE keep what it reads in its temp directory for its second step; on
+/// Unix it deduces that from the pipe, on Windows a named pipe looks like a
+/// file to it and the second step fails without the option.
+pub fn pcm_input_format(
+    bit_depth: u32,
+    rate: i64,
+    channels: i64,
+    sample_count: Option<u64>,
+) -> String {
+    let codec = pipe_codec(bit_depth);
+    let mut value = format!("{codec}:sample_rate={rate}:channels={channels}:streaming=1");
+    if let Some(count) = sample_count {
+        value.push_str(&format!(":sample_count={count}"));
+    }
+    value
+}
+
 /// ffmpeg: copies the selected TrueHD track (of a container or a raw stream)
 /// to stdout, as a raw stream for the stdin of truehdd. ffmpeg prints
 /// timestamp warnings even with `-v error`, only its exit code counts.
@@ -255,6 +320,32 @@ fn ffmpeg_print_with(plan: &AudioPlan, depth: &str, input: &str, output: &str) -
 [bold magenta]{output}[/bold magenta]",
         plan.map_print, depth, plan.swap_print, plan.resample_print
     )
+}
+
+/// `ffmpeg_print_with` for a piped job: raw PCM to the pipe.
+fn ffmpeg_pipe_print_with(plan: &AudioPlan, input: &str, output: &str) -> String {
+    let codec = pipe_codec(plan.bit_depth);
+    format!(
+        "[bold cyan]ffmpeg[/bold cyan] -y -drc_scale [bold color(231)]0[/bold color(231)] \
+-i [bold green]{input}[/bold green] \
+{}-c [bold color(231)]{codec}[/bold color(231)] \
+{}{}-f [bold color(231)]{}[/bold color(231)] {}",
+        plan.map_print,
+        plan.swap_print,
+        plan.resample_print,
+        pipe_format(codec),
+        escape(&shell_quote(output))
+    )
+}
+
+/// The piped ffmpeg command as printed with `-la` (markup).
+pub fn ffmpeg_pipe_print(plan: &AudioPlan, input: &str, output: &str) -> String {
+    ffmpeg_pipe_print_with(plan, &escape(&shell_quote(input)), output)
+}
+
+/// The piped ffmpeg command as printed by default, with `[input]`.
+pub fn ffmpeg_pipe_print_short(plan: &AudioPlan, output: &str) -> String {
+    ffmpeg_pipe_print_with(plan, "\\[input]", output)
 }
 
 /// The command as printed with `-la` (markup).
@@ -299,6 +390,9 @@ pub struct EncodeParams<'a> {
     pub tool: &'a str,
     /// The wav, or the `.atmos` file of the Atmos formats.
     pub input: &'a str,
+    /// Value of `--input-format` (`wav`, or the raw PCM of a piped job, see
+    /// `pcm_input_format`).
+    pub input_format: &'a str,
     pub output: &'a str,
     pub bitrate: u32,
     pub drc: &'a str,
@@ -323,7 +417,12 @@ pub struct EncodeParams<'a> {
     pub atmos_mode: DdpAtmosMode,
     /// The output has no LFE channel (`lfe_on=0`, or a 7.0 layout of dee_shim).
     pub lfe_removed: bool,
+    /// DD/DDP: turn off DEE's 90 degree phase shift of the surround channels.
+    pub no_phase_shift: bool,
 }
+
+/// The `-e` option that turns the phase shift off (the default is on).
+const NO_PHASE_SHIFT: &str = ":surround_90deg_phase_shift=0";
 
 fn thd_presentation(outchannels: i64) -> &'static str {
     match outchannels {
@@ -334,7 +433,13 @@ fn thd_presentation(outchannels: i64) -> &'static str {
 }
 
 /// The `-e` argument of `dee_ddp_encoder`.
-fn ddp_encoder(format: Format, outchannels: i64, drc: &str, lfe_removed: bool) -> String {
+fn ddp_encoder(
+    format: Format,
+    outchannels: i64,
+    drc: &str,
+    lfe_removed: bool,
+    no_phase_shift: bool,
+) -> String {
     let mode = match (format, outchannels) {
         (Format::Dd, _) => "dd",
         (_, 8) => "bluray",
@@ -346,7 +451,8 @@ fn ddp_encoder(format: Format, outchannels: i64, drc: &str, lfe_removed: bool) -
     } else {
         ""
     };
-    format!("{mode}:drc_profile={drc}{lfe}")
+    let phase = if no_phase_shift { NO_PHASE_SHIFT } else { "" };
+    format!("{mode}:drc_profile={drc}{lfe}{phase}")
 }
 
 /// The command that encodes with DEE (the first item is the program).
@@ -446,7 +552,7 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                 "{}:drc_profile={drc}",
                 thd_presentation(p.outchannels)
             ));
-            args.extend(strings(&["--input-format", "wav", "-i", p.input]));
+            args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
             args.extend(strings(&["-o", p.output]));
         }
         Format::Ddp if p.outchannels == 8 && (!p.bluray || p.lfe_removed) => {
@@ -477,8 +583,12 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             // DRC is DEE's own sub-option; the shim keeps it and sets the
             // mode of the layout (`ddp` for /eac3, `bluray` for 7.0).
             let mode = if layout == "7.0" { "bluray" } else { "ddp" };
-            args.extend(strings(&["-e", &format!("{mode}:drc_profile={}", p.drc)]));
-            args.extend(strings(&["--input-format", "wav", "-i", p.input]));
+            let phase = if p.no_phase_shift { NO_PHASE_SHIFT } else { "" };
+            args.extend(strings(&[
+                "-e",
+                &format!("{mode}:drc_profile={}{phase}", p.drc),
+            ]));
+            args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
             args.extend(strings(&["-o", p.output]));
             match p.skip_dialnorm {
                 Some(n) => args.extend(strings(&[
@@ -494,7 +604,7 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
         Format::Dd | Format::Ddp | Format::Ac4 | Format::Aac => {
             args.push(p.tool.to_string());
             args.extend(strings(&common));
-            args.extend(strings(&["--input-format", "wav", "-i", p.input]));
+            args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
             args.extend(strings(&["-o", p.output]));
             match p.format {
                 Format::Ac4 => {
@@ -508,7 +618,13 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                 _ => {
                     args.extend(strings(&[
                         "-e",
-                        &ddp_encoder(p.format, p.outchannels, p.drc, p.lfe_removed),
+                        &ddp_encoder(
+                            p.format,
+                            p.outchannels,
+                            p.drc,
+                            p.lfe_removed,
+                            p.no_phase_shift,
+                        ),
                         "--data-rate",
                         &bitrate,
                     ]));
@@ -546,7 +662,7 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
 
 /// `dee_measure_loudness`: measures the wav and writes the loudness manifest
 /// (the tool has no `--temp-dir`).
-pub fn measure_args(tool: &str, wav: &str, manifest: &str) -> Vec<String> {
+pub fn measure_args(tool: &str, input_format: &str, wav: &str, manifest: &str) -> Vec<String> {
     strings(&[
         tool,
         "--progress",
@@ -554,7 +670,7 @@ pub fn measure_args(tool: &str, wav: &str, manifest: &str) -> Vec<String> {
         "--overwrite",
         "1",
         "--input-format",
-        "wav",
+        input_format,
         "-i",
         wav,
         "--output-manifest",
@@ -565,7 +681,13 @@ pub fn measure_args(tool: &str, wav: &str, manifest: &str) -> Vec<String> {
 /// `-mo` for 8-channel input, which `dee_measure_loudness` rejects: the DDP
 /// encoder in the Blu-ray profile with `measure_only`. The caller stops it
 /// once it has printed the loudness, `output` is a throwaway file.
-pub fn measure_with_encoder_args(tool: &str, wav: &str, output: &str, temp: &str) -> Vec<String> {
+pub fn measure_with_encoder_args(
+    tool: &str,
+    input_format: &str,
+    wav: &str,
+    output: &str,
+    temp: &str,
+) -> Vec<String> {
     strings(&[
         tool,
         "--progress",
@@ -573,7 +695,7 @@ pub fn measure_with_encoder_args(tool: &str, wav: &str, output: &str, temp: &str
         "--overwrite",
         "1",
         "--input-format",
-        "wav",
+        input_format,
         "-i",
         wav,
         "-o",
@@ -586,6 +708,31 @@ pub fn measure_with_encoder_args(tool: &str, wav: &str, output: &str, temp: &str
         "measure_only",
         "--temp-dir",
         temp,
+    ])
+}
+
+/// `-mo` of a TrueHD Atmos source: the DDP Atmos encoder (`dee_ddpjoc_encoder`,
+/// it has no `--temp-dir`) on the decoded `.atmos` with `measure_only`. The
+/// caller stops it once it has printed the loudness, `output` is a throwaway file.
+pub fn measure_atmos_args(tool: &str, atmos: &str, output: &str) -> Vec<String> {
+    strings(&[
+        tool,
+        "--progress",
+        "1",
+        "--overwrite",
+        "1",
+        "--input-format",
+        "atmos_mezz",
+        "-i",
+        atmos,
+        "-o",
+        output,
+        "-e",
+        "drc_profile=none",
+        "--data-rate",
+        "1024",
+        "--loudness-management",
+        "measure_only",
     ])
 }
 
@@ -633,7 +780,10 @@ pub fn print_command(args: &[String], short: bool) -> String {
     let mut previous = "";
     for (i, arg) in args.iter().enumerate().skip(1) {
         out.push(' ');
-        let kind = if positional_input && i == args.len() - 1 && arg != "-" {
+        let kind = if crate::pipe::is_pipe_path(arg) {
+            // the pipe from ffmpeg is shown as it is, also in the short form
+            None
+        } else if positional_input && i == args.len() - 1 && arg != "-" {
             Some(Shown::Input)
         } else if positional_output && i == args.len() - 1 && arg != "-" {
             Some(Shown::Output)
@@ -1024,6 +1174,7 @@ mod tests {
             format,
             tool: "/dee/tool",
             input: "/t/a.wav",
+            input_format: "wav",
             output: "/out/a.ext",
             bitrate: 640,
             drc: "music_light",
@@ -1038,6 +1189,7 @@ mod tests {
             bluray: false,
             atmos_mode: DdpAtmosMode::Streaming,
             lfe_removed: false,
+            no_phase_shift: false,
         }
     }
 
@@ -1203,6 +1355,84 @@ mod tests {
         // 7.1 with a silent LFE: the usual native Blu-ray
         p.lfe_removed = false;
         assert_eq!(encode_args(&p)[0], "/dee/tool");
+    }
+
+    #[test]
+    fn no_phase_shift_commands() {
+        let off = ":surround_90deg_phase_shift=0";
+        let shim = Shim {
+            run: "/shim/dee_shim".into(),
+        };
+        let e = |p: &EncodeParams| opt_value(&encode_args(p), "-e");
+        // nothing changes without the flag
+        assert_eq!(e(&params(Format::Ddp)), "ddp:drc_profile=music_light");
+        // native: mono/stereo/5.1, DD and DDP, with -dm and -dl
+        for format in [Format::Dd, Format::Ddp] {
+            let mode = if format == Format::Dd { "dd" } else { "ddp" };
+            for outchannels in [1, 2, 6] {
+                let mut p = params(format);
+                p.outchannels = outchannels;
+                p.no_phase_shift = true;
+                p.layout_arg = Some("5.1");
+                assert_eq!(e(&p), format!("{mode}:drc_profile=music_light{off}"));
+            }
+            let mut p = params(format);
+            p.no_phase_shift = true;
+            p.lfe_removed = true;
+            assert_eq!(
+                e(&p),
+                format!("{mode}:drc_profile=music_light:lfe_on=0{off}")
+            );
+        }
+        // 7.1 Blu-ray: native
+        let mut p = params(Format::Ddp);
+        p.outchannels = 8;
+        p.bluray = true;
+        p.no_phase_shift = true;
+        p.shim = Some(&shim);
+        let args = encode_args(&p);
+        assert_eq!(args[0], "/dee/tool");
+        assert_eq!(
+            opt_value(&args, "-e"),
+            format!("bluray:drc_profile=music_light{off}")
+        );
+        // dee_shim layouts: 7.1/eac3, 7.0/eac3, 7.0
+        for (bluray, lfe_removed, layout, mode) in [
+            (false, false, "7.1/eac3", "ddp"),
+            (false, true, "7.0/eac3", "ddp"),
+            (true, true, "7.0", "bluray"),
+        ] {
+            let mut p = params(Format::Ddp);
+            p.outchannels = 8;
+            p.bluray = bluray;
+            p.lfe_removed = lfe_removed;
+            p.shim = Some(&shim);
+            let plain = encode_args(&p);
+            p.no_phase_shift = true;
+            let args = encode_args(&p);
+            assert_eq!(args[0], "/shim/dee_shim");
+            assert_eq!(opt_value(&args, "--layout"), layout);
+            assert_eq!(
+                opt_value(&args, "-e"),
+                format!("{mode}:drc_profile=music_light{off}")
+            );
+            // only the -e string differs
+            assert_eq!(plain.len(), args.len());
+            assert_eq!(
+                opt_value(&plain, "-e"),
+                format!("{mode}:drc_profile=music_light")
+            );
+        }
+        // the other formats never get it
+        for format in [Format::Ac4, Format::Aac, Format::Thd, Format::DdpAtmos] {
+            let mut p = params(format);
+            p.no_phase_shift = true;
+            p.shim = Some(&shim);
+            assert!(
+                !encode_args(&p).iter().any(|a| a.contains("surround_90deg")),
+                "{format:?}"
+            );
+        }
     }
 
     #[test]
@@ -1530,7 +1760,7 @@ mod tests {
     #[test]
     fn measure_and_decode_commands() {
         assert_eq!(
-            measure_args("/dee/m", "/t/a.wav", "/t/a.loudness.json"),
+            measure_args("/dee/m", "wav", "/t/a.wav", "/t/a.loudness.json"),
             v(&[
                 "/dee/m",
                 "--progress",
@@ -1629,7 +1859,13 @@ mod tests {
     #[test]
     fn measuring_with_the_encoder() {
         assert_eq!(
-            measure_with_encoder_args("/dee/dee_ddp_encoder", "/t/a.wav", "/t/d/m.ec3", "/t/d"),
+            measure_with_encoder_args(
+                "/dee/dee_ddp_encoder",
+                "wav",
+                "/t/a.wav",
+                "/t/d/m.ec3",
+                "/t/d"
+            ),
             v(&[
                 "/dee/dee_ddp_encoder",
                 "--progress",
@@ -1652,6 +1888,34 @@ mod tests {
                 "/t/d",
             ])
         );
+    }
+
+    #[test]
+    fn measuring_atmos_with_the_encoder() {
+        let args = measure_atmos_args("/dee/dee_ddpjoc_encoder", "/t/a.atmos", "/t/d/measure.ec3");
+        assert_eq!(
+            args,
+            v(&[
+                "/dee/dee_ddpjoc_encoder",
+                "--progress",
+                "1",
+                "--overwrite",
+                "1",
+                "--input-format",
+                "atmos_mezz",
+                "-i",
+                "/t/a.atmos",
+                "-o",
+                "/t/d/measure.ec3",
+                "-e",
+                "drc_profile=none",
+                "--data-rate",
+                "1024",
+                "--loudness-management",
+                "measure_only",
+            ])
+        );
+        assert!(!args.contains(&"--temp-dir".to_string()));
     }
 
     #[test]
@@ -1684,5 +1948,205 @@ mod tests {
             )),
             "truehdd decode --output-path [output] [input]"
         );
+    }
+
+    #[test]
+    fn thirty_two_bit_plans_pipe_float() {
+        assert_eq!(pipe_codec(16), "pcm_s24le");
+        assert_eq!(pipe_codec(24), "pcm_s24le");
+        assert_eq!(pipe_codec(32), "pcm_f32le");
+        assert_eq!(
+            pcm_input_format(32, 48000, 6, Some(5)),
+            "pcm_f32le:sample_rate=48000:channels=6:streaming=1:sample_count=5"
+        );
+        // 32 bit source without resampling
+        let plan = audio_plan(Format::Ddp, 48000, 6, 32, 0, false, None);
+        let args = ffmpeg_pipe_args("ffmpeg", &plan, "in.wav", "-");
+        assert_eq!(
+            args[args.len() - 5..],
+            v(&["-c", "pcm_f32le", "-f", "f32le", "-"])[..]
+        );
+        assert_eq!(
+            strip(&ffmpeg_pipe_print_short(&plan, "-")),
+            "ffmpeg -y -drc_scale 0 -i [input] -map 0:a:0 -c pcm_f32le -f f32le -"
+        );
+    }
+
+    #[test]
+    fn pcm_input_formats() {
+        // 2.0, 5.1, 7.1 and the 8 channel wav of the 7.0 layouts
+        assert_eq!(
+            pcm_input_format(24, 48000, 2, Some(97_000)),
+            "pcm_s24le:sample_rate=48000:channels=2:streaming=1:sample_count=97000"
+        );
+        assert_eq!(
+            pcm_input_format(24, 48000, 6, Some(48_000)),
+            "pcm_s24le:sample_rate=48000:channels=6:streaming=1:sample_count=48000"
+        );
+        assert_eq!(
+            pcm_input_format(24, 48000, 8, Some(1)),
+            "pcm_s24le:sample_rate=48000:channels=8:streaming=1:sample_count=1"
+        );
+        // no duration, no sample count
+        assert_eq!(
+            pcm_input_format(24, 48000, 6, None),
+            "pcm_s24le:sample_rate=48000:channels=6:streaming=1"
+        );
+    }
+
+    #[test]
+    fn the_sample_count_has_a_second_to_spare() {
+        // a count below the real one truncates the output
+        assert_eq!(pipe_sample_count(2.0, 48000), Some(144_000));
+        assert_eq!(pipe_sample_count(0.5, 48000), Some(72_000));
+        // rounds up
+        assert_eq!(pipe_sample_count(1.0000001, 48000), Some(96_001));
+        assert_eq!(pipe_sample_count(-1.0, 48000), None);
+        assert_eq!(pipe_sample_count(0.0, 48000), None);
+    }
+
+    #[test]
+    fn the_pipe_rate_is_the_rate_after_resampling() {
+        assert_eq!(pcm_rate(Format::Ddp, 48000), 48000);
+        assert_eq!(pcm_rate(Format::Ddp, 44100), 48000);
+        assert_eq!(pcm_rate(Format::Dd, 96000), 48000);
+        assert_eq!(pcm_rate(Format::Aac, 32000), 48000);
+    }
+
+    #[test]
+    fn piped_ffmpeg_writes_raw_pcm_to_its_output() {
+        let plan = audio_plan(Format::Ddp, 48000, 6, 16, 0, false, None);
+        assert_eq!(
+            ffmpeg_pipe_args("ffmpeg", &plan, "in.mkv", "-"),
+            v(&[
+                "ffmpeg",
+                "-y",
+                "-drc_scale",
+                "0",
+                "-i",
+                "in.mkv",
+                "-map",
+                "0:a:0",
+                "-c",
+                "pcm_s24le",
+                "-f",
+                "s24le",
+                "-"
+            ])
+        );
+        // the filters of the wav stay: swap and resampling
+        let plan = audio_plan(Format::Ddp, 44100, 8, 24, 1, false, None);
+        let args = ffmpeg_pipe_args("ffmpeg", &plan, "in.mkv", "-");
+        let wav = ffmpeg_args("ffmpeg", &plan, "in.mkv", "w.wav");
+        // same up to the output: -c is float instead of the s32 of the wav
+        assert_eq!(args[..6], wav[..6]);
+        assert_eq!(wav[7], "pcm_s32le");
+        assert_eq!(args[7], "pcm_f32le");
+        assert_eq!(args[8..args.len() - 3], wav[8..wav.len() - 3]);
+        assert_eq!(args[args.len() - 3..], v(&["-f", "f32le", "-"])[..]);
+        assert!(args.contains(&"-filter_complex".to_string()));
+        assert!(args.contains(&"-ar".to_string()));
+        assert!(!args.contains(&"-rf64".to_string()));
+        assert!(!args.contains(&"w.wav".to_string()));
+        // the Windows pipe is the last argument, the format stays
+        let pipe = r"\\.\pipe\deew-1-0";
+        let args = ffmpeg_pipe_args("ffmpeg", &plan, "in.mkv", pipe);
+        assert_eq!(args[args.len() - 3..], v(&["-f", "f32le", pipe])[..]);
+        let plan = audio_plan(Format::Ddp, 48000, 6, 24, 0, false, None);
+        let args = ffmpeg_pipe_args("ffmpeg", &plan, "in.mkv", pipe);
+        assert_eq!(args[args.len() - 3..], v(&["-f", "s24le", pipe])[..]);
+    }
+
+    #[test]
+    fn piped_dee_commands_read_the_pipe() {
+        let mut p = params(Format::Ddp);
+        p.input = "/dev/stdin";
+        p.input_format = "pcm_s24le:sample_rate=48000:channels=6:sample_count=96000";
+        let args = encode_args(&p);
+        assert_eq!(
+            opt_value(&args, "--input-format"),
+            "pcm_s24le:sample_rate=48000:channels=6:sample_count=96000"
+        );
+        assert_eq!(opt_value(&args, "-i"), "/dev/stdin");
+        // every encoder that reads the pipe takes both
+        for (format, outchannels) in [
+            (Format::Dd, 6),
+            (Format::Ac4, 6),
+            (Format::Aac, 2),
+            (Format::Thd, 8),
+        ] {
+            let mut p = params(format);
+            p.outchannels = outchannels;
+            p.input = "/dev/stdin";
+            p.input_format = "pcm_s24le:sample_rate=48000:channels=2";
+            let args = encode_args(&p);
+            assert_eq!(opt_value(&args, "--input-format"), p.input_format);
+            assert_eq!(opt_value(&args, "-i"), "/dev/stdin");
+        }
+        // the dee_shim layouts of 7.1 / 7.0
+        let shim = Shim {
+            run: "/dee/dee_shim".to_string(),
+        };
+        let mut p = params(Format::Ddp);
+        p.outchannels = 8;
+        p.shim = Some(&shim);
+        p.input = "/dev/stdin";
+        p.input_format = "pcm_s24le:sample_rate=48000:channels=8";
+        let args = encode_args(&p);
+        assert_eq!(opt_value(&args, "--input-format"), p.input_format);
+        assert_eq!(opt_value(&args, "-i"), "/dev/stdin");
+        assert_eq!(
+            measure_args(
+                "/dee/m",
+                "pcm_s24le:sample_rate=48000:channels=6",
+                "/dev/stdin",
+                "/t/m.json"
+            )[5..9],
+            v(&[
+                "--input-format",
+                "pcm_s24le:sample_rate=48000:channels=6",
+                "-i",
+                "/dev/stdin"
+            ])[..]
+        );
+    }
+
+    #[test]
+    fn piped_commands_are_printed() {
+        let plan = audio_plan(Format::Ddp, 48000, 6, 24, 0, false, None);
+        assert_eq!(
+            strip(&ffmpeg_pipe_print(&plan, "a [1].mkv", "-")),
+            format!(
+                "ffmpeg -y -drc_scale 0 -i {} -map 0:a:0 -c pcm_s24le -f s24le -",
+                shell_quote("a [1].mkv")
+            )
+        );
+        assert_eq!(
+            strip(&ffmpeg_pipe_print_short(&plan, "-")),
+            "ffmpeg -y -drc_scale 0 -i [input] -map 0:a:0 -c pcm_s24le -f s24le -"
+        );
+        // a named pipe is shown as it is, also in the short form
+        let named = r"\\.\pipe\deew-1-0";
+        assert_eq!(
+            strip(&ffmpeg_pipe_print_short(&plan, named)),
+            format!(
+                "ffmpeg -y -drc_scale 0 -i [input] -map 0:a:0 -c pcm_s24le -f s24le {}",
+                shell_quote(named)
+            )
+        );
+        // the pipe is shown as it is, also in the short form
+        let pipe = crate::pipe::path(0);
+        let mut p = params(Format::Ddp);
+        p.input = &pipe;
+        p.input_format = "pcm_s24le:sample_rate=48000:channels=6";
+        let args = encode_args(&p);
+        let input = format!(
+            "--input-format pcm_s24le:sample_rate=48000:channels=6 -i {}",
+            shell_quote(&pipe)
+        );
+        let long = strip(&print_command(&args, false));
+        assert!(long.contains(&format!("{input} -o /out/a.ext")), "{long}");
+        let short = strip(&print_command(&args, true));
+        assert!(short.contains(&format!("{input} -o [output]")), "{short}");
     }
 }

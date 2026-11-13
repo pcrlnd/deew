@@ -5,19 +5,20 @@ use crate::deewlog::{self, LogData, LogSpec, StageLog, Stream};
 use crate::error::escape;
 use crate::events;
 use crate::interrupt;
+use crate::pipe;
 use crate::plan::Format;
 use crate::ui::{Bar, Stage, Ui};
-use crate::util::{basename, clamp_i, file_name};
+use crate::util::{Gating, Level, basename, clamp_i, file_name};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Everything needed to encode one input. The command lines are empty for
 /// the stages a job does not have.
@@ -28,8 +29,12 @@ pub struct Job {
     pub length: f64,
     pub format: Format,
     /// ffmpeg: converts the input to the wav, or for the Atmos formats copies
-    /// the TrueHD track to stdout, which is piped into truehdd.
+    /// the TrueHD track to stdout, which is piped into truehdd. With `pipe`
+    /// the output is raw PCM on stdout.
     pub ffmpeg_args: Vec<String>,
+    /// The audio goes from ffmpeg straight into DEE (the first DEE command of
+    /// the job): this is the DEE input path, see `pipe`. There is no wav.
+    pub pipe: Option<String>,
     /// truehdd: decodes the Atmos formats' input.
     pub decode_args: Vec<String>,
     /// `dee_measure_loudness`, for `-mo` and a custom dialnorm.
@@ -39,6 +44,8 @@ pub struct Job {
     /// The measurement is run by the DDP encoder (8 channels), which is
     /// stopped when it has printed the loudness.
     pub stop_when_measured: bool,
+    /// `-mo`: the result shows the gating and the speech share too.
+    pub measure_only: bool,
     /// The wav, or the `.atmos` file, already exists.
     pub intermediate_exists: bool,
     /// The wav, or the `.atmos` file.
@@ -183,6 +190,12 @@ static DEE_STEP: LazyLock<Regex> =
 static DEE_LOUDNESS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"measured_loudness=(-?[0-9]+(?:\.[0-9]+)?)").expect("valid regex")
 });
+static DEE_GATING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[^A-Za-z0-9_])gating=([A-Za-z_]+)").expect("valid regex"));
+static DEE_SPEECH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^A-Za-z0-9_])speech_percentage=(-?[0-9]+(?:\.[0-9]+)?)")
+        .expect("valid regex")
+});
 static DEE_ERROR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"ERROR: (.*)").expect("valid regex"));
 static DEE_WARNING: LazyLock<Regex> =
@@ -220,6 +233,10 @@ pub fn ffmpeg_percent(line: &str, length: f64) -> Option<f64> {
 pub enum DeeEvent {
     /// Measured loudness, rounded and clamped to -31..0.
     Measured(i64),
+    /// How the measurement was gated.
+    Gating(Gating),
+    /// Share of speech in percent, rounded.
+    Speech(i64),
     /// Overall progress of the tool, 0 to 100.
     Progress(f64),
     /// A new step began (`Step 2/2 : Encoding`).
@@ -235,6 +252,10 @@ pub enum DeeEvent {
 #[derive(Debug, Clone, Default)]
 pub struct DeeParser {
     measured: bool,
+    /// Report the measured loudness as it is, not clamped to the dialnorm range.
+    unclamped: bool,
+    gated: bool,
+    spoken: bool,
     /// DEE repeats errors and warnings at the end.
     seen: Vec<String>,
 }
@@ -242,6 +263,14 @@ pub struct DeeParser {
 impl DeeParser {
     pub fn new() -> DeeParser {
         DeeParser::default()
+    }
+
+    /// For `-mo`, where the loudness is the result and not a dialnorm.
+    pub fn unclamped() -> DeeParser {
+        DeeParser {
+            unclamped: true,
+            ..DeeParser::default()
+        }
     }
 
     fn new_message(&mut self, message: &str) -> bool {
@@ -270,11 +299,27 @@ impl DeeParser {
                 .filter(|v| v.is_finite())
         {
             self.measured = true;
-            events.push(DeeEvent::Measured(clamp_i(
-                value.round_ties_even() as i64,
-                -31,
-                0,
-            )));
+            let rounded = value.round_ties_even() as i64;
+            events.push(DeeEvent::Measured(if self.unclamped {
+                rounded
+            } else {
+                clamp_i(rounded, -31, 0)
+            }));
+        }
+        if !self.gated
+            && let Some(gating) = DEE_GATING.captures(line).and_then(|c| Gating::parse(&c[1]))
+        {
+            self.gated = true;
+            events.push(DeeEvent::Gating(gating));
+        }
+        if !self.spoken
+            && let Some(value) = DEE_SPEECH
+                .captures(line)
+                .and_then(|c| c[1].parse::<f64>().ok())
+                .filter(|v| v.is_finite())
+        {
+            self.spoken = true;
+            events.push(DeeEvent::Speech(value.round() as i64));
         }
         if let Some(c) = DEE_PROGRESS.captures(line)
             && let Ok(value) = c[1].parse::<f64>()
@@ -301,6 +346,8 @@ impl DeeParser {
     pub fn recognizes(line: &str) -> bool {
         DEE_STEP.is_match(line)
             || DEE_LOUDNESS.is_match(line)
+            || DEE_GATING.is_match(line)
+            || DEE_SPEECH.is_match(line)
             || DEE_PROGRESS.is_match(line)
             || DEE_ERROR.is_match(line)
             || DEE_WARNING.is_match(line)
@@ -918,6 +965,199 @@ fn run_decode(job: &Job, bar: &Bar, log: &mut StageLog) -> Result<(), String> {
     Ok(())
 }
 
+/// The warning of DEE on Windows, where a named pipe looks like a file to it
+/// and `streaming=1` of the input format differs from what it deduced. The
+/// option is needed and the warning means nothing.
+fn is_streaming_notice(message: &str) -> bool {
+    message.contains("'streaming'") && message.contains("does not match value deduced")
+}
+
+/// ffmpeg of a piped job: its audio goes into the DEE tool (see [`pipe`]).
+struct Feeder {
+    /// Shared with the watcher that stops DEE when ffmpeg fails.
+    ffmpeg: Arc<Mutex<Tracked>>,
+    stderr: Option<JoinHandle<Stream>>,
+}
+
+impl Feeder {
+    fn ffmpeg(&self) -> MutexGuard<'_, Tracked> {
+        self.ffmpeg.lock().expect("ffmpeg")
+    }
+}
+
+impl Drop for Feeder {
+    /// ffmpeg must not outlive an early return of the DEE step.
+    fn drop(&mut self) {
+        let mut ffmpeg = self.ffmpeg();
+        if matches!(ffmpeg.try_wait(), Ok(None)) {
+            let _ = ffmpeg.kill();
+            let _ = ffmpeg.wait();
+        }
+    }
+}
+
+/// How long DEE has to create the pipe on Windows.
+const PIPE_OPEN_SECONDS: u64 = 30;
+/// How long ffmpeg may take to end once DEE has finished reading.
+const FFMPEG_END_SECONDS: u64 = 10;
+
+/// Whether the log of an ffmpeg that failed says that its output was closed:
+/// the DEE tool went away, which is not ffmpeg's own error.
+pub fn is_pipe_closed(lines: &[String]) -> bool {
+    lines.iter().rev().take(10).any(|line| {
+        let line = line.to_lowercase();
+        line.contains("broken pipe")
+            || line.contains("error muxing")
+            || line.contains("error writing trailer")
+    })
+}
+
+/// `ffmpeg failed (exit code N): <detail>` from its log.
+fn ffmpeg_failure(lines: &[String], status: ExitStatus, temp: &str) -> String {
+    let detail = ffmpeg_detail(
+        lines
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .find(|l| is_ffmpeg_error(l)),
+        lines
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .find(|l| !l.contains("time=")),
+        temp,
+    );
+    failure_message("ffmpeg", status, Some(&detail))
+}
+
+/// Start ffmpeg of a piped job. On Unix its stdout is returned, for the
+/// stdin of the DEE tool; on Windows it writes to the pipe of DEE.
+fn start_feeder(job: &Job) -> Result<(Feeder, Option<ChildStdout>), String> {
+    let stdout = if pipe::NAMED {
+        Stdio::null()
+    } else {
+        Stdio::piped()
+    };
+    let mut ffmpeg = spawn(&job.ffmpeg_args, stdout, Stdio::piped())?;
+    let out = ffmpeg.stdout.take();
+    let stderr = drain_stream(ffmpeg.stderr.take().expect("piped stderr"), "ffmpeg stderr");
+    let feeder = Feeder {
+        ffmpeg: Arc::new(Mutex::new(ffmpeg)),
+        stderr: Some(stderr),
+    };
+    Ok((feeder, out))
+}
+
+/// How the wait for the pipe of DEE ended.
+enum PipeWait {
+    /// The pipe exists.
+    Ready,
+    /// DEE ended without creating it (its own error is the reason), or a
+    /// signal came.
+    Gone,
+    /// DEE did not create it in time.
+    TimedOut,
+}
+
+/// Windows: wait until DEE has created its pipe, without opening it.
+fn wait_for_pipe(child: &mut Tracked, pipe: &str) -> PipeWait {
+    let deadline = Instant::now() + Duration::from_secs(PIPE_OPEN_SECONDS);
+    loop {
+        if pipe::exists(pipe) {
+            return PipeWait::Ready;
+        }
+        if interrupt::is_interrupted() || !matches!(child.try_wait(), Ok(None)) {
+            return PipeWait::Gone;
+        }
+        if Instant::now() >= deadline {
+            return PipeWait::TimedOut;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Windows: stop DEE as soon as ffmpeg has failed. It never opens the pipe
+/// when it fails early (an input it cannot read), and DEE would wait for ever.
+fn watch_ffmpeg(
+    ffmpeg: Arc<Mutex<Tracked>>,
+    dee_pid: u32,
+    dee_exited: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !dee_exited.load(Ordering::SeqCst) {
+            let status = ffmpeg.lock().expect("ffmpeg").try_wait();
+            match status {
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Ok(Some(status)) if !status.success() => {
+                    if !dee_exited.load(Ordering::SeqCst) {
+                        interrupt::kill_tree(dee_pid);
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+    })
+}
+
+/// The DEE tool has ended: wait for ffmpeg (or stop it) and keep its log.
+/// The result is ffmpeg's failure if that is the reason the job failed.
+/// `dee_ok`: DEE ended successfully, `stopped`: DEE was ended on purpose.
+fn end_feeder(
+    mut feeder: Feeder,
+    dee_ok: bool,
+    stopped: bool,
+    job: &Job,
+    log: &mut StageLog,
+) -> Option<String> {
+    let mut killed = false;
+    let mut status = feeder.ffmpeg().try_wait().ok().flatten();
+    if status.is_none() {
+        // DEE has read what it wanted, so ffmpeg is about to end; if DEE
+        // failed or was stopped, ffmpeg has nobody to write to
+        let patience = if dee_ok && !stopped {
+            Duration::from_secs(FFMPEG_END_SECONDS)
+        } else {
+            Duration::ZERO
+        };
+        let deadline = Instant::now() + patience;
+        while status.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            status = feeder.ffmpeg().try_wait().ok().flatten();
+        }
+        if status.is_none() {
+            let mut ffmpeg = feeder.ffmpeg();
+            let _ = ffmpeg.kill();
+            killed = true;
+            status = ffmpeg.wait().ok();
+        }
+    }
+    let mut stream = feeder.stderr.take().map(joined).unwrap_or_default();
+    let status = status?;
+    let lines = stream.lines.clone();
+    stream.push(&match status.code() {
+        Some(code) => format!("exit code {code}{}", if killed { " (killed)" } else { "" }),
+        None => "terminated by a signal".to_string(),
+    });
+    log.streams.push(stream);
+    if stopped || status.success() {
+        return None;
+    }
+    if killed {
+        return (dee_ok && !stopped)
+            .then(|| "ffmpeg failed: it did not end after DEE finished.".to_string());
+    }
+    // a failed DEE closes the pipe, which makes ffmpeg fail too
+    if !dee_ok && is_pipe_closed(&lines) {
+        return None;
+    }
+    Some(ffmpeg_failure(&lines, status, &temp_of(job)))
+}
+
+/// How long (in 100 ms) a tool may go on after it printed the loudness, before
+/// it is ended even though the rest of the block did not come.
+const MEASURED_GRACE_STEPS: u32 = 30;
+
 /// One run of a DEE tool.
 struct Phase<'a> {
     args: &'a [String],
@@ -929,24 +1169,86 @@ struct Phase<'a> {
     db: Option<i64>,
     /// Kill the tool as soon as it printed the loudness; that is a success.
     stop_when_measured: bool,
+    /// Show the gating and the speech share next to the loudness.
+    details: bool,
+    /// The job whose ffmpeg feeds this tool through the pipe.
+    input: Option<&'a Job>,
+}
+
+/// The loudness shown and logged, once the measurement is in.
+fn refresh(
+    measured: Option<i64>,
+    gating: Option<Gating>,
+    speech: Option<i64>,
+    shown: &mut Option<Level>,
+    log: &mut StageLog,
+) {
+    if let Some(db) = measured {
+        let level = Level { db, gating, speech };
+        *shown = Some(level);
+        log.measured = Some(level);
+    }
 }
 
 /// Run a DEE tool (also through dee_shim) and follow its output.
 fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), String> {
     let tool = file_name(&phase.args[0]);
-    let mut child = spawn(phase.args, Stdio::piped(), Stdio::piped())?;
+    let piped = phase
+        .input
+        .and_then(|job| Some((job, job.pipe.as_deref()?)));
+    // Unix: ffmpeg starts first, its stdout is the stdin of DEE
+    let (mut feeder, stdin) = match piped {
+        Some((job, _)) if !pipe::NAMED => {
+            let (feeder, out) = start_feeder(job)?;
+            (Some(feeder), out.map_or_else(Stdio::null, Stdio::from))
+        }
+        _ => (None, Stdio::null()),
+    };
+    let mut child = spawn_with_stdin(phase.args, stdin, Stdio::piped(), Stdio::piped())?;
+    // Windows: DEE creates the pipe first, ffmpeg writes to it once it exists
+    let mut no_reader = false;
+    if let Some((job, pipe)) = piped.filter(|_| pipe::NAMED) {
+        match wait_for_pipe(&mut child, pipe) {
+            PipeWait::Ready => match start_feeder(job) {
+                Ok((started, _)) => feeder = Some(started),
+                Err(message) => {
+                    interrupt::kill_tree(child.id());
+                    let _ = child.wait();
+                    return Err(message);
+                }
+            },
+            PipeWait::Gone => {}
+            PipeWait::TimedOut => {
+                no_reader = true;
+                interrupt::kill_tree(child.id());
+            }
+        }
+    }
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = drain_stream(child.stderr.take().expect("piped stderr"), "stderr");
     let mut stage = phase.stage;
-    let mut db = phase.db;
+    let mut db = phase.db.map(Level::new);
     let mut errors: Vec<String> = Vec::new();
     let mut stopped = false;
+    // set by the timer that ends a tool that went on after its measurement
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let exited = Arc::new(AtomicBool::new(false));
+    let watchdog = feeder
+        .as_ref()
+        .filter(|_| pipe::NAMED)
+        .map(|f| watch_ffmpeg(f.ffmpeg.clone(), child.id(), exited.clone()));
+    let mut timer = None;
+    let (mut measured, mut gating, mut speech) = (None, None, None);
     // the last line of stdout that is none of the output the parser knows
     let mut last_other: Option<String> = None;
     bar.describe(stage, db);
     let mut map = StepMap::new(stage, phase.first);
     show(bar, map.initial());
-    let mut parser = DeeParser::new();
+    let mut parser = if phase.details {
+        DeeParser::unclamped()
+    } else {
+        DeeParser::new()
+    };
     let captured = log.stream("stdout");
     for_each_line(stdout, |line| {
         log.line(captured, line);
@@ -964,17 +1266,25 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                     bar.describe(stage, db);
                     show(bar, map.step(stage));
                 }
-                DeeEvent::Measured(measured) => {
-                    db = Some(measured);
-                    log.measured.get_or_insert(measured);
+                DeeEvent::Measured(value) => {
+                    measured = Some(value);
+                    refresh(measured, gating, speech, &mut db, log);
                     bar.describe(stage, db);
-                    if phase.stop_when_measured && !stopped {
-                        stopped = true;
-                        let _ = child.kill();
-                    }
+                }
+                DeeEvent::Gating(value) => {
+                    gating = phase.details.then_some(value);
+                    refresh(measured, gating, speech, &mut db, log);
+                    bar.describe(stage, db);
+                }
+                DeeEvent::Speech(value) => {
+                    speech = phase.details.then_some(value);
+                    refresh(measured, gating, speech, &mut db, log);
+                    bar.describe(stage, db);
                 }
                 DeeEvent::Progress(percent) => show(bar, map.progress(percent)),
                 DeeEvent::Error(message) => errors.push(message),
+                DeeEvent::Warning(message)
+                    if phase.input.is_some() && is_streaming_notice(&message) => {}
                 DeeEvent::Warning(message) => {
                     log.warnings.push(message.clone());
                     events::warning(&message);
@@ -985,16 +1295,63 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                 }
             }
         }
+        if phase.stop_when_measured && measured.is_some() && timer.is_none() {
+            // Safety net: the rest of the block should follow at once.
+            let (pid, timed_out, exited) = (child.id(), timed_out.clone(), exited.clone());
+            timer = Some(std::thread::spawn(move || {
+                for _ in 0..MEASURED_GRACE_STEPS {
+                    if exited.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if !exited.load(Ordering::SeqCst) {
+                    timed_out.store(true, Ordering::SeqCst);
+                    interrupt::kill_tree(pid);
+                }
+            }));
+        }
+        // The block of the source loudness ends with the next step, or when
+        // gating and speech share are in; then the rest is not needed.
+        if phase.stop_when_measured
+            && !stopped
+            && measured.is_some()
+            && (stage == Stage::Encode || (gating.is_some() && speech.is_some()))
+        {
+            stopped = true;
+            let _ = child.kill();
+        }
     });
     let status = child.wait().map_err(|e| format!("{tool}: {e}"))?;
+    exited.store(true, Ordering::SeqCst);
+    if let Some(timer) = timer {
+        let _ = timer.join();
+    }
+    if let Some(watchdog) = watchdog {
+        let _ = watchdog.join();
+    }
+    stopped |= timed_out.load(Ordering::SeqCst);
     let stderr = joined(stderr);
     log.exit = status.code();
+    let ffmpeg_failure = match (feeder.take(), phase.input) {
+        (Some(feeder), Some(job)) => end_feeder(feeder, status.success(), stopped, job, log),
+        _ => None,
+    };
     let detail = errors
         .last()
         .cloned()
         .or_else(|| stderr_detail(&stderr.lines, is_shim(&phase.args[0])))
         .or(last_other);
     log.streams.push(stderr);
+    if no_reader {
+        return Err(format!(
+            "{tool} did not open the input pipe within {PIPE_OPEN_SECONDS} seconds."
+        ));
+    }
+    if let Some(message) = ffmpeg_failure {
+        // ffmpeg's error is the reason, DEE only complains about short input
+        return Err(message);
+    }
     if stopped {
         // killed on purpose, the measurement is what was wanted
         bar.percent(100.0);
@@ -1030,9 +1387,19 @@ fn staged(
     result
 }
 
+/// The commands of a stage for its log: the piped ffmpeg goes before the DEE tool.
+fn commands<'a>(job: &'a Job, dee: &'a [String]) -> Vec<&'a [String]> {
+    let mut commands = Vec::new();
+    if job.pipe.is_some() {
+        commands.push(&job.ffmpeg_args[..]);
+    }
+    commands.push(dee);
+    commands
+}
+
 fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Result<(), String> {
     let on = job.log.is_some();
-    if !job.intermediate_exists {
+    if !job.intermediate_exists && job.pipe.is_none() {
         if job.format.is_atmos() {
             let mut commands = vec![&job.decode_args[..]];
             if !job.ffmpeg_args.is_empty() {
@@ -1054,17 +1421,24 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
         let phase = Phase {
             args: &job.measure_args,
             stage: Stage::Measure,
-            first: if job.stop_when_measured {
+            first: if job.stop_when_measured && !job.format.is_atmos() {
+                // the DDP encoder's measurement is the first half of its progress
                 FirstStep::EndsAt(50.0)
             } else {
                 FirstStep::EndsAt(100.0)
             },
             db: None,
             stop_when_measured: job.stop_when_measured,
+            details: job.measure_only,
+            input: job.pipe.as_ref().map(|_| job),
         };
-        staged(stages, "measure", &[&job.measure_args], on, |log| {
-            run_dee(&phase, bar, ui, log)
-        })?;
+        staged(
+            stages,
+            "measure",
+            &commands(job, &job.measure_args),
+            on,
+            |log| run_dee(&phase, bar, ui, log),
+        )?;
         if job.dialnorm != 0 {
             apply_dialnorm(&job.loudness_path, job.dialnorm)?;
         }
@@ -1085,10 +1459,22 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             first: FirstStep::of_format(job.format),
             db: job.skip_dialnorm,
             stop_when_measured: false,
+            details: false,
+            // a measurement before it has read the pipe already
+            input: job.pipe.as_ref().filter(|_| !measuring).map(|_| job),
         };
-        staged(stages, "encode", &[&job.encode_args], on, |log| {
-            run_dee(&phase, bar, ui, log)
-        })?;
+        let result = staged(
+            stages,
+            "encode",
+            &commands(job, &job.encode_args),
+            on,
+            |log| run_dee(&phase, bar, ui, log),
+        );
+        if result.is_err() && job.pipe.is_some() {
+            // DEE may have finished a truncated file before ffmpeg failed
+            remove_file(&job.output_path);
+        }
+        result?;
         if !Path::new(&job.output_path).exists() {
             return Err(format!(
                 "{} failed: the output file {} was not written.",
@@ -1112,8 +1498,8 @@ fn write_log(
     ui: &Ui,
 ) {
     let mut output = Vec::new();
-    if let Some(db) = stages.iter().find_map(|s| s.measured) {
-        output.push(("Measured loudness".to_string(), format!("{db} dB")));
+    if let Some(level) = stages.iter().find_map(|s| s.measured) {
+        output.push(("Measured loudness".to_string(), level.text()));
     }
     if !job.encode_args.is_empty()
         && !interrupted
@@ -1167,11 +1553,12 @@ pub fn run_job(job: &Job, options: &Options, bar: &Bar, ui: &Ui) -> Outcome {
     let started = SystemTime::now();
     bar.describe(Stage::Starting, None);
     let mut stages = Vec::new();
-    if job
-        .encode_args
-        .iter()
-        .chain(&job.measure_args)
-        .any(|a| a == "--temp-dir")
+    if job.stop_when_measured
+        || job
+            .encode_args
+            .iter()
+            .chain(&job.measure_args)
+            .any(|a| a == "--temp-dir")
     {
         let _ = std::fs::create_dir_all(&job.dee_temp);
     }
@@ -1205,6 +1592,8 @@ mod tests {
         LazyLock::force(&DEE_PROGRESS);
         LazyLock::force(&DEE_STEP);
         LazyLock::force(&DEE_LOUDNESS);
+        LazyLock::force(&DEE_GATING);
+        LazyLock::force(&DEE_SPEECH);
         LazyLock::force(&DEE_ERROR);
         LazyLock::force(&DEE_WARNING);
         LazyLock::force(&ATMOS_FRAMES);
@@ -1263,6 +1652,7 @@ mod tests {
                 DeeEvent::Progress(3.0),
                 DeeEvent::Progress(50.0),
                 DeeEvent::Measured(-24),
+                DeeEvent::Gating(Gating::Dialogue),
                 DeeEvent::Step(Stage::Encode),
                 DeeEvent::Progress(52.0),
                 DeeEvent::Progress(100.0),
@@ -1312,6 +1702,46 @@ mod tests {
                 [DeeEvent::Step(Stage::Measure)]
             );
         }
+    }
+
+    #[test]
+    fn gating_and_speech_lines() {
+        let mut p = DeeParser::new();
+        assert_eq!(
+            p.feed("[2026-11-12 00:31:35.294] [Source loudness] gating=dialogue"),
+            [DeeEvent::Gating(Gating::Dialogue)]
+        );
+        assert_eq!(
+            p.feed("[Source loudness] speech_percentage=16.1"),
+            [DeeEvent::Speech(16)]
+        );
+        // only the first of each
+        assert_eq!(p.feed("[Source loudness] gating=level"), []);
+        assert_eq!(p.feed("[Source loudness] speech_percentage=50"), []);
+        let mut p = DeeParser::new();
+        assert_eq!(
+            p.feed("[Source loudness] gating=level"),
+            [DeeEvent::Gating(Gating::Level)]
+        );
+        assert_eq!(
+            p.feed("[Source loudness] speech_percentage=measurement_disabled"),
+            []
+        );
+        assert_eq!(p.feed("[Source loudness] dialogue_gating=level"), []);
+        assert!(DeeParser::recognizes("[Source loudness] gating=level"));
+    }
+
+    #[test]
+    fn measure_only_loudness_is_not_clamped() {
+        let m = |line: &str| DeeParser::unclamped().feed(line);
+        assert_eq!(m("measured_loudness=-33.0"), [DeeEvent::Measured(-33)]);
+        assert_eq!(m("measured_loudness=-40.4"), [DeeEvent::Measured(-40)]);
+        assert_eq!(m("measured_loudness=3.2"), [DeeEvent::Measured(3)]);
+        // an encode keeps the dialnorm range
+        assert_eq!(
+            DeeParser::new().feed("measured_loudness=-33.0"),
+            [DeeEvent::Measured(-31)]
+        );
     }
 
     #[test]
@@ -1577,10 +2007,21 @@ mod tests {
         );
     }
 
+    /// An exit status with the exit code `code`.
+    fn exit_status(code: i32) -> ExitStatus {
+        #[cfg(unix)]
+        {
+            std::os::unix::process::ExitStatusExt::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::process::ExitStatusExt::from_raw(code as u32)
+        }
+    }
+
     #[test]
     fn failure_messages() {
-        use std::os::unix::process::ExitStatusExt;
-        let exit = |code: i32| ExitStatus::from_raw(code << 8);
+        let exit = exit_status;
         assert_eq!(
             failure_message("dee_ddp_encoder", exit(1), Some("File does not exist.")),
             "dee_ddp_encoder failed (exit code 1): File does not exist."
@@ -1593,8 +2034,14 @@ mod tests {
             failure_message("ffmpeg", exit(1), None),
             "ffmpeg failed (exit code 1)"
         );
+        // killed by SIGKILL
+        #[cfg(unix)]
         assert_eq!(
-            failure_message("ffmpeg", ExitStatus::from_raw(9), None),
+            failure_message(
+                "ffmpeg",
+                std::os::unix::process::ExitStatusExt::from_raw(9),
+                None
+            ),
             "ffmpeg failed (terminated by a signal)"
         );
     }
@@ -1726,5 +2173,31 @@ mod tests {
             thd_leftovers("in/a.mkv", "out", false),
             in_out(&["a.thd.log.html", "a.thd.log", "a.thd.mll"])
         );
+    }
+
+    #[test]
+    fn a_closed_pipe_is_not_ffmpegs_own_error() {
+        let lines = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(is_pipe_closed(&lines(&[
+            "[out#0/s24le @ 0x5edbe772bc40] Error muxing a packet",
+            "Error submitting a packet to the muxer: Broken pipe",
+        ])));
+        assert!(is_pipe_closed(&lines(&[
+            "Error writing trailer: Broken pipe"
+        ])));
+        assert!(!is_pipe_closed(&lines(&[
+            "in.mkv: Invalid data found when processing input"
+        ])));
+        assert!(!is_pipe_closed(&[]));
+    }
+
+    #[test]
+    fn the_streaming_notice_of_dee_is_recognized() {
+        assert!(is_streaming_notice(
+            "Specified 'streaming' value '1' does not match value deduced from the input file. Make sure 'input-format' configuration is correct."
+        ));
+        assert!(!is_streaming_notice(
+            "Specified 'sample_rate' value is wrong"
+        ));
     }
 }

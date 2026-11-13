@@ -5,6 +5,8 @@ import { formatDuration } from "@/lib/terminal-format"
 
 export type Stage = "starting" | "ffmpeg" | "decode" | "measure" | "encode"
 
+export type Gating = "dialogue" | "level"
+
 export type ProgressEvent =
   | { type: "hello"; version: string }
   | { type: "jobs"; files: string[] }
@@ -14,6 +16,9 @@ export type ProgressEvent =
       stage: Stage
       percent: number | null
       db: number | null
+      /** `-mo` only: how the measurement was gated and the speech share. */
+      gating?: Gating
+      speech?: number
     }
   | { type: "done"; job: number }
   | { type: "warning"; text: string }
@@ -71,6 +76,10 @@ export function parseProgressEvent(line: string): ProgressEvent | null {
         stage: m.stage as Stage,
         percent: (m.percent as number | null | undefined) ?? null,
         db: (m.db as number | null | undefined) ?? null,
+        ...(m.gating === "dialogue" || m.gating === "level"
+          ? { gating: m.gating }
+          : {}),
+        ...(typeof m.speech === "number" ? { speech: m.speech } : {}),
       }
     case "done":
       return isIndex(m.job) ? { type: "done", job: m.job } : null
@@ -91,6 +100,8 @@ export interface JobProgress {
   /** 0-100; null = unknown (indeterminate). */
   percent: number | null
   db: number | null
+  gating?: Gating
+  speech?: number
   done: boolean
 }
 
@@ -153,6 +164,8 @@ export function reduceProgress(
           stage: event.stage,
           percent: event.percent,
           db: event.db,
+          gating: event.gating,
+          speech: event.speech,
         })),
       }
     case "done":
@@ -199,7 +212,12 @@ const STAGE_LABELS: Record<JobProgress["stage"], string> = {
 
 export function stageLabel(job: JobProgress): string {
   const label = STAGE_LABELS[job.stage]
-  return job.db === null ? label : `${label} (${job.db} dB)`
+  if (job.db === null) return label
+  // like the CLI: (-33 dB, dialogue-gated, 16% speech)
+  const parts = [`${job.db} dB`]
+  if (job.gating) parts.push(`${job.gating}-gated`)
+  if (job.speech !== undefined) parts.push(`${job.speech}% speech`)
+  return `${label} (${parts.join(", ")})`
 }
 
 /** `45.55%` like the CLI bar: `100%` when finished, at most `99.99%` before. */
