@@ -1,4 +1,5 @@
 import { GithubIcon, TelegramIcon } from "@/components/brand-icons"
+import { Link } from "@/components/link"
 import { cn } from "@/lib/utils"
 import { HOME, REPO, TELEGRAM, TOOL_CHAIN } from "@/lib/platform"
 
@@ -7,14 +8,17 @@ export type SitePage = "home" | "tool-chain"
 function NavLink({
   href,
   active,
+  internal,
   children,
 }: {
   href: string
   active?: boolean
+  internal?: boolean
   children: React.ReactNode
 }) {
+  const Anchor = internal ? Link : "a"
   return (
-    <a
+    <Anchor
       href={href}
       aria-current={active ? "page" : undefined}
       className={cn(
@@ -23,7 +27,7 @@ function NavLink({
       )}
     >
       {children}
-    </a>
+    </Anchor>
   )
 }
 
@@ -34,7 +38,7 @@ export function SiteHeader({ current }: { current: SitePage }) {
       className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur"
     >
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-        <a href={HOME} className="inline-flex items-center gap-2">
+        <Link href={HOME} className="inline-flex items-center gap-2">
           <img
             src="logo.svg"
             alt=""
@@ -43,12 +47,12 @@ export function SiteHeader({ current }: { current: SitePage }) {
             className="size-6 shrink-0"
           />
           <span className="text-base font-semibold tracking-tight">deew</span>
-        </a>
+        </Link>
         <div className="flex items-center gap-1">
-          <NavLink href={HOME} active={current === "home"}>
+          <NavLink internal href={HOME} active={current === "home"}>
             Home
           </NavLink>
-          <NavLink href={TOOL_CHAIN} active={current === "tool-chain"}>
+          <NavLink internal href={TOOL_CHAIN} active={current === "tool-chain"}>
             Tool chain
           </NavLink>
           <NavLink href={REPO}>

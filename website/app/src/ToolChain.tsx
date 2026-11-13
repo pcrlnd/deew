@@ -27,7 +27,6 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { SiteFooter, SiteHeader } from "@/components/site-shell"
 import { chains, loudnessTrees } from "./tool-chain/chains"
 import { Chip } from "./tool-chain/chip"
 import "./tool-chain/tool-chain.css"
@@ -163,8 +162,7 @@ function LoudnessTree() {
 
 export default function ToolChain() {
   return (
-    <div className="min-h-screen">
-      <SiteHeader current="tool-chain" />
+    <div>
       <div className="tc">
         <div className="wrap">
           <header>
@@ -1970,7 +1968,6 @@ export default function ToolChain() {
           </footer>
         </div>
       </div>
-      <SiteFooter />
     </div>
   )
 }

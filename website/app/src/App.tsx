@@ -9,8 +9,8 @@ import {
   WindowsIcon,
 } from "@/components/brand-icons"
 import { CopyBlock } from "@/components/copy-block"
+import { Link } from "@/components/link"
 import { GetStarted } from "@/components/get-started"
-import { SiteFooter, SiteHeader } from "@/components/site-shell"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -62,8 +62,7 @@ export default function App() {
   const platform = detectPlatform()
 
   return (
-    <div className="min-h-screen">
-      <SiteHeader current="home" />
+    <div>
       <header className="border-b">
         <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-10 sm:px-6 sm:py-16 lg:grid-cols-2">
           <div className="min-w-0">
@@ -149,12 +148,12 @@ export default function App() {
                     {f.link && (
                       <>
                         {" "}
-                        <a
+                        <Link
                           className="font-medium text-primary underline underline-offset-4 dark:text-blue-400"
                           href={f.link.href}
                         >
                           {f.link.label}
-                        </a>
+                        </Link>
                       </>
                     )}
                   </p>
@@ -297,7 +296,6 @@ export default function App() {
         </section>
       </main>
 
-      <SiteFooter />
     </div>
   )
 }

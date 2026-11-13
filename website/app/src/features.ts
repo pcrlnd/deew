@@ -44,6 +44,6 @@ export const features: Feature[] = [
   },
   {
     text: "the tool chain page shows how deew connects ffprobe, ffmpeg, truehdd, dee_shim and the DEE tools, with the exact options it passes to each one for every format:",
-    link: { label: "deew.app/tool-chain", href: "https://deew.app/tool-chain" },
+    link: { label: "deew.app/tool-chain", href: "/tool-chain" },
   },
 ]

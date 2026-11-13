@@ -20,5 +20,5 @@ export const RELEASES = `${REPO}/releases`
 export const LATEST = `${REPO}/releases/latest/download/`
 export const KOFI = "https://ko-fi.com/pcrlnd"
 export const TELEGRAM = "https://t.me/deew_supp"
-export const HOME = "./"
-export const TOOL_CHAIN = "tool-chain"
+export const HOME = "/"
+export const TOOL_CHAIN = "/tool-chain"
