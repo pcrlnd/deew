@@ -9,7 +9,7 @@ import {
   WindowsIcon,
 } from "@/components/brand-icons"
 import { CopyBlock } from "@/components/copy-block"
-import { Link } from "@/components/link"
+import { ExternalLink, Link } from "@/components/link"
 import { GetStarted } from "@/components/get-started"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
@@ -44,8 +44,11 @@ function DownloadButton({
       : platform === "macos"
         ? AppleIcon
         : LinuxIcon
+  // A known platform gets a direct file download (same tab); otherwise the
+  // releases page opens in a new tab.
+  const Anchor = known ? "a" : ExternalLink
   return (
-    <a
+    <Anchor
       href={href}
       className={buttonVariants({
         size: "lg",
@@ -54,7 +57,7 @@ function DownloadButton({
     >
       <Icon className="size-5" />
       {label}
-    </a>
+    </Anchor>
   )
 }
 
@@ -88,7 +91,7 @@ export default function App() {
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <DownloadButton platform={platform} />
-              <a
+              <ExternalLink
                 href={REPO}
                 className={buttonVariants({
                   size: "lg",
@@ -98,15 +101,15 @@ export default function App() {
               >
                 <GithubIcon className="size-5" />
                 View on GitHub
-              </a>
+              </ExternalLink>
             </div>
             <p className="mt-4 text-sm">
-              <a
+              <ExternalLink
                 className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
                 href={RELEASES}
               >
                 All releases &amp; changelogs
-              </a>
+              </ExternalLink>
             </p>
           </div>
           <figure className="min-w-0 border bg-card p-2">
@@ -223,7 +226,7 @@ export default function App() {
                       <Badge
                         variant="outline"
                         className="h-6 px-2.5 text-sm"
-                        render={<a href={href} />}
+                        render={<ExternalLink href={href} />}
                       >
                         {label}
                         <ExternalLinkIcon
@@ -261,14 +264,14 @@ export default function App() {
           <div className="border bg-card text-card-foreground">
             <div className="flex flex-col gap-3 border-b p-4">
               <p className="text-sm font-medium">pcroland</p>
-              <a
+              <ExternalLink
                 className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
                 href={KOFI}
               >
                 <KofiIcon className="size-4 shrink-0 text-[#ff6433]" />
                 Ko-fi
                 <ExternalLinkIcon className="size-3" aria-hidden="true" />
-              </a>
+              </ExternalLink>
               <div className="flex flex-col gap-2">
                 <p className="flex items-start gap-2 text-sm text-muted-foreground">
                   <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />

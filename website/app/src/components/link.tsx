@@ -38,3 +38,8 @@ export function Link({
     />
   )
 }
+
+// A link to another site: opens in a new tab.
+export function ExternalLink(props: React.ComponentProps<"a">) {
+  return <a target="_blank" rel="noopener noreferrer" {...props} />
+}

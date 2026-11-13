@@ -1,5 +1,5 @@
 import { GithubIcon, TelegramIcon } from "@/components/brand-icons"
-import { Link } from "@/components/link"
+import { ExternalLink, Link } from "@/components/link"
 import { cn } from "@/lib/utils"
 import { HOME, REPO, TELEGRAM, TOOL_CHAIN } from "@/lib/platform"
 
@@ -16,7 +16,7 @@ function NavLink({
   internal?: boolean
   children: React.ReactNode
 }) {
-  const Anchor = internal ? Link : "a"
+  const Anchor = internal ? Link : ExternalLink
   return (
     <Anchor
       href={href}
@@ -70,13 +70,13 @@ export function SiteFooter() {
     <footer className="border-t">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-6 text-sm text-muted-foreground sm:px-6">
         <span>deew - Dolby Encoding Engine Wrapper</span>
-        <a
+        <ExternalLink
           className="inline-flex items-center gap-2 hover:text-foreground"
           href={TELEGRAM}
         >
           <TelegramIcon className="size-4" />
           Telegram support
-        </a>
+        </ExternalLink>
       </div>
     </footer>
   )
