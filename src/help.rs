@@ -42,7 +42,7 @@ pub const HELP: &str = concat!(
                             DD and DDP get a real 5.0 or [bold bright_blue]7.0[/bold bright_blue], the others keep a silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
   [green]-nps[/green], [green]--no-phase-shift[/green]    turn off DEE's 90° phase shift of surround channels
-                            only works for DD/DDP, config: [bold color(231)]surround_phase_shift[/bold color(231)]
+                            only works for DD/DDP/DDP Atmos, config: [bold color(231)]surround_phase_shift[/bold color(231)]
   [green]-d[/green], [green]--delay[/green] [bold color(231)]DELAY[/bold color(231)]         [underline magenta]examples:[/underline magenta] [bold color(231)]-5.1ms[/bold color(231)], [bold color(231)]+1,52s[/bold color(231)], [bold color(231)]-24@pal[/bold color(231)], [bold color(231)]+10@24000/1001[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]0ms[/bold color(231)] or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -51,7 +51,8 @@ pub const HELP: &str = concat!(
   [green]-r[/green], [green]--drc[/green] [bold color(231)]DRC[/bold color(231)]             [underline magenta]options:[/underline magenta] [bold bright_blue]none[/bold bright_blue] / [bold color(231)]film_light[/bold color(231)] / [bold color(231)]film_standard[/bold color(231)] / [bold color(231)]music_light[/bold color(231)] / [bold color(231)]music_standard[/bold color(231)] / [bold color(231)]speech[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]none[/bold color(231)] ([bold color(231)]music_light[/bold color(231)] for AC4)
                             specifies drc profile
-                            [bold bright_blue]none[/bold bright_blue] uses dee_shim for TrueHD, not available for AC4
+                            [bold bright_blue]none[/bold bright_blue] uses dee_shim for TrueHD, not available
+                            for AC4 (AC4 Atmos has it)
   [green]-dn[/green], [green]--dialnorm[/green] [bold color(231)]DIALNORM[/bold color(231)]  [underline magenta]options:[/underline magenta] between [bold color(231)]-31[/bold color(231)] and [bold color(231)]0[/bold color(231)] (in case of [bold color(231)]0[/bold color(231)] DEE's measurement will be used)
                             [underline magenta]default:[/underline magenta] [bold color(231)]0[/bold color(231)]
                             applied dialnorm value, doesn't work for AAC and

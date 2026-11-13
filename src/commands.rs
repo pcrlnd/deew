@@ -417,8 +417,12 @@ pub struct EncodeParams<'a> {
     pub atmos_mode: DdpAtmosMode,
     /// The output has no LFE channel (`lfe_on=0`, or a 7.0 layout of dee_shim).
     pub lfe_removed: bool,
-    /// DD/DDP: turn off DEE's 90 degree phase shift of the surround channels.
+    /// DD/DDP: turn off DEE's 90 degree phase shift of the surround channels
+    /// (`-e` option); DDP Atmos: dee_shim's `--phase90 off`.
     pub no_phase_shift: bool,
+    /// TrueHD at 96 kHz: dee_shim's `--apodise off`, DEE's own encoder
+    /// filters every sample of 96 kHz input (not lossless).
+    pub apodise_off: bool,
 }
 
 /// The `-e` option that turns the phase shift off (the default is on).
@@ -483,8 +487,13 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                 "on",
                 "--bitrate",
                 &bitrate,
-                "--",
             ]));
+            // The Atmos render is unchanged, this is the phase shift of the
+            // coded backbone (a shim option, not part of DEE's -e).
+            if p.no_phase_shift {
+                args.extend(strings(&["--phase90", "off"]));
+            }
+            args.push("--".to_string());
             args.extend(strings(&common));
             args.extend(strings(&["-e", &format!("{mode}:drc_profile={}", p.drc)]));
             args.extend(strings(&["--input-format", "atmos_mezz", "-i", p.input]));
@@ -528,26 +537,31 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
         }
         Format::Thd => {
             // The TrueHD encoder has no `none` preset, dee_shim adds it (and
-            // its --drc wins over the profile of the presentation).
-            let shim = p.shim.filter(|_| p.drc == "none");
+            // its --drc wins over the profile of the presentation). dee_shim
+            // also turns off the apodising filter of 96 kHz input.
+            let drc_none = p.drc == "none";
+            let shim = p.shim.filter(|_| drc_none || p.apodise_off);
             match shim {
                 Some(shim) => {
-                    args.extend(strings(&[
-                        &shim.run,
-                        "dthd_encoder",
-                        "--binary",
-                        p.tool,
-                        "--drc",
-                        "none",
-                        "--",
-                    ]));
+                    args.extend(strings(&[&shim.run, "dthd_encoder", "--binary", p.tool]));
+                    if drc_none {
+                        args.extend(strings(&["--drc", "none"]));
+                    }
+                    if p.apodise_off {
+                        args.extend(strings(&["--apodise", "off"]));
+                    }
+                    args.push("--".to_string());
                 }
                 None => args.push(p.tool.to_string()),
             }
             args.extend(strings(&common));
             args.push("--presentation".to_string());
             // The shim overrides the profile, the encoder itself takes a valid one.
-            let drc = if shim.is_some() { "film_light" } else { p.drc };
+            let drc = if shim.is_some() && drc_none {
+                "film_light"
+            } else {
+                p.drc
+            };
             args.push(format!(
                 "{}:drc_profile={drc}",
                 thd_presentation(p.outchannels)
@@ -1190,6 +1204,7 @@ mod tests {
             atmos_mode: DdpAtmosMode::Streaming,
             lfe_removed: false,
             no_phase_shift: false,
+            apodise_off: false,
         }
     }
 
@@ -1423,8 +1438,30 @@ mod tests {
                 format!("{mode}:drc_profile=music_light")
             );
         }
+        // DDP Atmos: dee_shim's --phase90, never in -e
+        for mode in [
+            DdpAtmosMode::Streaming,
+            DdpAtmosMode::Standard,
+            DdpAtmosMode::Bluray,
+        ] {
+            let mut p = params(Format::DdpAtmos);
+            p.atmos_mode = mode;
+            p.shim = Some(&shim);
+            let plain = encode_args(&p);
+            assert!(!plain.contains(&"--phase90".to_string()), "{mode:?}");
+            p.no_phase_shift = true;
+            let args = encode_args(&p);
+            let at = args.iter().position(|a| a == "--phase90").unwrap();
+            assert_eq!(args[at + 1], "off", "{mode:?}");
+            assert!(
+                at < args.iter().position(|a| a == "--").unwrap(),
+                "{mode:?}"
+            );
+            assert!(!opt_value(&args, "-e").contains("surround_90deg"));
+            assert_eq!(args.len(), plain.len() + 2);
+        }
         // the other formats never get it
-        for format in [Format::Ac4, Format::Aac, Format::Thd, Format::DdpAtmos] {
+        for format in [Format::Ac4, Format::Aac, Format::Thd] {
             let mut p = params(format);
             p.no_phase_shift = true;
             p.shim = Some(&shim);
@@ -1604,6 +1641,77 @@ mod tests {
         p.drc = "speech";
         assert_eq!(encode_args(&p)[0], "/dee/tool");
         assert!(encode_args(&p).contains(&"6ch:drc_profile=speech".to_string()));
+    }
+
+    #[test]
+    fn thd_96khz_turns_the_apodising_filter_off() {
+        let shim = Shim {
+            run: "/shim/dee_shim".into(),
+        };
+        let mut p = params(Format::Thd);
+        p.apodise_off = true;
+        // DRC none: both shim options
+        p.drc = "none";
+        p.shim = Some(&shim);
+        let args = encode_args(&p);
+        assert_eq!(
+            args[..8],
+            v(&[
+                "/shim/dee_shim",
+                "dthd_encoder",
+                "--binary",
+                "/dee/tool",
+                "--drc",
+                "none",
+                "--apodise",
+                "off"
+            ])
+        );
+        assert_eq!(args[8], "--");
+        assert!(args.contains(&"6ch:drc_profile=film_light".to_string()));
+        // another profile: only --apodise, the profile stays
+        p.drc = "music_light";
+        let args = encode_args(&p);
+        assert_eq!(
+            args[..6],
+            v(&[
+                "/shim/dee_shim",
+                "dthd_encoder",
+                "--binary",
+                "/dee/tool",
+                "--apodise",
+                "off"
+            ])
+        );
+        assert_eq!(args[6], "--");
+        assert!(!args.contains(&"--drc".to_string()));
+        assert!(args.contains(&"6ch:drc_profile=music_light".to_string()));
+        // no shim: native
+        p.shim = None;
+        let args = encode_args(&p);
+        assert_eq!(args[0], "/dee/tool");
+        assert!(!args.contains(&"--apodise".to_string()));
+        assert!(args.contains(&"6ch:drc_profile=music_light".to_string()));
+        // 48 kHz: native with a profile, no --apodise with none
+        p.apodise_off = false;
+        p.shim = Some(&shim);
+        assert_eq!(encode_args(&p)[0], "/dee/tool");
+        p.drc = "none";
+        let args = encode_args(&p);
+        assert!(args.contains(&"--drc".to_string()));
+        assert!(!args.contains(&"--apodise".to_string()));
+        // TrueHD Atmos is not affected
+        let mut a = params(Format::ThdAtmos);
+        a.shim = Some(&shim);
+        a.apodise_off = true;
+        assert!(!encode_args(&a).contains(&"--apodise".to_string()));
+    }
+
+    #[test]
+    fn ac4_atmos_drc_none() {
+        let mut p = params(Format::Ac4Atmos);
+        p.drc = "none";
+        assert_eq!(opt_value(&encode_args(&p), "-e"), "drc_profile=none");
     }
 
     #[test]

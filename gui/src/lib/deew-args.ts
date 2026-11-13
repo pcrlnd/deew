@@ -52,14 +52,24 @@ export function supportsDrc(format: Format): boolean {
   return format !== "aac"
 }
 
-/** Whether `-r none` works (not for AC4 and AC4 Atmos). */
+/** Whether `-r none` works (everything but AC4; AC4 Atmos accepts it). */
 export function supportsDrcNone(format: Format): boolean {
-  return format !== "ac4" && format !== "ac4-atmos"
+  return format !== "ac4"
 }
 
-/** The DRC values offered for `format`. */
-export function drcChoices(format: Format): Drc[] {
-  return DRC_VALUES.filter((d) => d !== "none" || supportsDrcNone(format))
+/** The DRC the CLI uses when `-r` is not given: music_light for AC4, else none. */
+export function defaultDrc(format: Format): Drc {
+  return format === "ac4" ? "music_light" : "none"
+}
+
+/** The DRC values listed for `format` (all of them; see `drcChoiceDisabled`). */
+export function drcChoices(): Drc[] {
+  return [...DRC_VALUES]
+}
+
+/** Whether a DRC value is listed but not selectable for `format` (none for AC4). */
+export function drcChoiceDisabled(format: Format, d: Drc): boolean {
+  return d === "none" && !supportsDrcNone(format)
 }
 
 export const DOWNMIX_VALUES = ["none", "1", "2", "6"] as const
@@ -154,7 +164,7 @@ export interface DeewOptions {
   ddpAtmosMode: DdpAtmosModeChoice
   /** `-dl`: remove the LFE channel. */
   disableLfe: boolean
-  /** `-nps`: turn off DEE's 90° surround phase shift (DD/DDP only). */
+  /** `-nps`: turn off DEE's 90° surround phase shift (DD, DDP and DDP Atmos only). */
   noPhaseShift: boolean
   keepTemp: boolean
   keepLog: boolean
@@ -641,9 +651,9 @@ export function disableLfeApplies(
   )
 }
 
-/** Whether `-nps` is enabled: only DD and DDP have the surround phase shift. */
+/** Whether `-nps` is enabled: DD, DDP and DDP Atmos (via dee_shim `--phase90 off`). */
 export function noPhaseShiftApplies(format: Format): boolean {
-  return format === "dd" || format === "ddp"
+  return format === "dd" || format === "ddp" || format === "ddp-atmos"
 }
 
 /** Changes the format and resets what the new format cannot do. */
@@ -742,7 +752,9 @@ export function buildArgs(
   }
   if (o.downmix !== "none") args.push("-dm", o.downmix)
   if (o.delay.trim() !== "") args.push(`-d=${o.delay.trim()}`)
-  if (o.drc !== DEFAULT_OPTIONS.drc) args.push("-r", o.drc)
+  if (supportsDrc(o.format) && o.drc !== defaultDrc(o.format)) {
+    args.push("-r", o.drc)
+  }
   const dn = parseInteger(o.dialnorm)
   if (dn !== null && dn !== 0) args.push("-dn", String(dn))
   if (o.instances.trim() !== "") args.push("-in", o.instances.trim())

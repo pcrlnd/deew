@@ -1,3 +1,31 @@
+# deew 5.3.0:
+- `-gt` downloads the glibc (gnu) build of truehdd on Linux instead of
+  the musl one (DEE needs glibc anyway)
+- `-r none` works for AC4 Atmos and is now its default, like for every
+  other format that has it (DEE's AC4 Atmos encoder has the preset, plain
+  AC4 doesn't and keeps `music_light`)
+- `-nps` works for DDP Atmos too (dee_shim's `--phase90 off` is used)
+- `-mo` also shows the loudness range, the true peak and, for
+  dialogue-gated sources, the program loudness
+- truehdd failures show truehdd's own error message
+  (e.g. `Write error: ...`) instead of only the exit code
+- a TrueHD Atmos source whose format changes mid-stream (truehdd splits
+  its output) now stops with an error instead of encoding only the first
+  part, and truehdd's extra files are removed from temp
+- AC4 with `-dn` no longer writes a temporary `.wav`: ffmpeg pipes the
+  audio into the measurement and again into the encode
+- a warning when truehdd reports damage in a TrueHD Atmos source
+  (access units replaced with silence or skipped, invalid branch points)
+- 96 kHz TrueHD is lossless now: it's encoded through dee_shim with
+  `--apodise off` (DEE's own encoder applies its apodising filter at
+  96 kHz, which changes every sample)
+- `deew-gui`/`deew-web` 0.7.0:
+  - DRC `none` is shown greyed out where it isn't available instead of
+    being hidden
+  - "No surround phase shift" and DRC `none` for AC4 Atmos follow the CLI
+    (need deew 5.3.0 or newer)
+  - shows the loudness range and true peak of `-mo` too
+
 # deew 5.2.0:
 - ffmpeg's audio goes to DEE through a pipe instead of a temporary `.wav`
   (DD, DDP, AC4, AAC and `-mo`), so encodes need much less disk space and

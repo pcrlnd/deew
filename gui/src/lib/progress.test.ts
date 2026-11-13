@@ -69,6 +69,21 @@ describe("parseProgressEvent", () => {
       percent: null,
       db: null,
     })
+    expect(
+      parseProgressEvent(
+        '{"type":"progress","job":1,"stage":"measure","percent":null,"db":-20,"gating":"dialogue","speech":37,"program":-18.9,"lra":13.1,"true_peak":null}'
+      )
+    ).toEqual({
+      type: "progress",
+      job: 1,
+      stage: "measure",
+      percent: null,
+      db: -20,
+      gating: "dialogue",
+      speech: 37,
+      program: -18.9,
+      lra: 13.1,
+    })
     expect(parseProgressEvent('{"type":"done","job":2}')).toEqual({
       type: "done",
       job: 2,
@@ -232,6 +247,33 @@ describe("stageLabel", () => {
     expect(
       stageLabel(job({ stage: "measure", db: -25, gating: "level" }))
     ).toBe("DEE measure (-25 dB, level-gated)")
+    expect(
+      stageLabel(
+        job({
+          stage: "measure",
+          db: -20,
+          gating: "dialogue",
+          speech: 37,
+          program: -18.9,
+          lra: 13.1,
+          true_peak: -4.9,
+        })
+      )
+    ).toBe(
+      "DEE measure (-20 dB, dialogue-gated, 37% speech, program -18.9 LKFS, LRA 13.1 LU, true peak -4.9 dBTP)"
+    )
+    expect(
+      stageLabel(
+        job({
+          stage: "measure",
+          db: -20,
+          gating: "level",
+          program: -20,
+          lra: 13,
+          true_peak: 0,
+        })
+      )
+    ).toBe("DEE measure (-20 dB, level-gated, LRA 13.0 LU, true peak 0.0 dBTP)")
     expect(stageLabel(job({ stage: "encode", db: -3.5 }))).toBe(
       "DEE encode (-3.5 dB)"
     )

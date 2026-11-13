@@ -47,21 +47,19 @@ export const chains: Chain[] = [
   },
   {
     title: "ac4 with -dn",
-    note: "separate measurement, deew writes the dialnorm into the manifest · the audio is read twice, so a wav, not the pipe",
+    note: "separate measurement, deew writes the dialnorm into the manifest · ffmpeg pipes the audio into the measurement and again into the encoder",
     flow: [
       file("IN"),
       arrow(),
       tool("ffmpeg"),
-      arrow(),
-      file("NAME.wav"),
-      arrow(),
+      arrow("raw PCM →"),
       tool("dee_measure_loudness"),
       arrow(),
       file("loudness.json"),
       arrow(),
       step("deew sets dialnorm"),
       arrow("→ --input-manifest →"),
-      tool("DEE encoder"),
+      tool("DEE encoder (fed by a second ffmpeg)"),
       arrow(),
       file("OUT"),
     ],
@@ -164,7 +162,7 @@ export const chains: Chain[] = [
   },
   {
     title: "thd",
-    note: "dee_shim only with DRC none (the default) · always a wav, never the pipe",
+    note: "dee_shim with DRC none (the default) or at 96 kHz · always a wav, never the pipe",
     flow: [
       file("IN"),
       arrow(),

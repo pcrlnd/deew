@@ -19,6 +19,10 @@ export type ProgressEvent =
       /** `-mo` only: how the measurement was gated and the speech share. */
       gating?: Gating
       speech?: number
+      /** `-mo` only: program loudness (LKFS), loudness range (LU), true peak (dBTP). */
+      program?: number
+      lra?: number
+      true_peak?: number
     }
   | { type: "done"; job: number }
   | { type: "warning"; text: string }
@@ -80,6 +84,9 @@ export function parseProgressEvent(line: string): ProgressEvent | null {
           ? { gating: m.gating }
           : {}),
         ...(typeof m.speech === "number" ? { speech: m.speech } : {}),
+        ...(typeof m.program === "number" ? { program: m.program } : {}),
+        ...(typeof m.lra === "number" ? { lra: m.lra } : {}),
+        ...(typeof m.true_peak === "number" ? { true_peak: m.true_peak } : {}),
       }
     case "done":
       return isIndex(m.job) ? { type: "done", job: m.job } : null
@@ -102,6 +109,9 @@ export interface JobProgress {
   db: number | null
   gating?: Gating
   speech?: number
+  program?: number
+  lra?: number
+  true_peak?: number
   done: boolean
 }
 
@@ -166,6 +176,9 @@ export function reduceProgress(
           db: event.db,
           gating: event.gating,
           speech: event.speech,
+          program: event.program,
+          lra: event.lra,
+          true_peak: event.true_peak,
         })),
       }
     case "done":
@@ -213,10 +226,16 @@ const STAGE_LABELS: Record<JobProgress["stage"], string> = {
 export function stageLabel(job: JobProgress): string {
   const label = STAGE_LABELS[job.stage]
   if (job.db === null) return label
-  // like the CLI: (-33 dB, dialogue-gated, 16% speech)
+  // like the CLI: (-20 dB, dialogue-gated, 37% speech, program -18.9 LKFS,
+  // LRA 13.1 LU, true peak -4.9 dBTP)
   const parts = [`${job.db} dB`]
   if (job.gating) parts.push(`${job.gating}-gated`)
   if (job.speech !== undefined) parts.push(`${job.speech}% speech`)
+  if (job.program !== undefined && job.gating === "dialogue")
+    parts.push(`program ${job.program.toFixed(1)} LKFS`)
+  if (job.lra !== undefined) parts.push(`LRA ${job.lra.toFixed(1)} LU`)
+  if (job.true_peak !== undefined)
+    parts.push(`true peak ${job.true_peak.toFixed(1)} dBTP`)
   return `${label} (${parts.join(", ")})`
 }
 

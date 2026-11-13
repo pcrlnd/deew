@@ -111,6 +111,12 @@ fn probe_inputs(
     (files, probes)
 }
 
+/// 96 kHz TrueHD (also resampled to it): DEE's encoder would apply its
+/// apodising filter, dee_shim turns it off.
+fn apodise_off(format: Format, samplerate: i64) -> bool {
+    format == Format::Thd && pcm_rate(format, samplerate) == 96000
+}
+
 fn show_notices(list: &[plan::Notice], no_prompt: bool) {
     for notice in list {
         if no_prompt {
@@ -546,9 +552,9 @@ fn build_job(
     let intermediate = if atmos { &names.atmos } else { &names.wav };
     let via_manifest = dialnorm != 0 && format.dialnorm_via_manifest();
     // ffmpeg feeds DEE directly, there is no wav: not for TrueHD (its encoder
-    // reads wav only), nor for the Atmos formats, nor when the audio is read
+    // reads wav only), nor for the Atmos formats. When the audio is read
     // twice (AC4's manifest for a custom dialnorm: the measurement and then
-    // the encode)
+    // the encode), ffmpeg feeds each DEE run
     // Windows: dee_shim 0.1.0 makes the `-i` path absolute and breaks
     // `named_pipe://`, so its layouts (standard 7.1, both 7.0) read the wav
     // unless the installed dee_shim keeps the value (asked once, only here)
@@ -559,7 +565,6 @@ fn build_job(
     let pcm_pipe = ctx.config.pipe
         && !atmos
         && plan_format != Format::Thd
-        && !via_manifest
         && !(pipe::NAMED && shim_layout && !shim_takes_named_pipe(ctx));
     let pipe_path = pcm_pipe.then(|| pipe::path(index));
     let intermediate_exists = !pcm_pipe && Path::new(intermediate).exists();
@@ -679,6 +684,7 @@ fn build_job(
             atmos_mode: ctx.validated.atmos_mode,
             lfe_removed: ctx.layout.lfe == Lfe::Removed,
             no_phase_shift: phase_shift_off(ctx),
+            apodise_off: apodise_off(format, ctx.info.samplerate),
         })
     };
 
@@ -718,6 +724,7 @@ fn build_job(
         output_path,
         output_dir,
         temp_files,
+        decoded_files: Default::default(),
         dee_temp,
         log,
     };
@@ -942,6 +949,12 @@ pub fn run(args: Args, config: Config, paths: Paths) {
             rprintln!("{}", note);
         }
     }
+    plan::check_shim_for_thd96(
+        apodise_off(format, info.samplerate),
+        args.measure_only,
+        programs.shim.is_some(),
+    )
+    .unwrap_or_else(|fail| fail.exit());
     if args.measure_only {
         let atmos = probes.iter().any(atmos_source);
         if atmos {
@@ -1181,6 +1194,46 @@ mod tests {
     }
 
     #[test]
+    fn apodise_off_follows_the_encoded_rate() {
+        for (rate, off) in [(44100, false), (48000, false), (88200, true), (96000, true)] {
+            assert_eq!(apodise_off(Format::Thd, rate), off, "{rate}");
+        }
+        assert!(!apodise_off(Format::ThdAtmos, 96000));
+        assert!(!apodise_off(Format::Ddp, 96000));
+    }
+
+    #[test]
+    fn thd_at_96khz_is_encoded_without_the_apodising_filter() {
+        for (rate, off) in [
+            (44100, false),
+            (48000, false),
+            (88200, true),
+            (96000, true),
+            (176400, true),
+            (192000, true),
+        ] {
+            let mut probe = test_probe(6, false);
+            probe.sample_rate = rate;
+            let args = Args {
+                format: "thd".into(),
+                drc: Some("music_light".into()),
+                ..Args::default()
+            };
+            let job = test_job_with("/in/a.wav", &probe, args, false, Some(Profile71::Standard));
+            assert_eq!(
+                job.encode_args.contains(&"--apodise".to_string()),
+                off,
+                "{rate}"
+            );
+            assert!(
+                job.encode_args
+                    .contains(&"6ch:drc_profile=music_light".to_string()),
+                "{rate}"
+            );
+        }
+    }
+
+    #[test]
     fn measuring_an_atmos_source_decodes_and_measures_like_ddp_atmos() {
         let probe = test_probe(8, true);
         for format in ["ddp", "ddp-atmos", "thd"] {
@@ -1332,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    fn truehd_and_the_ac4_manifest_keep_the_wav() {
+    fn truehd_keeps_the_wav() {
         let probe = test_probe(6, false);
         // TrueHD, also the downmixes
         for edit in [
@@ -1347,8 +1400,34 @@ mod tests {
             assert_eq!(pipe_input_format(&job.encode_args), "wav");
             assert!(job.temp_files.iter().any(|f| f.ends_with(".wav")));
         }
-        // AC4 reads the audio twice with a custom dialnorm
+        // DD takes the dialnorm directly, one read
         let job = encode_job("/in/a.wav", &probe, true, |a| {
+            a.format = "dd".into();
+            a.dialnorm = -20;
+        });
+        assert!(job.pipe.is_some());
+    }
+
+    #[test]
+    fn ac4_with_a_dialnorm_pipes_both_runs() {
+        let probe = test_probe(6, false);
+        let job = encode_job("/in/a.wav", &probe, true, |a| {
+            a.format = "ac4".into();
+            a.dialnorm = -20;
+        });
+        let pipe = crate::pipe::path(0);
+        assert_eq!(job.pipe.as_deref(), Some(pipe.as_str()));
+        assert!(!job.intermediate_exists);
+        let format = pipe_input_format(&job.measure_args).to_string();
+        assert!(format.starts_with("pcm_"), "{format}");
+        assert_eq!(pipe_input_format(&job.encode_args), format);
+        assert!(job.measure_args.contains(&pipe));
+        assert!(job.encode_args.contains(&pipe));
+        assert!(job.encode_args.contains(&"--input-manifest".to_string()));
+        assert!(job.temp_files.iter().all(|f| !f.ends_with(".wav")));
+        assert!(job.temp_files.iter().any(|f| f.ends_with(".json")));
+        // pipe = false: one wav for both runs
+        let job = encode_job("/in/a.wav", &probe, false, |a| {
             a.format = "ac4".into();
             a.dialnorm = -20;
         });
@@ -1356,12 +1435,6 @@ mod tests {
         assert_eq!(pipe_input_format(&job.measure_args), "wav");
         assert_eq!(pipe_input_format(&job.encode_args), "wav");
         assert!(job.temp_files.contains(&join("/t", "a.wav")));
-        // DD takes the dialnorm directly, one read
-        let job = encode_job("/in/a.wav", &probe, true, |a| {
-            a.format = "dd".into();
-            a.dialnorm = -20;
-        });
-        assert!(job.pipe.is_some());
     }
 
     #[test]

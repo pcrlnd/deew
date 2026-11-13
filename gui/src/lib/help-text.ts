@@ -15,7 +15,7 @@ export const HELP = {
     "Specifies downmix, only works for DD/DDP/AC4/AAC and TrueHD (DD/DDP: 1.0, 2.0 or 5.1; AC4: 2.0 or 5.1; AAC: 2.0; TrueHD: 2.0 or 5.1, downmixed by ffmpeg).\nDD and AC4 will be automatically downmixed to 5.1 in case of a 7.1 source.\nAAC is always 2.0 (mono input is not supported).",
   delay:
     "Specifies delay as ms, s or frame@FPS.\nFPS can be a number, division or ntsc / pal.\nExamples: -5.1ms, +1,52s, -24@pal, +10@24000/1001\nDefault: 0ms or parsed from filename.\nNegative values are passed as -d=-0ms automatically.",
-  drc: "Specifies drc profile.\nOptions: none / film_light / film_standard / music_light / music_standard / speech\nnone (default): no DRC, uses dee_shim for TrueHD; not available for AC4 (music_light is used there).\nNot used for AAC.",
+  drc: "Specifies drc profile.\nOptions: none / film_light / film_standard / music_light / music_standard / speech\nnone (default): no DRC, uses dee_shim for TrueHD; not available for AC4, which uses music_light.\nNot used for AAC.",
   dialnorm:
     "Applied dialnorm value, between -31 and 0 (in case of 0 DEE's measurement will be used).\nDoesn't work for AAC and AC4 Atmos.\nDefault: 0",
   instances:
@@ -27,7 +27,7 @@ export const HELP = {
   disableLfe:
     "Removes the LFE channel from a 5.1 or 7.1 input. DD and DDP output real 5.0 / 7.0 (7.0 DDP needs dee_shim); TrueHD and AC4 can't leave the LFE out, so it is kept silent. Not used for AAC (always stereo) or Atmos.",
   noPhaseShift:
-    "Turns off DEE's 90° phase shift of the surround channels (DD and DDP only, no effect on mono and stereo).\nDEE applies it by default; the config's surround_phase_shift = false turns it off for every run.\nUnchecked: the default or the config's setting.",
+    "Turns off DEE's 90° phase shift of the surround channels (DD, DDP and DDP Atmos only, no effect on mono and stereo; DDP Atmos uses dee_shim's --phase90 off).\nDEE applies it by default; the config's surround_phase_shift = false turns it off for every run.\nUnchecked: the default or the config's setting.",
   keepTemp: "Keep temp files.",
   keepLog:
     "Keep TrueHD's encode log and write a .deew-log.html report next to each output.",

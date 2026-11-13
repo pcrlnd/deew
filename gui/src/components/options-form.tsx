@@ -4,6 +4,7 @@ import { FileAudio, Folder, FolderOpen, Loader2, Trash2, X } from "lucide-react"
 import { BalancedRows } from "@/components/balanced-rows"
 import { Hint } from "@/components/hint"
 import { NoteLine } from "@/components/note-line"
+import { ShimBadge } from "@/components/shim-badge"
 import { SimpleSelect, type SelectChoice } from "@/components/simple-select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -18,6 +19,7 @@ import {
   ddpModeApplies,
   disableLfeApplies,
   noPhaseShiftApplies,
+  drcChoiceDisabled,
   drcChoices,
   FORMATS,
   FORMAT_LABELS,
@@ -43,6 +45,7 @@ import {
   SHIM_DDP_MODES,
   isShimDrc,
   isShimFormat,
+  isShimNoPhaseShift,
 } from "@/lib/shim"
 import { formatSummary } from "@/lib/probe"
 import { inWeb } from "@/lib/runner"
@@ -535,10 +538,11 @@ export function OptionsForm({
             <SimpleSelect
               id={id("r")}
               value={value.drc}
-              choices={drcChoices(value.format).map((d) => ({
+              choices={drcChoices().map((d) => ({
                 value: d,
                 label: d,
                 shim: isShimDrc(value.format, d),
+                disabled: drcChoiceDisabled(value.format, d),
               }))}
               onChange={(v) => patch({ drc: v as Drc })}
               disabled={waiting || !supportsDrc(value.format)}
@@ -677,6 +681,9 @@ export function OptionsForm({
                 {label}
                 <FlagCode flag={flag} />
               </Hint>
+              {key === "noPhaseShift" && isShimNoPhaseShift(value.format) && (
+                <ShimBadge className="ml-0" />
+              )}
             </div>
           )
         })}

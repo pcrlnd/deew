@@ -131,7 +131,7 @@ fn pick_btbn<'a>(names: &[&'a str], tag: &str) -> Option<&'a str> {
 /// Suffix of the truehdd asset (`truehdd-0.6.2-<suffix>`).
 fn truehdd_suffix(platform: Platform) -> Option<&'static str> {
     match (platform.os, platform.arch) {
-        (Os::Linux, Arch::X86_64) => Some("-x86_64-unknown-linux-musl.tar.gz"),
+        (Os::Linux, Arch::X86_64) => Some("-x86_64-unknown-linux-gnu.tar.gz"),
         (Os::Windows, Arch::X86_64) => Some("-x86_64-pc-windows-msvc.zip"),
         (Os::Darwin, Arch::X86_64 | Arch::Aarch64) => Some("-universal-macOS.zip"),
         _ => None,
@@ -1080,6 +1080,7 @@ mod tests {
             "truehdd-0.6.2-x86_64-pc-windows-msvc.zip",
             "truehdd-0.6.2-x86_64-pc-windows-msvc.zip.sha256",
             "truehdd-0.6.2-x86_64-unknown-linux-gnu.tar.gz",
+            "truehdd-0.6.2-x86_64-unknown-linux-gnu.tar.gz.sha256",
             "truehdd-0.6.2-x86_64-unknown-linux-musl.tar.gz",
             "truehdd-0.6.2-x86_64-unknown-linux-musl.tar.gz.sha256",
         ];
@@ -1105,7 +1106,7 @@ mod tests {
         };
         assert_eq!(
             pick(&truehdd, truehdd_suffix(LINUX)),
-            Some("truehdd-0.6.2-x86_64-unknown-linux-musl.tar.gz")
+            Some("truehdd-0.6.2-x86_64-unknown-linux-gnu.tar.gz")
         );
         assert_eq!(
             pick(&truehdd, truehdd_suffix(win)),

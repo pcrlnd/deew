@@ -82,9 +82,10 @@ impl Format {
         matches!(self, Format::DdpAtmos | Format::ThdAtmos | Format::Ac4Atmos)
     }
 
-    /// Formats with DEE's 90 degree phase shift of the surround channels.
+    /// Formats with a 90 degree phase shift of the surround channels: DD,
+    /// DDP and DDP Atmos (via dee_shim's `--phase90`).
     pub fn has_phase_shift(self) -> bool {
-        matches!(self, Format::Dd | Format::Ddp)
+        matches!(self, Format::Dd | Format::Ddp | Format::DdpAtmos)
     }
 
     /// Formats that accept a custom dialnorm.
@@ -228,7 +229,7 @@ pub struct Validated {
     pub ddp_mode: DdpMode,
     /// `--ddp-atmos-mode`, else the config's default (DDP Atmos only).
     pub atmos_mode: DdpAtmosMode,
-    /// `-nps` (DD/DDP only; the config's `surround_phase_shift` is applied later).
+    /// `-nps` (DD, DDP and DDP Atmos only; the config's `surround_phase_shift` is applied later).
     pub no_phase_shift: bool,
 }
 
@@ -241,11 +242,11 @@ pub const DRC_PROFILES: [&str; 6] = [
     "speech",
 ];
 
-/// The DRC profile when `-r` is not given: `none`, except for the AC4
-/// formats, which have no such preset.
+/// The DRC profile when `-r` is not given: `none`, except for plain AC4,
+/// which has no such preset (AC4 Atmos has it).
 pub fn default_drc(format: Format) -> &'static str {
     match format {
-        Format::Ac4 | Format::Ac4Atmos => "music_light",
+        Format::Ac4 => "music_light",
         _ => "none",
     }
 }
@@ -301,7 +302,7 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
         Some(m) => DdpAtmosMode::parse(m).ok_or(Fail::new(ErrorKind::DdpAtmosMode))?,
         None => modes.ddp_atmos,
     };
-    if matches!(format, Format::Ac4 | Format::Ac4Atmos) && args.drc.as_deref() == Some("none") {
+    if format == Format::Ac4 && args.drc.as_deref() == Some("none") {
         return Err(Fail::new(ErrorKind::Ac4Drc));
     }
     if dialnorm != 0 && !format.has_dialnorm() {
@@ -701,6 +702,19 @@ pub fn check_shim_for_ddp(
     }
 }
 
+/// TrueHD encoded at 96 kHz (`apodise_off`) needs dee_shim to be lossless.
+pub fn check_shim_for_thd96(
+    apodise_off: bool,
+    measure_only: bool,
+    shim_found: bool,
+) -> Result<(), Fail> {
+    if apodise_off && !measure_only && !shim_found {
+        Err(Fail::new(ErrorKind::ShimThd96))
+    } else {
+        Ok(())
+    }
+}
+
 static FILENAME_DELAY_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^.+DELAY ([-|+]?[0-9]+m?s)\..+").expect("valid regex")
 });
@@ -909,12 +923,10 @@ mod tests {
             .unwrap()
             .drc
         };
-        for format in ["dd", "ddp", "ddp-atmos", "thd", "aac"] {
+        for format in ["dd", "ddp", "ddp-atmos", "thd", "aac", "ac4-atmos"] {
             assert_eq!(drc(format, None), "none", "{format}");
         }
-        for format in ["ac4", "ac4-atmos"] {
-            assert_eq!(drc(format, None), "music_light", "{format}");
-        }
+        assert_eq!(drc("ac4", None), "music_light");
         assert_eq!(drc("thd", Some("speech")), "speech");
         assert_eq!(drc("ddp", Some("music_light")), "music_light");
         // an explicit none is still an error for AC4
@@ -931,14 +943,19 @@ mod tests {
 
     #[test]
     fn format_specific_restrictions() {
-        for format in ["ac4", "ac4-atmos"] {
-            let e = validate_args_d(&args(|a| {
-                a.format = format.into();
-                a.drc = Some("none".into())
-            }))
-            .unwrap_err();
-            assert_eq!(e.kind, ErrorKind::Ac4Drc);
-        }
+        let e = validate_args_d(&args(|a| {
+            a.format = "ac4".into();
+            a.drc = Some("none".into())
+        }))
+        .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Ac4Drc);
+        // AC4 Atmos has the none preset
+        let v = validate_args_d(&args(|a| {
+            a.format = "ac4-atmos".into();
+            a.drc = Some("none".into())
+        }))
+        .unwrap();
+        assert_eq!(v.drc, "none");
         // only measuring does not care about the DRC
         assert!(
             validate_args_d(&args(|a| {
@@ -967,8 +984,8 @@ mod tests {
     }
 
     #[test]
-    fn no_phase_shift_is_for_dd_and_ddp() {
-        for format in ["dd", "ddp", "DDP"] {
+    fn no_phase_shift_is_for_dd_ddp_and_ddp_atmos() {
+        for format in ["dd", "ddp", "DDP", "ddp-atmos"] {
             let v = validate_args_d(&args(|a| {
                 a.format = format.into();
                 a.no_phase_shift = true
@@ -977,7 +994,7 @@ mod tests {
             assert!(v.no_phase_shift, "{format}");
         }
         assert!(!validate_args_d(&Args::default()).unwrap().no_phase_shift);
-        for format in ["ddp-atmos", "thd", "thd-atmos", "ac4", "ac4-atmos", "aac"] {
+        for format in ["thd", "thd-atmos", "ac4", "ac4-atmos", "aac"] {
             let e = validate_args_d(&args(|a| {
                 a.format = format.into();
                 a.no_phase_shift = true
@@ -1440,6 +1457,15 @@ mod tests {
         }
         assert_eq!(br(Format::Thd, 6, None), None);
         assert_eq!(br(Format::Thd, 6, Some(640)), None);
+    }
+
+    #[test]
+    fn thd_96khz_needs_dee_shim() {
+        let err = Err(Fail::new(ErrorKind::ShimThd96));
+        assert_eq!(check_shim_for_thd96(true, false, false), err);
+        assert_eq!(check_shim_for_thd96(true, false, true), Ok(()));
+        assert_eq!(check_shim_for_thd96(true, true, false), Ok(()));
+        assert_eq!(check_shim_for_thd96(false, false, false), Ok(()));
     }
 
     #[test]

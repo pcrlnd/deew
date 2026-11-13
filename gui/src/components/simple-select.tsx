@@ -12,6 +12,8 @@ export interface SelectChoice {
   label: string
   /** Only possible with dee_shim: shown with a puzzle icon. */
   shim?: boolean
+  /** Listed but not selectable (greyed out). */
+  disabled?: boolean
 }
 
 export function SimpleSelect({
@@ -51,7 +53,7 @@ export function SimpleSelect({
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false}>
         {choices.map((c) => (
-          <SelectItem key={c.value} value={c.value}>
+          <SelectItem key={c.value} value={c.value} disabled={c.disabled}>
             {c.label}
             {c.shim && <ShimBadge />}
           </SelectItem>

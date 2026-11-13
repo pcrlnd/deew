@@ -132,6 +132,7 @@ pub enum ErrorKind {
     AacInput,
     ShimAtmos,
     ShimThd,
+    ShimThd96,
     ShimDdp71,
     ShimDdp70,
     ThdMonoInput,
@@ -176,16 +177,19 @@ impl ErrorKind {
                 "custom dialnorm is only supported for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow], [bold yellow]DDP Atmos[/bold yellow], [bold yellow]TrueHD[/bold yellow], [bold yellow]TrueHD Atmos[/bold yellow] and [bold yellow]AC4[/bold yellow] encoding."
             }
             Self::PhaseShiftFormat => {
-                "[bold yellow]-nps[/bold yellow]/[bold yellow]--no-phase-shift[/bold yellow] only works for [bold yellow]DD[/bold yellow] and [bold yellow]DDP[/bold yellow]."
+                "[bold yellow]-nps[/bold yellow]/[bold yellow]--no-phase-shift[/bold yellow] only works for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]DDP Atmos[/bold yellow]."
             }
             Self::Ac4Drc => {
-                "DRC [bold yellow]none[/bold yellow] is not supported for AC4 encoding."
+                "DRC [bold yellow]none[/bold yellow] is not supported for AC4 encoding (AC4 Atmos supports it)."
             }
             Self::ShimAtmos => {
                 "dee_shim is required for [bold yellow]🤠[/bold yellow], put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
             }
             Self::ShimThd => {
                 "dee_shim is required for TrueHD with DRC [bold yellow]none[/bold yellow] (the default), put dee_shim next to deew or in your PATH, or use [bold yellow]-r[/bold yellow] with another profile"
+            }
+            Self::ShimThd96 => {
+                "dee_shim is required for 96 kHz TrueHD (DEE's own encoder applies its apodising filter, so it wouldn't be lossless), put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
             }
             Self::ShimDdp71 => {
                 "dee_shim is required for 7.1 DDP with the standard profile, put dee_shim next to deew or in your PATH, or use [bold yellow]--ddp-mode bluray[/bold yellow] (768-1664 kbps)"

@@ -43,8 +43,8 @@ The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects 
 - ffprobe
 - [Dolby Encoding Engine 6.7](https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670)
 - [truehdd](https://github.com/truehdd/truehdd) (only for the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`)
-- [dee_shim](https://github.com/truehdd/dee-shim) (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none`, the standard profile of 7.1 DDP and 7.0 DDP)
-  - `ddp-atmos` and `thd-atmos` use it so DEE doesn't smooth the object positions of the TrueHD decode a second time, TrueHD with DRC `none` (the default) uses it because the TrueHD encoder has no `none` DRC preset
+- [dee_shim](https://github.com/truehdd/dee-shim) (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP and 7.0 DDP)
+  - `ddp-atmos` and `thd-atmos` use it so DEE doesn't smooth the object positions of the TrueHD decode a second time, TrueHD with DRC `none` (the default) uses it because the TrueHD encoder has no `none` DRC preset; 96 kHz TrueHD (any DRC) is encoded through it with `--apodise off` so it stays lossless (DEE's own encoder applies its apodising filter to 96 kHz input, which changes every sample, so dee_shim is required for it)
 
 # DDP profiles
 `--ddp-mode` selects the profile of 7.1 DDP and `--ddp-atmos-mode` the profile of `ddp-atmos`, the defaults are in the config's `[default_modes]` section:
@@ -58,10 +58,10 @@ The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects 
 - in `-h` and `-lb` the values that use dee_shim are blue (`blue: uses dee_shim`)
 
 # Surround phase shift
-DEE's DD and DDP encoders apply a 90° phase shift to the surround channels by default. `-nps`/`--no-phase-shift` turns it off for one run (`surround_90deg_phase_shift=0` in DEE's `-e` option), setting `surround_phase_shift = false` in the config turns it off for every run. It only affects DD and DDP with surround channels (5.1, 5.0, 7.1, 7.0), other formats don't have it (`-nps` with them is an error, the config value is ignored).
+DEE's DD and DDP encoders apply a 90° phase shift to the surround channels by default. `-nps`/`--no-phase-shift` turns it off for one run (`surround_90deg_phase_shift=0` in DEE's `-e` option), setting `surround_phase_shift = false` in the config turns it off for every run. It affects DD and DDP with surround channels (5.1, 5.0, 7.1, 7.0). DDP Atmos uses dee_shim's `--phase90 off` instead (all three profiles; the Atmos render is unchanged, it affects the coded 5.1/7.1 backbone). Other formats don't have it (TrueHD has no such phase shift; `-nps` with them is an error, the config value is ignored).
 
 # Piping into DEE
-For DD, DDP, AC4, AAC and `-mo`, ffmpeg's decoded audio goes straight into DEE (raw PCM through a pipe, a named pipe on Windows) instead of a temp `.wav`, so no large intermediate file is written. TrueHD, Atmos and AC4 with a custom dialnorm (`-dn`) still use the temp `.wav`. Resampled and 32-bit audio is piped as 32-bit float. Setting `pipe = false` in the config turns this off if it causes problems.
+For DD, DDP, AC4, AAC and `-mo`, ffmpeg's decoded audio goes straight into DEE (raw PCM through a pipe, a named pipe on Windows) instead of a temp `.wav`, so no large intermediate file is written. TrueHD and Atmos still use the temp `.wav`. AC4 with a custom dialnorm (`-dn`) is piped too: ffmpeg feeds the loudness measurement and then, again, the encode. Resampled and 32-bit audio is piped as 32-bit float. Setting `pipe = false` in the config turns this off if it causes problems.
 
 # Where deew looks for the programs
 deew looks for the programs in this order, there is nothing to set in the config:
@@ -155,7 +155,8 @@ FLAGS:
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
   -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
-                            only works for DD/DDP, config: surround_phase_shift
+                            only works for DD/DDP/DDP Atmos, config:
+                            surround_phase_shift
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -165,7 +166,8 @@ FLAGS:
                             music_light / music_standard / speech
                             default: none (music_light for AC4)
                             specifies drc profile
-                            none uses dee_shim for TrueHD, not available for AC4
+                            none uses dee_shim for TrueHD, not available
+                            for AC4 (AC4 Atmos has it)
   -dn, --dialnorm DIALNORM  options: between -31 and 0 (in case of 0 DEE's
                             measurement will be used)
                             default: 0

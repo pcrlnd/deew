@@ -7,7 +7,7 @@ use crate::events;
 use crate::interrupt;
 use crate::pipe;
 use crate::plan::Format;
-use crate::ui::{Bar, Stage, Ui};
+use crate::ui::{Bar, Stage, Ui, clock};
 use crate::util::{Gating, Level, basename, clamp_i, file_name};
 use regex::Regex;
 use serde_json::{Value, json};
@@ -60,6 +60,9 @@ pub struct Job {
     pub output_dir: String,
     /// Files in the temp directory that are removed afterwards (not with `-k`).
     pub temp_files: Vec<String>,
+    /// Files truehdd listed in its result (also the extra parts of a split
+    /// output), filled by the decode and removed with the temp files.
+    pub decoded_files: Arc<Mutex<Vec<String>>>,
     /// DEE's `--temp-dir` for this job, removed with everything in it when the job ends.
     pub dee_temp: String,
     /// The report of `-kl`.
@@ -196,6 +199,15 @@ static DEE_SPEECH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[^A-Za-z0-9_])speech_percentage=(-?[0-9]+(?:\.[0-9]+)?)")
         .expect("valid regex")
 });
+static DEE_ITU: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^A-Za-z0-9_])itu_loudness=(-?[0-9]+(?:\.[0-9]+)?)").expect("valid regex")
+});
+static DEE_RANGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^A-Za-z0-9_])loudness_range=(-?[0-9]+(?:\.[0-9]+)?)").expect("valid regex")
+});
+static DEE_TRUE_PEAK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^A-Za-z0-9_])true_peak=(-?[0-9]+(?:\.[0-9]+)?)").expect("valid regex")
+});
 static DEE_ERROR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"ERROR: (.*)").expect("valid regex"));
 static DEE_WARNING: LazyLock<Regex> =
@@ -237,6 +249,12 @@ pub enum DeeEvent {
     Gating(Gating),
     /// Share of speech in percent, rounded.
     Speech(i64),
+    /// Program loudness (ITU-R BS.1770) in tenths of LKFS.
+    Program(i64),
+    /// Loudness range in tenths of LU.
+    Range(i64),
+    /// True peak in tenths of dBTP.
+    TruePeak(i64),
     /// Overall progress of the tool, 0 to 100.
     Progress(f64),
     /// A new step began (`Step 2/2 : Encoding`).
@@ -251,11 +269,8 @@ pub enum DeeEvent {
 /// which can glue its own lines in front of one of DEE).
 #[derive(Debug, Clone, Default)]
 pub struct DeeParser {
-    measured: bool,
     /// Report the measured loudness as it is, not clamped to the dialnorm range.
     unclamped: bool,
-    gated: bool,
-    spoken: bool,
     /// DEE repeats errors and warnings at the end.
     seen: Vec<String>,
 }
@@ -292,13 +307,11 @@ impl DeeParser {
                 events.push(DeeEvent::Step(Stage::Encode));
             }
         }
-        if !self.measured
-            && let Some(value) = DEE_LOUDNESS
-                .captures(line)
-                .and_then(|c| c[1].parse::<f64>().ok())
-                .filter(|v| v.is_finite())
+        if let Some(value) = DEE_LOUDNESS
+            .captures(line)
+            .and_then(|c| c[1].parse::<f64>().ok())
+            .filter(|v| v.is_finite())
         {
-            self.measured = true;
             let rounded = value.round_ties_even() as i64;
             events.push(DeeEvent::Measured(if self.unclamped {
                 rounded
@@ -306,20 +319,24 @@ impl DeeParser {
                 clamp_i(rounded, -31, 0)
             }));
         }
-        if !self.gated
-            && let Some(gating) = DEE_GATING.captures(line).and_then(|c| Gating::parse(&c[1]))
-        {
-            self.gated = true;
+        if let Some(gating) = DEE_GATING.captures(line).and_then(|c| Gating::parse(&c[1])) {
             events.push(DeeEvent::Gating(gating));
         }
-        if !self.spoken
-            && let Some(value) = DEE_SPEECH
-                .captures(line)
-                .and_then(|c| c[1].parse::<f64>().ok())
-                .filter(|v| v.is_finite())
+        if let Some(value) = DEE_SPEECH
+            .captures(line)
+            .and_then(|c| c[1].parse::<f64>().ok())
+            .filter(|v| v.is_finite())
         {
-            self.spoken = true;
             events.push(DeeEvent::Speech(value.round() as i64));
+        }
+        if let Some(value) = tenths(&DEE_ITU, line) {
+            events.push(DeeEvent::Program(value));
+        }
+        if let Some(value) = tenths(&DEE_RANGE, line) {
+            events.push(DeeEvent::Range(value));
+        }
+        if let Some(value) = tenths(&DEE_TRUE_PEAK, line) {
+            events.push(DeeEvent::TruePeak(value));
         }
         if let Some(c) = DEE_PROGRESS.captures(line)
             && let Ok(value) = c[1].parse::<f64>()
@@ -340,6 +357,18 @@ impl DeeParser {
     }
 }
 
+/// The number of the first capture of `re` in tenths.
+fn tenths(re: &Regex, line: &str) -> Option<i64> {
+    let value = re.captures(line)?[1].parse::<f64>().ok()?;
+    value.is_finite().then(|| (value * 10.0).round() as i64)
+}
+
+/// Whether the block of the source loudness is over: its last line
+/// (`true_peak`) is in, or the next step began.
+fn block_done(measured: bool, true_peak: bool, stage: Stage) -> bool {
+    measured && (stage == Stage::Encode || true_peak)
+}
+
 impl DeeParser {
     /// Whether the parser takes the line as progress, stage, measurement,
     /// error or warning output, whatever it makes of it.
@@ -348,6 +377,9 @@ impl DeeParser {
             || DEE_LOUDNESS.is_match(line)
             || DEE_GATING.is_match(line)
             || DEE_SPEECH.is_match(line)
+            || DEE_ITU.is_match(line)
+            || DEE_RANGE.is_match(line)
+            || DEE_TRUE_PEAK.is_match(line)
             || DEE_PROGRESS.is_match(line)
             || DEE_ERROR.is_match(line)
             || DEE_WARNING.is_match(line)
@@ -431,9 +463,25 @@ pub fn parse_atmos_frames(line: &str) -> Option<u64> {
 
 /// The message of an error in the (JSON) log of truehdd.
 fn truehdd_error(line: &str) -> Option<String> {
+    let plain = crate::deewlog::strip_ansi(line);
+    if let Some(message) = plain.trim().strip_prefix("Error: ") {
+        let message = message.trim();
+        return (!message.is_empty()).then(|| message.to_string());
+    }
     let value: Value = serde_json::from_str(line).ok()?;
     let level = value.get("lvl")?.as_str()?;
     (level.eq_ignore_ascii_case("error")).then(|| value.get("msg")?.as_str().map(str::to_string))?
+}
+
+/// What an exit code of truehdd says, when it printed no error message.
+fn truehdd_exit_phrase(code: Option<i32>) -> Option<&'static str> {
+    match code? {
+        3 => Some("couldn't read the input"),
+        4 => Some("the input is not a valid TrueHD stream"),
+        5 => Some("decoding failed"),
+        6 => Some("couldn't write the decoded files (disk full or no access?)"),
+        _ => None,
+    }
 }
 
 /// Whether the `--json` result of truehdd lists the Atmos presentation.
@@ -450,6 +498,103 @@ pub fn has_atmos_presentation(result: &str) -> bool {
                     && p.get("format").and_then(Value::as_str) == Some("damf")
             })
         })
+}
+
+/// The Atmos output of truehdd was split into parts (the TrueHD stream
+/// changed its format).
+#[derive(Debug, PartialEq)]
+pub struct AtmosSplit {
+    /// Access unit (1/1200 s) of the earliest extra part, if it could be read.
+    pub unit: Option<u64>,
+}
+
+/// The last component of a path of either style.
+fn last_component(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// The directory of a path of either style, with `/` as separator.
+fn dir_of(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let dir = dir.trim_end_matches('/').to_string();
+    if cfg!(windows) {
+        dir.to_lowercase()
+    } else {
+        dir
+    }
+}
+
+/// The paths listed by the presentations of the `--json` result of truehdd
+/// (only presentation `index` if given).
+fn listed(result: &str, index: Option<i64>) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(result) else {
+        return Vec::new();
+    };
+    value
+        .get("presentations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|p| index.is_none() || p.get("index").and_then(Value::as_i64) == index)
+        .filter_map(|p| p.get("files").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|f| f.as_str().map(str::to_string))
+        .collect()
+}
+
+/// Whether truehdd split the Atmos presentation into parts: it lists files
+/// other than `base` (`<name>.atmos`) and its `.metadata` and `.audio`. The
+/// extra parts are named `<stem>_<access unit>.<extension>`.
+pub fn atmos_split(result: &str, base: &str) -> Option<AtmosSplit> {
+    let base = last_component(base).to_lowercase();
+    let stem = base.strip_suffix(".atmos").unwrap_or(&base);
+    let known = [
+        base.clone(),
+        format!("{base}.metadata"),
+        format!("{base}.audio"),
+    ];
+    let extra: Vec<String> = listed(result, Some(3))
+        .iter()
+        .map(|f| last_component(f).to_lowercase())
+        .filter(|name| !known.contains(name))
+        .collect();
+    if extra.is_empty() {
+        return None;
+    }
+    let prefix = format!("{stem}_");
+    let unit = extra
+        .iter()
+        .filter_map(|name| {
+            let rest = name.strip_prefix(&prefix)?;
+            let (number, _) = rest.split_once('.')?;
+            if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            number.parse::<u64>().ok().filter(|n| *n > 0)
+        })
+        .min();
+    Some(AtmosSplit { unit })
+}
+
+/// The error of a split Atmos output.
+pub fn split_message(split: &AtmosSplit) -> String {
+    let at = split.unit.map_or(String::new(), |unit| {
+        format!(" at {} (access unit {unit})", clock(unit / 1200))
+    });
+    format!(
+        "the TrueHD stream changes its format{at}, truehdd split the Atmos output into parts. deew stops instead of encoding only the first part; check or re-rip the source."
+    )
+}
+
+/// All files truehdd listed, but only those directly in `temp` (what is
+/// elsewhere is never removed).
+pub fn decoded_files(result: &str, temp: &str) -> Vec<String> {
+    let temp = dir_of(&format!("{temp}/x"));
+    listed(result, None)
+        .into_iter()
+        .filter(|f| !last_component(f).is_empty() && dir_of(f) == temp)
+        .collect()
 }
 
 /// Progress (0 to 100) of the decode from the size of the `.atmos.audio`
@@ -493,6 +638,38 @@ pub fn check_decoded(result: &str, length: f64) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The warning for the damage truehdd reports in its `--json` result of
+/// `name`: access units replaced with silence or skipped, and invalid
+/// branch points. None without damage (or when the result is no JSON).
+pub fn decode_damage(result: &str, name: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(result).ok()?;
+    let count = |key: &str| value.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let units = |n: u64| format!("{n} access unit{}", if n == 1 { "" } else { "s" });
+    let mut parts = Vec::new();
+    let concealed = count("concealedFrames");
+    if concealed > 0 {
+        parts.push(format!("{} replaced with silence", units(concealed)));
+    }
+    let skipped = count("skippedFrames");
+    if skipped > 0 {
+        parts.push(format!("{skipped} skipped"));
+    }
+    let branches = count("invalidBranches");
+    if branches > 0 {
+        parts.push(format!(
+            "{branches} invalid branch point{}",
+            if branches == 1 { "" } else { "s" }
+        ));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "truehdd found damage in {name}: {}. The output may have a gap or be slightly out of sync; check or re-rip the source.",
+        parts.join(", ")
+    ))
 }
 
 /// `manifest` (the output of `dee_measure_loudness`) with the dialnorm as
@@ -575,9 +752,16 @@ fn remove_dee_temp(job: &Job, ui: &Ui) {
     }
 }
 
+fn decoded_of(job: &Job) -> Vec<String> {
+    job.decoded_files
+        .lock()
+        .map(|files| files.clone())
+        .unwrap_or_default()
+}
+
 fn cleanup(job: &Job, options: &Options, ui: &Ui) {
     if !options.keep_temp {
-        for path in &job.temp_files {
+        for path in job.temp_files.iter().chain(&decoded_of(job)) {
             if !remove_file(path) {
                 ui.say(&format!(
                     "[bold yellow]Failed to delete:[/bold yellow] {}",
@@ -598,9 +782,11 @@ fn cleanup(job: &Job, options: &Options, ui: &Ui) {
 /// a partial intermediate must not be taken for a finished one), and, once the
 /// encoder had started, the partial output.
 fn cleanup_interrupted(job: &Job, stages: &[StageLog], ui: &Ui) {
+    let decoded = decoded_of(job);
     let mut paths: Vec<&String> = job
         .temp_files
         .iter()
+        .chain(&decoded)
         // an intermediate from an earlier run was not touched
         .filter(|path| !(job.intermediate_exists && **path == job.intermediate))
         .collect();
@@ -811,7 +997,7 @@ fn run_ffmpeg(job: &Job, bar: &Bar, log: &mut StageLog) -> Result<(), String> {
 }
 
 /// ffmpeg | truehdd: decodes the Atmos presentation of the input.
-fn run_decode(job: &Job, bar: &Bar, log: &mut StageLog) -> Result<(), String> {
+fn run_decode(job: &Job, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), String> {
     // ffmpeg copies the TrueHD track (of a container or a raw stream) into
     // the stdin of truehdd, which reads raw streams only.
     let mut ffmpeg = if job.ffmpeg_args.is_empty() {
@@ -943,6 +1129,9 @@ fn run_decode(job: &Job, bar: &Bar, log: &mut StageLog) -> Result<(), String> {
     let mut stdout_stream = Stream::new("truehdd stdout");
     stdout_stream.push(&result);
     log.streams.push(stdout_stream);
+    if let Ok(mut files) = job.decoded_files.lock() {
+        *files = decoded_files(&result, &temp_of(job));
+    }
     if let Some(message) = ffmpeg_failure {
         return Err(message);
     }
@@ -951,15 +1140,29 @@ fn run_decode(job: &Job, bar: &Bar, log: &mut StageLog) -> Result<(), String> {
         return Err(failure_message(
             "truehdd",
             status,
-            errors.last().map(String::as_str),
+            errors
+                .last()
+                .map(String::as_str)
+                .or_else(|| truehdd_exit_phrase(status.code())),
         ));
     }
     if !has_atmos_presentation(&result) {
         return Err("the input has no Atmos presentation.".to_string());
     }
+    if let Some(split) = atmos_split(&result, &job.intermediate) {
+        return Err(split_message(&split));
+    }
     check_decoded(&result, job.length)?;
     if !Path::new(&job.intermediate).exists() {
         return Err("truehdd failed: no .atmos file was written.".to_string());
+    }
+    if let Some(message) = decode_damage(&result, last_component(&job.input)) {
+        log.warnings.push(message.clone());
+        events::warning(&message);
+        ui.say(&format!(
+            "[bold yellow]WARNING:[/bold yellow] {}",
+            escape(&message)
+        ));
     }
     bar.percent(100.0);
     Ok(())
@@ -1175,16 +1378,27 @@ struct Phase<'a> {
     input: Option<&'a Job>,
 }
 
-/// The loudness shown and logged, once the measurement is in.
-fn refresh(
-    measured: Option<i64>,
+/// What DEE printed next to the loudness.
+#[derive(Debug, Clone, Copy, Default)]
+struct Extra {
     gating: Option<Gating>,
     speech: Option<i64>,
-    shown: &mut Option<Level>,
-    log: &mut StageLog,
-) {
+    program: Option<i64>,
+    lra: Option<i64>,
+    true_peak: Option<i64>,
+}
+
+/// The loudness shown and logged, once the measurement is in.
+fn refresh(measured: Option<i64>, extra: &Extra, shown: &mut Option<Level>, log: &mut StageLog) {
     if let Some(db) = measured {
-        let level = Level { db, gating, speech };
+        let level = Level {
+            db,
+            gating: extra.gating,
+            speech: extra.speech,
+            program: extra.program,
+            lra: extra.lra,
+            true_peak: extra.true_peak,
+        };
         *shown = Some(level);
         log.measured = Some(level);
     }
@@ -1238,7 +1452,9 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
         .filter(|_| pipe::NAMED)
         .map(|f| watch_ffmpeg(f.ffmpeg.clone(), child.id(), exited.clone()));
     let mut timer = None;
-    let (mut measured, mut gating, mut speech) = (None, None, None);
+    let mut measured = None;
+    let mut seen_peak = false;
+    let mut extra = Extra::default();
     // the last line of stdout that is none of the output the parser knows
     let mut last_other: Option<String> = None;
     bar.describe(stage, db);
@@ -1268,17 +1484,33 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                 }
                 DeeEvent::Measured(value) => {
                     measured = Some(value);
-                    refresh(measured, gating, speech, &mut db, log);
+                    refresh(measured, &extra, &mut db, log);
                     bar.describe(stage, db);
                 }
                 DeeEvent::Gating(value) => {
-                    gating = phase.details.then_some(value);
-                    refresh(measured, gating, speech, &mut db, log);
+                    extra.gating = phase.details.then_some(value);
+                    refresh(measured, &extra, &mut db, log);
                     bar.describe(stage, db);
                 }
                 DeeEvent::Speech(value) => {
-                    speech = phase.details.then_some(value);
-                    refresh(measured, gating, speech, &mut db, log);
+                    extra.speech = phase.details.then_some(value);
+                    refresh(measured, &extra, &mut db, log);
+                    bar.describe(stage, db);
+                }
+                DeeEvent::Program(value) => {
+                    extra.program = phase.details.then_some(value);
+                    refresh(measured, &extra, &mut db, log);
+                    bar.describe(stage, db);
+                }
+                DeeEvent::Range(value) => {
+                    extra.lra = phase.details.then_some(value);
+                    refresh(measured, &extra, &mut db, log);
+                    bar.describe(stage, db);
+                }
+                DeeEvent::TruePeak(value) => {
+                    seen_peak = true;
+                    extra.true_peak = phase.details.then_some(value);
+                    refresh(measured, &extra, &mut db, log);
                     bar.describe(stage, db);
                 }
                 DeeEvent::Progress(percent) => show(bar, map.progress(percent)),
@@ -1311,12 +1543,9 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                 }
             }));
         }
-        // The block of the source loudness ends with the next step, or when
-        // gating and speech share are in; then the rest is not needed.
-        if phase.stop_when_measured
-            && !stopped
-            && measured.is_some()
-            && (stage == Stage::Encode || (gating.is_some() && speech.is_some()))
+        // The block of the source loudness ends with the next step or with
+        // its last line, the true peak; then the rest is not needed.
+        if phase.stop_when_measured && !stopped && block_done(measured.is_some(), seen_peak, stage)
         {
             stopped = true;
             let _ = child.kill();
@@ -1406,7 +1635,7 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
                 commands.insert(0, &job.ffmpeg_args[..]);
             }
             staged(stages, "decode", &commands, on, |log| {
-                run_decode(job, bar, log)
+                run_decode(job, bar, ui, log)
             })?;
         } else {
             staged(stages, "ffmpeg", &[&job.ffmpeg_args], on, |log| {
@@ -1460,8 +1689,9 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             db: job.skip_dialnorm,
             stop_when_measured: false,
             details: false,
-            // a measurement before it has read the pipe already
-            input: job.pipe.as_ref().filter(|_| !measuring).map(|_| job),
+            // a measurement before it has read the pipe already, so the
+            // encode gets an ffmpeg of its own
+            input: job.pipe.as_ref().map(|_| job),
         };
         let result = staged(
             stages,
@@ -1586,6 +1816,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decode_damage_texts() {
+        let json = |c: &str, s: u64, b: u64| {
+            format!(
+                r#"{{"frames":9,{c}"skippedFrames":{s},"invalidBranches":{b},"presentations":[]}}"#
+            )
+        };
+        assert_eq!(
+            decode_damage(&json("\"concealedFrames\":0,", 0, 0), "a.thd"),
+            None
+        );
+        assert_eq!(decode_damage(&json("", 0, 0), "a.thd"), None);
+        assert_eq!(decode_damage("nope", "a.thd"), None);
+        let tail =
+            ". The output may have a gap or be slightly out of sync; check or re-rip the source.";
+        let want = |t: &str| format!("truehdd found damage in a.thd: {t}{tail}");
+        assert_eq!(
+            decode_damage(&json("\"concealedFrames\":1,", 0, 0), "a.thd"),
+            Some(want("1 access unit replaced with silence"))
+        );
+        assert_eq!(
+            decode_damage(&json("", 1, 0), "a.thd"),
+            Some(want("1 skipped"))
+        );
+        assert_eq!(
+            decode_damage(&json("", 0, 1), "a.thd"),
+            Some(want("1 invalid branch point"))
+        );
+        assert_eq!(
+            decode_damage(&json("\"concealedFrames\":3,", 4, 2), "a.thd"),
+            Some(want(
+                "3 access units replaced with silence, 4 skipped, 2 invalid branch points"
+            ))
+        );
+    }
+
+    #[test]
     fn static_regexes_compile() {
         LazyLock::force(&FFMPEG_TIME);
         LazyLock::force(&FFMPEG_PREFIX);
@@ -1594,6 +1860,9 @@ mod tests {
         LazyLock::force(&DEE_LOUDNESS);
         LazyLock::force(&DEE_GATING);
         LazyLock::force(&DEE_SPEECH);
+        LazyLock::force(&DEE_ITU);
+        LazyLock::force(&DEE_RANGE);
+        LazyLock::force(&DEE_TRUE_PEAK);
         LazyLock::force(&DEE_ERROR);
         LazyLock::force(&DEE_WARNING);
         LazyLock::force(&ATMOS_FRAMES);
@@ -1715,9 +1984,15 @@ mod tests {
             p.feed("[Source loudness] speech_percentage=16.1"),
             [DeeEvent::Speech(16)]
         );
-        // only the first of each
-        assert_eq!(p.feed("[Source loudness] gating=level"), []);
-        assert_eq!(p.feed("[Source loudness] speech_percentage=50"), []);
+        // a later block (Atmos: binaural, then multichannel) overwrites
+        assert_eq!(
+            p.feed("[Source loudness] gating=level"),
+            [DeeEvent::Gating(Gating::Level)]
+        );
+        assert_eq!(
+            p.feed("[Source loudness] speech_percentage=50"),
+            [DeeEvent::Speech(50)]
+        );
         let mut p = DeeParser::new();
         assert_eq!(
             p.feed("[Source loudness] gating=level"),
@@ -1729,6 +2004,29 @@ mod tests {
         );
         assert_eq!(p.feed("[Source loudness] dialogue_gating=level"), []);
         assert!(DeeParser::recognizes("[Source loudness] gating=level"));
+    }
+
+    #[test]
+    fn parses_program_range_and_true_peak() {
+        let mut p = DeeParser::unclamped();
+        let l = |s: &str| format!("[2026-11-13 17:55:25.295] [Source loudness] {s}");
+        assert_eq!(p.feed(&l("itu_loudness=-18.9")), [DeeEvent::Program(-189)]);
+        assert_eq!(p.feed(&l("loudness_range=13.1")), [DeeEvent::Range(131)]);
+        assert_eq!(p.feed(&l("sample_peak=-5.0")), []);
+        assert_eq!(p.feed(&l("true_peak=-4.9")), [DeeEvent::TruePeak(-49)]);
+        assert_eq!(p.feed(&l("true_peak=0.0")), [DeeEvent::TruePeak(0)]);
+        assert_eq!(p.feed(&l("dialogue_loudness=-19.7")), []);
+        assert!(DeeParser::recognizes(&l("true_peak=-4.9")));
+        assert!(DeeParser::recognizes(&l("loudness_range=1.0")));
+    }
+
+    #[test]
+    fn block_is_done_at_the_true_peak_or_the_next_step() {
+        assert!(!block_done(true, false, Stage::Measure));
+        assert!(block_done(true, true, Stage::Measure));
+        assert!(block_done(true, false, Stage::Encode));
+        assert!(!block_done(false, true, Stage::Measure));
+        assert!(!block_done(false, false, Stage::Encode));
     }
 
     #[test]
@@ -1745,10 +2043,10 @@ mod tests {
     }
 
     #[test]
-    fn measurement_is_only_taken_once() {
+    fn later_measurement_overwrites() {
         let mut p = DeeParser::new();
         assert_eq!(p.feed("measured_loudness=-20"), [DeeEvent::Measured(-20)]);
-        assert_eq!(p.feed("measured_loudness=-25"), []);
+        assert_eq!(p.feed("measured_loudness=-25"), [DeeEvent::Measured(-25)]);
     }
 
     #[test]
@@ -1795,6 +2093,59 @@ mod tests {
     }
 
     #[test]
+    fn split_atmos_output() {
+        let split = r#"{"presentations":[{"index":2,"format":"caf","channels":8,"files":["/t/c1_0.caf"]},{"index":3,"format":"damf","channels":16,"files":["/t/c1.atmos","/t/c1.atmos.metadata","/t/c1.atmos.audio","/t/c1_24000.caf","/t/c1_24000.atmos","/t/c1_24036.atmos.metadata"]}]}"#;
+        let found = atmos_split(split, "/t/c1.atmos").expect("split");
+        assert_eq!(found, AtmosSplit { unit: Some(24000) });
+        assert!(split_message(&found).contains("changes its format at 0:20 (access unit 24000)"));
+        assert!(!split_message(&AtmosSplit { unit: None }).contains(" at "));
+        let normal = r#"{"presentations":[{"index":3,"format":"damf","channels":16,"files":["/t/a.atmos","/t/a.atmos.metadata","/t/a.atmos.audio"]}]}"#;
+        assert_eq!(atmos_split(normal, "/t/a.atmos"), None);
+        // no presentation 3, or garbage
+        let other = r#"{"presentations":[{"index":2,"files":["/t/a.atmos","/t/x_5.caf"]}]}"#;
+        assert_eq!(atmos_split(other, "/t/a.atmos"), None);
+        assert_eq!(atmos_split("", "/t/a.atmos"), None);
+        // extra file without a readable access unit
+        let odd = r#"{"presentations":[{"index":3,"files":["/t/a.atmos","/t/other.caf"]}]}"#;
+        assert_eq!(
+            atmos_split(odd, "/t/a.atmos"),
+            Some(AtmosSplit { unit: None })
+        );
+    }
+
+    #[test]
+    fn split_with_underscores_in_the_name() {
+        let split = r#"{"presentations":[{"index":3,"files":["/t/film_2024.atmos","/t/film_2024.atmos.metadata","/t/film_2024.atmos.audio","/t/film_2024_36000.atmos","/t/film_2024_48000.caf"]}]}"#;
+        assert_eq!(
+            atmos_split(split, "/t/film_2024.atmos"),
+            Some(AtmosSplit { unit: Some(36000) })
+        );
+        let alone = r#"{"presentations":[{"index":3,"files":["/t/film_2024.atmos","/t/film_2024.atmos.metadata","/t/film_2024.atmos.audio"]}]}"#;
+        assert_eq!(atmos_split(alone, "/t/film_2024.atmos"), None);
+    }
+
+    #[test]
+    fn split_with_windows_paths() {
+        let split = r#"{"presentations":[{"index":3,"files":["C:\\t\\a.atmos","C:\\t\\a.atmos.metadata","C:\\t\\a.atmos.audio","C:\\t\\a_2400.atmos"]}]}"#;
+        assert_eq!(
+            atmos_split(split, "C:\\t/a.atmos"),
+            Some(AtmosSplit { unit: Some(2400) })
+        );
+        let files = decoded_files(split, "C:\\t");
+        assert_eq!(files.len(), 4);
+    }
+
+    #[test]
+    fn decoded_files_of_all_presentations_inside_temp() {
+        let result = r#"{"presentations":[{"index":2,"files":["/t/c1_0.caf"]},{"index":3,"files":["/t/c1.atmos","/t/c1_24000.atmos","/etc/passwd","/t/sub/x.atmos","/t/../x.atmos","/tx/y.atmos"]}]}"#;
+        assert_eq!(
+            decoded_files(result, "/t"),
+            ["/t/c1_0.caf", "/t/c1.atmos", "/t/c1_24000.atmos"]
+        );
+        assert!(decoded_files("garbage", "/t").is_empty());
+    }
+
+    #[test]
     fn atmos_presentation_in_the_result() {
         let ok =
             r#"{"version":"0.6.2","presentations":[{"index":3,"format":"damf","channels":12}]}"#;
@@ -1817,6 +2168,41 @@ mod tests {
         );
         assert_eq!(truehdd_error(r#"{"lvl":"INFO","msg":"fine"}"#), None);
         assert_eq!(truehdd_error("not json"), None);
+        let msg = Some("Write error: No such file or directory (os error 2)");
+        assert_eq!(
+            truehdd_error("Error: Write error: No such file or directory (os error 2)").as_deref(),
+            msg
+        );
+        assert_eq!(
+            truehdd_error(
+                "  \x1b[31mError: Write error: No such file or directory (os error 2)\x1b[0m "
+            )
+            .as_deref(),
+            msg
+        );
+        assert_eq!(truehdd_error("Error: "), None);
+        assert_eq!(
+            truehdd_error(
+                "[2026-11-13T16:55:49Z INFO  truehdd::cli::decode::handler] Creating DAMF header file: /a/b"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn truehdd_exit_phrases() {
+        assert_eq!(
+            truehdd_exit_phrase(Some(3)),
+            Some("couldn't read the input")
+        );
+        assert_eq!(
+            truehdd_exit_phrase(Some(4)),
+            Some("the input is not a valid TrueHD stream")
+        );
+        assert_eq!(truehdd_exit_phrase(Some(5)), Some("decoding failed"));
+        assert!(truehdd_exit_phrase(Some(6)).unwrap().contains("write"));
+        assert_eq!(truehdd_exit_phrase(Some(1)), None);
+        assert_eq!(truehdd_exit_phrase(None), None);
     }
 
     #[test]

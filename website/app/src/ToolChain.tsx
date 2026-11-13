@@ -216,7 +216,7 @@ export default function ToolChain() {
                 className="dg"
                 viewBox="0 0 1120 450"
                 role="img"
-                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD, AC4 with -dn and pipe = false) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
+                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD and pipe = false) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
               >
                 <defs>
                   <marker
@@ -1078,8 +1078,10 @@ export default function ToolChain() {
                   <p>
                     Turns track <code>TI</code> into the PCM DEE reads, in DEE's
                     channel order. By default (<code>pipe = true</code>) the raw
-                    samples go straight into DEE; TrueHD, AC4 <code>-dn</code>{" "}
-                    and <code>pipe = false</code> write an RF64 wav instead,
+                    samples go straight into DEE (AC4 <code>-dn</code> runs ffmpeg
+                    twice, once for the measurement and once for the encode);
+                    TrueHD and <code>pipe = false</code> write an RF64 wav
+                    instead,
                     which is skipped when it is already in TEMP from a run with{" "}
                     <code>-k</code>.
                   </p>
@@ -1378,8 +1380,9 @@ export default function ToolChain() {
                     <h4>In</h4>
                     <ul>
                       <li>
-                        the PCM pipe (<code>PIPE</code>), or{" "}
-                        <code>TEMP/NAME.wav</code> for AC4 <code>-dn</code>
+                        the PCM pipe (<code>PIPE</code>; for AC4 <code>-dn</code> ffmpeg
+                        feeds it before the encode too), or{" "}
+                        <code>TEMP/NAME.wav</code> with <code>pipe = false</code>
                       </li>
                     </ul>
                   </div>
@@ -1429,7 +1432,7 @@ export default function ToolChain() {
                     (<code>pcm_f32le</code> for a 32 bit plan). With{" "}
                     <code>pipe = false</code> they read{" "}
                     <code>--input-format wav -i TEMP/NAME.wav</code> instead, as
-                    TrueHD and AC4 <code>-dn</code> always do. With{" "}
+                    TrueHD always does. With{" "}
                     <code>-dn</code> (not AC4) the loudness option is{" "}
                     <code>--loudness-management skip:dialnorm=N</code> instead
                     of <code>measure_only</code>.
@@ -1503,7 +1506,7 @@ export default function ToolChain() {
                     {"\n                "}
                     <span className="m">
                       {
-                        "# -nps (--no-phase-shift) adds :surround_90deg_phase_shift=0 to -e, DD / DDP surround only"
+                        "# -nps (--no-phase-shift) adds :surround_90deg_phase_shift=0 to -e, DD / DDP surround (DDP Atmos: dee_shim --phase90 off)"
                       }
                     </span>
                   </pre>
@@ -1695,7 +1698,7 @@ export default function ToolChain() {
                     <h4>Needed for</h4>
                     <ul>
                       <li>ddp-atmos, thd-atmos</li>
-                      <li>TrueHD with DRC none</li>
+                      <li>TrueHD with DRC none, 96 kHz TrueHD (all DRC)</li>
                       <li>7.1 DDP standard profile, 7.0 DDP</li>
                     </ul>
                   </div>
@@ -1722,6 +1725,7 @@ export default function ToolChain() {
                     <span className="v">{"5.1|7.1/eac3|7.1"}</span>
                     {" --oamd-as-is on --bitrate "}
                     <span className="v">{"B"}</span>{" "}
+                    <span className="c">{"[--phase90 off]"}</span>{" "}
                     <span className="s">{"--"}</span>
                     {"\n         --progress 1 --overwrite 1 -e "}
                     <span className="v">{"ddpjoc|bluray"}</span>
@@ -1733,6 +1737,12 @@ export default function ToolChain() {
                     <span className="v">{"OUT"}</span>{" "}
                     <span className="c">
                       {"[--start S | --add-silence S:0]"}
+                    </span>
+                    {"\n         "}
+                    <span className="m">
+                      {
+                        "# -nps adds --phase90 off (dee_shim turns the filter off in the coded backbone)"
+                      }
                     </span>
                   </pre>
                   <h4>TrueHD Atmos</h4>
@@ -1756,18 +1766,26 @@ export default function ToolChain() {
                     {" --temp-dir "}
                     <span className="v">{"TEMP/dee-PID-INDEX"}</span>
                   </pre>
-                  <h4>TrueHD, DRC none</h4>
+                  <h4>TrueHD, DRC none · 96 kHz</h4>
                   <pre className="argv">
                     <span className="p">{"dee_shim"}</span>
                     {" dthd_encoder --binary "}
                     <span className="v">{"dee/dee_dthd_encoder"}</span>
-                    {" --drc none "}
+                    {" "}
+                    <span className="c">{"[--drc none]"}</span>{" "}
+                    <span className="c">{"[--apodise off]"}</span>{" "}
                     <span className="s">{"--"}</span>
+                    {"\n         "}
+                    <span className="m">
+                      {
+                        "# 96 kHz: --apodise off (DEE's apodising filter would change every sample); dee_shim is then used with any DRC"
+                      }
+                    </span>
                     {"\n         --progress 1 --overwrite 1 --presentation "}
                     <span className="v">{"2ch|6ch|8ch"}</span>
-                    {":drc_profile=film_light   "}
+                    {":drc_profile=film_light|P   "}
                     <span className="m">
-                      {"# placeholder, the shim's --drc wins"}
+                      {"# film_light is a placeholder with --drc none, the shim's --drc wins"}
                     </span>
                     {"\n         --input-format wav -i "}
                     <span className="v">{"TEMP/NAME.wav"}</span>

@@ -45,6 +45,18 @@ pub struct Level {
     pub gating: Option<Gating>,
     /// Share of speech in percent, rounded; `None` if DEE did not measure it.
     pub speech: Option<i64>,
+    /// Program loudness in tenths of LKFS (`-189` is -18.9).
+    pub program: Option<i64>,
+    /// Loudness range in tenths of LU.
+    pub lra: Option<i64>,
+    /// True peak in tenths of dBTP.
+    pub true_peak: Option<i64>,
+}
+
+/// `-18.9` for -189.
+pub fn tenths_text(value: i64) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    format!("{sign}{}.{}", value.abs() / 10, value.abs() % 10)
 }
 
 impl Level {
@@ -54,10 +66,14 @@ impl Level {
             db,
             gating: None,
             speech: None,
+            program: None,
+            lra: None,
+            true_peak: None,
         }
     }
 
-    /// `-33 dB, dialogue-gated, 16% speech`
+    /// `-20 dB, dialogue-gated, 37% speech, program -18.9 LKFS, LRA 13.1 LU,
+    /// true peak -4.9 dBTP`
     pub fn text(&self) -> String {
         let mut text = format!("{} dB", self.db);
         if let Some(gating) = self.gating {
@@ -65,6 +81,17 @@ impl Level {
         }
         if let Some(speech) = self.speech {
             text.push_str(&format!(", {speech}% speech"));
+        }
+        if let Some(program) = self.program
+            && self.gating == Some(Gating::Dialogue)
+        {
+            text.push_str(&format!(", program {} LKFS", tenths_text(program)));
+        }
+        if let Some(lra) = self.lra {
+            text.push_str(&format!(", LRA {} LU", tenths_text(lra)));
+        }
+        if let Some(peak) = self.true_peak {
+            text.push_str(&format!(", true peak {} dBTP", tenths_text(peak)));
         }
         text
     }
@@ -971,18 +998,49 @@ mod level_tests {
             db: -33,
             gating: Some(Gating::Dialogue),
             speech: Some(16),
+            ..Level::new(-33)
         };
         assert_eq!(level.text(), "-33 dB, dialogue-gated, 16% speech");
+        let full = Level {
+            db: -20,
+            gating: Some(Gating::Dialogue),
+            speech: Some(37),
+            program: Some(-189),
+            lra: Some(131),
+            true_peak: Some(-49),
+        };
+        assert_eq!(
+            full.text(),
+            "-20 dB, dialogue-gated, 37% speech, program -18.9 LKFS, LRA 13.1 LU, true peak -4.9 dBTP"
+        );
+        let level_gated = Level {
+            gating: Some(Gating::Level),
+            ..full
+        };
+        assert_eq!(
+            level_gated.text(),
+            "-20 dB, level-gated, 37% speech, LRA 13.1 LU, true peak -4.9 dBTP"
+        );
+        let only_peak = Level {
+            program: None,
+            lra: None,
+            true_peak: Some(0),
+            ..Level::new(-3)
+        };
+        assert_eq!(only_peak.text(), "-3 dB, true peak 0.0 dBTP");
+        assert_eq!(tenths_text(-5), "-0.5");
         let level = Level {
             db: -25,
             gating: Some(Gating::Level),
             speech: Some(6),
+            ..Level::new(-25)
         };
         assert_eq!(level.text(), "-25 dB, level-gated, 6% speech");
         let level = Level {
             db: -25,
             gating: Some(Gating::Level),
             speech: None,
+            ..Level::new(-25)
         };
         assert_eq!(level.text(), "-25 dB, level-gated");
         assert_eq!(Gating::parse("other"), None);

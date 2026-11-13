@@ -1,4 +1,4 @@
-deew 5.2.0
+deew 5.3.0
 
 USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
             [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
@@ -47,7 +47,8 @@ FLAGS:
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
   -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
-                            only works for DD/DDP, config: surround_phase_shift
+                            only works for DD/DDP/DDP Atmos, config:
+                            surround_phase_shift
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -57,7 +58,8 @@ FLAGS:
                             music_light / music_standard / speech
                             default: none (music_light for AC4)
                             specifies drc profile
-                            none uses dee_shim for TrueHD, not available for AC4
+                            none uses dee_shim for TrueHD, not available
+                            for AC4 (AC4 Atmos has it)
   -dn, --dialnorm DIALNORM  options: between -31 and 0 (in case of 0 DEE's
                             measurement will be used)
                             default: 0

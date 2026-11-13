@@ -1,5 +1,5 @@
 // What only works because of dee_shim (formats, DRC none, DDP modes and
-// bitrates). The GUI marks these values with a puzzle icon. Pure data and helpers, no DOM dependencies.
+// bitrates, -nps on ddp-atmos). The GUI marks these values with a puzzle icon. Pure data and helpers, no DOM dependencies.
 
 import type { DdpAtmosMode, DdpMode, Format } from "@/lib/deew-args"
 
@@ -35,6 +35,11 @@ export function isShimFormat(format: Format): boolean {
 /** `drc` is the value of the DRC select. */
 export function isShimDrc(format: Format, drc: string): boolean {
   return drc === "none" && SHIM_DRC_NONE_FORMATS.includes(format)
+}
+
+/** `-nps` goes through dee_shim (`--phase90 off`) for DDP Atmos; dd/ddp use the native DEE option. */
+export function isShimNoPhaseShift(format: Format): boolean {
+  return format === "ddp-atmos"
 }
 
 /** The bitrates of a 7.1 DDP output that need dee_shim: all of the standard profile, none of the Blu-ray one. */

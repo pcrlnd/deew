@@ -56,6 +56,11 @@ fn jobs_value(files: &[&str]) -> Value {
     json!({"type": "jobs", "files": files})
 }
 
+/// A value in tenths as a number with one decimal.
+fn tenths(value: i64) -> f64 {
+    value as f64 / 10.0
+}
+
 fn progress_value(job: usize, stage: Stage, percent: Option<f64>, level: Option<Level>) -> Value {
     json!({
         "type": "progress",
@@ -65,6 +70,9 @@ fn progress_value(job: usize, stage: Stage, percent: Option<f64>, level: Option<
         "db": level.map(|l| l.db),
         "gating": level.and_then(|l| l.gating).map(Gating::name),
         "speech": level.and_then(|l| l.speech),
+        "program": level.and_then(|l| l.program).map(tenths),
+        "lra": level.and_then(|l| l.lra).map(tenths),
+        "true_peak": level.and_then(|l| l.true_peak).map(tenths),
     })
 }
 
@@ -154,10 +162,22 @@ mod tests {
             db: -33,
             gating: Some(Gating::Dialogue),
             speech: Some(16),
+            ..Level::new(-33)
         };
         let v = progress_value(0, Stage::Measure, Some(1.0), Some(level));
         assert_eq!(v["gating"], "dialogue");
         assert_eq!(v["speech"], 16);
+        assert!(v["program"].is_null() && v["lra"].is_null() && v["true_peak"].is_null());
+        let level = Level {
+            program: Some(-189),
+            lra: Some(131),
+            true_peak: Some(-49),
+            ..level
+        };
+        let v = progress_value(0, Stage::Measure, Some(1.0), Some(level));
+        assert_eq!(v["program"], -18.9);
+        assert_eq!(v["lra"], 13.1);
+        assert_eq!(v["true_peak"], -4.9);
         let v = progress_value(0, Stage::Starting, None, None);
         assert_eq!(v["stage"], "starting");
         assert!(v["percent"].is_null() && v["db"].is_null());

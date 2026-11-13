@@ -15,6 +15,9 @@ import {
   disableLfeApplies,
   noPhaseShiftApplies,
   drcChoices,
+  drcChoiceDisabled,
+  defaultDrc,
+  supportsDrcNone,
   isAtmos,
   supportsDialnorm,
   FORMAT_LABELS,
@@ -207,7 +210,7 @@ describe("validate", () => {
 })
 
 describe("DRC none", () => {
-  it("is offered last, except for AC4", () => {
+  it("is always listed first, greyed out for AC4 only", () => {
     for (const f of [
       "dd",
       "ddp",
@@ -215,13 +218,36 @@ describe("DRC none", () => {
       "thd",
       "thd-atmos",
       "aac",
+      "ac4",
+      "ac4-atmos",
     ] as const) {
-      expect(drcChoices(f)[0]).toBe("none")
+      expect(drcChoices()).toEqual([...DRC_VALUES])
+      expect(drcChoices()[0]).toBe("none")
+      expect(drcChoiceDisabled(f, "none")).toBe(f === "ac4")
+      expect(supportsDrcNone(f)).toBe(f !== "ac4")
+      expect(drcChoiceDisabled(f, "speech")).toBe(false)
     }
-    for (const f of ["ac4", "ac4-atmos"] as const) {
-      expect(drcChoices(f)).not.toContain("none")
-      expect(drcChoices(f)).toHaveLength(5)
-    }
+  })
+
+  it("is emitted when it differs from the CLI default", () => {
+    expect(defaultDrc("ac4")).toBe("music_light")
+    expect(defaultDrc("ac4-atmos")).toBe("none")
+    expect(defaultDrc("ddp")).toBe("none")
+    const a = (
+      format: Parameters<typeof defaultDrc>[0],
+      drc: (typeof DRC_VALUES)[number]
+    ) => buildArgs(opts({ format, drc }))
+    expect(a("ac4-atmos", "none")).toEqual(["-f", "ac4-atmos"])
+    expect(a("ac4-atmos", "music_light")).toEqual([
+      "-f",
+      "ac4-atmos",
+      "-r",
+      "music_light",
+    ])
+    expect(a("ac4", "music_light")).toEqual(["-f", "ac4"])
+    expect(a("ddp", "none")).toEqual([])
+    expect(a("ddp", "film_light")).toEqual(["-r", "film_light"])
+    expect(a("aac", "film_light")).not.toContain("-r")
   })
 
   it("is the default; other profiles are passed with -r", () => {
@@ -244,21 +270,16 @@ describe("DRC none", () => {
     ])
   })
 
-  it("makes AC4 get -r music_light from the default state", () => {
+  it("makes AC4 use music_light without passing -r", () => {
     const o = setFormat(opts({ inputs: ["a.mkv"] }), "ac4")
     expect(o.drc).toBe("music_light")
-    expect(buildArgs(o)).toEqual([
-      "-i",
-      "a.mkv",
-      "-f",
-      "ac4",
-      "-r",
-      "music_light",
-    ])
+    expect(buildArgs(o)).toEqual(["-i", "a.mkv", "-f", "ac4"])
   })
 
   it("is reported for AC4 and reset by setFormat", () => {
-    for (const format of ["ac4", "ac4-atmos"] as const) {
+    expect(validate(opts({ format: "ac4-atmos", drc: "none" }))).toEqual([])
+    expect(setFormat(opts({ drc: "none" }), "ac4-atmos").drc).toBe("none")
+    for (const format of ["ac4"] as const) {
       expect(validate(opts({ format, drc: "none" }))).toEqual([
         "DRC none is not supported for AC4.",
       ])
@@ -348,7 +369,7 @@ describe("thd-atmos", () => {
     expect(relevantDownmixes("thd-atmos", 8)).toEqual(["none"])
     expect(supportsDialnorm("thd-atmos")).toBe(true)
     expect(isAtmos("thd-atmos")).toBe(true)
-    expect(drcChoices("thd-atmos")).toEqual([...DRC_VALUES])
+    expect(drcChoices()).toEqual([...DRC_VALUES])
   })
 
   it("needs a TrueHD input", () => {
@@ -593,9 +614,13 @@ describe("-nps (no surround phase shift)", () => {
     expect(noPhaseShiftApplies("ddp")).toBe(true)
   })
 
+  it("is passed for DDP Atmos", () => {
+    expect(noPhaseShiftApplies("ddp-atmos")).toBe(true)
+    expect(nps("ddp-atmos")).toContain("-nps")
+  })
+
   it("is not passed for other formats, so the CLI never fails on it", () => {
     for (const format of [
-      "ddp-atmos",
       "thd",
       "thd-atmos",
       "ac4",

@@ -803,12 +803,15 @@ fn config_can_turn_the_phase_shift_off() {
 }
 
 #[test]
-fn no_phase_shift_only_works_for_dd_and_ddp() {
+fn no_phase_shift_only_works_for_dd_ddp_and_ddp_atmos() {
     let env = env_or_skip!();
     env.media("fv.wav", "5.1", 48000, "pcm_s24le");
-    for format in ["thd", "ac4", "aac", "ddp-atmos", "thd-atmos", "ac4-atmos"] {
+    for format in ["thd", "ac4", "aac", "thd-atmos", "ac4-atmos"] {
         let out = env.deew(&["-i", "fv.wav", "-f", format, "-nps"]);
-        assert_error(&out, "-nps/--no-phase-shift only works for DD and DDP.");
+        assert_error(
+            &out,
+            "-nps/--no-phase-shift only works for DD, DDP and DDP Atmos.",
+        );
     }
     // -mo ignores the format rules
     ok(&env.deew(&["-i", "fv.wav", "-mo", "-f", "thd", "-nps"]));
@@ -1024,7 +1027,7 @@ fn ac4_input_rules() {
     env.media("in.wav", "5.1", 48000, "pcm_s24le");
     assert_error(
         &env.deew(&["-i", "in.wav", "-f", "ac4", "-r", "none"]),
-        "DRC none is not supported for AC4 encoding.",
+        "DRC none is not supported for AC4 encoding (AC4 Atmos supports it).",
     );
     assert_error(
         &env.deew(&["-i", "in.wav", "-f", "ac4", "-dm", "1"]),
@@ -1622,7 +1625,7 @@ fn ac4_atmos() {
     let args = env.run("dee_ac4ajoc_encoder");
     assert_eq!(opt(&args, "--level"), "3");
     assert_eq!(opt(&args, "--data-rate"), "448");
-    assert_eq!(opt(&args, "-e"), "drc_profile=music_light");
+    assert_eq!(opt(&args, "-e"), "drc_profile=none");
     // 100 ms minus the 2048 sample delay of the AC-4 encoder
     assert_eq!(opt(&args, "--add-silence"), "0.057333:0");
     assert!(!has(&args, "--temp-dir") && !has(&args, "--input-format"));
@@ -3570,7 +3573,7 @@ fn piped_encoders_and_measuring() {
 }
 
 #[test]
-fn piped_jobs_that_need_the_wav_keep_it() {
+fn truehd_and_atmos_keep_the_wav_and_ac4_dialnorm_pipes() {
     let env = env_or_skip!();
     env.set_pipe(true);
     env.media("in.wav", "5.1", 48000, "pcm_s24le");
@@ -3580,7 +3583,18 @@ fn piped_jobs_that_need_the_wav_keep_it() {
     assert_eq!(opt(&args, "--input-format"), "wav");
     assert!(env.temp().join("in.wav").exists());
     fs::remove_file(env.temp().join("in.wav")).unwrap();
-    // AC4 with a custom dialnorm reads the audio twice
+    // AC4 with a custom dialnorm: ffmpeg feeds the measurement and the
+    // encode, no wav
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4", "-dn", "-20", "-k"]));
+    for tool in ["dee_measure_loudness", "dee_ac4_encoder"] {
+        let args = env.run(tool);
+        assert!(opt(&args, "--input-format").starts_with("pcm_"), "{tool}");
+        assert_eq!(opt(&args, "-i"), "/dev/stdin", "{tool}");
+    }
+    assert!(!env.temp().join("in.wav").exists());
+    // pipe = false: both read the wav
+    let config = fs::read_to_string(env.config()).unwrap();
+    fs::write(env.config(), config.replace("pipe = true", "pipe = false")).unwrap();
     ok(&env.deew(&["-i", "in.wav", "-f", "ac4", "-dn", "-20", "-k"]));
     for tool in ["dee_measure_loudness", "dee_ac4_encoder"] {
         let args = env.run(tool);
@@ -3592,6 +3606,7 @@ fn piped_jobs_that_need_the_wav_keep_it() {
         );
     }
     assert!(env.temp().join("in.wav").exists());
+    fs::write(env.config(), config).unwrap();
     // the Atmos formats are unchanged
     env.truehd("atmos.thd");
     ok(&env.deew(&["-i", "atmos.thd", "-f", "ac4-atmos"]));
