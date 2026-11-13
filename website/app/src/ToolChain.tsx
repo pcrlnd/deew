@@ -34,11 +34,15 @@ import "./tool-chain/tool-chain.css"
 
 const ICON_SIZE = 14
 const ICON_GAP = 5
+// Must match the font-size of `.diagram .t-name` in tool-chain/tool-chain.css.
+const NAME_FONT_SIZE = 13
 
 /**
  * A node of the overview diagram: the block's own shapes, its name and a
- * lucide icon placed in front of the name. Once fonts are loaded the name is
- * measured and icon + name are centred together on the original x.
+ * lucide icon placed in front of the name. Icon + name are centred together
+ * on the original x. The first render uses an estimated name width (IBM Plex
+ * Mono glyphs are exactly 0.6em wide), so the icon shows up immediately; once
+ * fonts are loaded the name is measured and the position refined.
  */
 function DiagramNode({
   kind,
@@ -58,7 +62,10 @@ function DiagramNode({
   children?: ReactNode
 }) {
   const nameRef = useRef<SVGTextElement>(null)
-  const [start, setStart] = useState<number | null>(null)
+  const estimatedWidth = name.length * NAME_FONT_SIZE * 0.6
+  const [start, setStart] = useState(
+    x - (ICON_SIZE + ICON_GAP + estimatedWidth) / 2
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -66,7 +73,9 @@ function DiagramNode({
       const el = nameRef.current
       if (cancelled || !el) return
       const width = el.getComputedTextLength()
-      setStart(x - (ICON_SIZE + ICON_GAP + width) / 2)
+      const measured = x - (ICON_SIZE + ICON_GAP + width) / 2
+      // Synthetic bold can be slightly wider (Firefox); ignore tiny changes.
+      setStart((cur) => (Math.abs(measured - cur) > 0.5 ? measured : cur))
     }
     if (document.fonts) void document.fonts.ready.then(place)
     else place()
@@ -87,22 +96,20 @@ function DiagramNode({
       <text
         ref={nameRef}
         className={textClass + " t-name"}
-        x={start === null ? x : start + ICON_SIZE + ICON_GAP}
+        x={start + ICON_SIZE + ICON_GAP}
         y={y}
-        textAnchor={start === null ? "middle" : "start"}
+        textAnchor="start"
       >
         {name}
       </text>
       {subs}
-      {start !== null && (
-        <Icon
-          className="ico"
-          x={start}
-          y={y - ICON_SIZE + 2}
-          width={ICON_SIZE}
-          height={ICON_SIZE}
-        />
-      )}
+      <Icon
+        className="ico"
+        x={start}
+        y={y - ICON_SIZE + 2}
+        width={ICON_SIZE}
+        height={ICON_SIZE}
+      />
     </g>
   )
 }

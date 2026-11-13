@@ -44,6 +44,46 @@ function cleanAssets(): Plugin {
   }
 }
 
+// Build only: preload the two Latin fonts in both pages. `font-display: block`
+// hides text until its font arrives, and the preload starts the download
+// before the CSS is parsed. Throws if a font is missing (e.g. renamed).
+function preloadFonts(): Plugin {
+  const wanted = [
+    "ibm-plex-sans-latin-wght-normal",
+    "ibm-plex-mono-latin-400-normal",
+  ]
+  return {
+    name: "preload-fonts",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, ctx) {
+        const files = Object.values(ctx.bundle ?? {})
+          .filter((o) => o.type === "asset")
+          .map((o) => o.fileName)
+        return wanted.map((prefix) => {
+          const file = files.find((f) => {
+            const base = f.split("/").pop() ?? ""
+            return base.startsWith(prefix + "-") && base.endsWith(".woff2")
+          })
+          if (!file) throw new Error(`preload-fonts: no emitted font ${prefix}`)
+          return {
+            tag: "link",
+            attrs: {
+              rel: "preload",
+              as: "font",
+              type: "font/woff2",
+              crossorigin: "",
+              href: "./" + file,
+            },
+            injectTo: "head" as const,
+          }
+        })
+      },
+    },
+  }
+}
+
 // One multi-page build: index.html and tool-chain.html share hashed chunks in
 // ../assets/ (React, shared components, CSS, fonts).
 // https://vite.dev/config/
@@ -51,7 +91,13 @@ export default defineConfig({
   base: "./",
   define: { __DEEW_VERSION__: JSON.stringify(deewVersion()) },
   publicDir: "public",
-  plugins: [react(), tailwindcss(), devCleanUrls(), cleanAssets()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    devCleanUrls(),
+    cleanAssets(),
+    preloadFonts(),
+  ],
   resolve: {
     alias: {
       "@": resolve(import.meta.dirname, "./src"),
