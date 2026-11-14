@@ -1384,6 +1384,10 @@ export default function ToolChain() {
                         feeds it before the encode too), or{" "}
                         <code>TEMP/NAME.wav</code> with <code>pipe = false</code>
                       </li>
+                      <li>
+                        <code>TEMP/NAME.atmos</code> of a TrueHD Atmos source with{" "}
+                        <code>-mo</code> (<code>--input-format atmos_mezz</code>)
+                      </li>
                     </ul>
                   </div>
                   <div className="port">
@@ -1596,20 +1600,16 @@ export default function ToolChain() {
                   </pre>
                   <h4>-mo, TrueHD Atmos</h4>
                   <pre className="argv">
-                    <span className="p">{"dee_ddpjoc_encoder"}</span>
+                    <span className="p">{"dee_measure_loudness"}</span>
                     {
                       " --progress 1 --overwrite 1 --input-format atmos_mezz -i "
                     }
                     <span className="v">{"TEMP/NAME.atmos"}</span>
-                    {"\n                    -o "}
-                    <span className="v">
-                      {"TEMP/dee-PID-INDEX/measure.ec3"}
-                    </span>
-                    {
-                      " -e drc_profile=none --data-rate 1024\n                    --loudness-management measure_only    "
-                    }
+                    {"\n"}
                     <span className="m">
-                      {"# killed once the loudness is known"}
+                      {
+                        "# exits on its own; deew shows the multichannel block, not the binaural one"
+                      }
                     </span>
                   </pre>
                   <h4>-mo, 7.1</h4>

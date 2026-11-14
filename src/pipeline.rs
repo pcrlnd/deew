@@ -151,7 +151,7 @@ struct Programs {
     dee: String,
     /// `dee_measure_loudness`, for `-mo` and a custom dialnorm.
     measure: Option<String>,
-    /// `dee_ddpjoc_encoder`, measures the TrueHD Atmos sources of `-mo`.
+    /// `dee_measure_loudness`, measures the decoded TrueHD Atmos sources of `-mo`.
     measure_atmos: Option<String>,
     truehdd: Option<String>,
     shim: Option<Shim>,
@@ -407,7 +407,7 @@ fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpe
             || (format == Format::Thd && ctx.validated.drc == "none"));
     let settings = if ctx.args.measure_only {
         let meter = if atmos_source(probe) {
-            "DDP Atmos encoder (dee_ddpjoc_encoder)"
+            "dee_measure_loudness (Atmos master)"
         } else if measure_by_encoder(true, ctx.info.channels) {
             "DDP encoder (dee_ddp_encoder)"
         } else {
@@ -639,12 +639,11 @@ fn build_job(
     let measuring = measure_only || via_manifest;
     let skip_dialnorm =
         (dialnorm != 0 && !measure_only && !format.dialnorm_via_manifest()).then_some(dialnorm);
-    let by_encoder = measure_atmos || measure_by_encoder(measure_only, ctx.info.channels);
+    let by_encoder = !measure_atmos && measure_by_encoder(measure_only, ctx.info.channels);
     let measure_args = match (&ctx.programs.measure, measuring) {
         _ if measure_atmos => {
-            let throwaway = join(&dee_temp, "measure.ec3");
             let tool = ctx.programs.measure_atmos.as_deref().unwrap_or_default();
-            measure_atmos_args(tool, &names.atmos, &throwaway)
+            measure_atmos_args(tool, &names.atmos)
         }
         (Some(tool), true) if by_encoder => {
             let throwaway = join(&dee_temp, "measure.ec3");
@@ -695,7 +694,7 @@ fn build_job(
     } else {
         vec![names.wav.clone()]
     };
-    if !measure_args.is_empty() && !by_encoder {
+    if !measure_args.is_empty() && !by_encoder && !measure_atmos {
         temp_files.push(names.loudness.clone());
     }
     if matches!(format, Format::Ac4 | Format::Ac4Atmos) && !encode_args.is_empty() {
@@ -958,7 +957,7 @@ pub fn run(args: Args, config: Config, paths: Paths) {
     if args.measure_only {
         let atmos = probes.iter().any(atmos_source);
         if atmos {
-            let tool = tools::require_dee_tool("dee_ddpjoc_encoder", &cwd, &paths.exe_dir);
+            let tool = tools::require_dee_tool("dee_measure_loudness", &cwd, &paths.exe_dir);
             programs.dee = tool.clone();
             programs.measure_atmos = Some(tool);
             programs.truehdd = Some(tools::require_truehdd(&paths.exe_dir, &cwd));
@@ -1168,7 +1167,7 @@ mod tests {
             ffprobe: "ffprobe".into(),
             dee: "dee_x".into(),
             measure: Some("dee_measure_loudness".into()),
-            measure_atmos: Some("dee_ddpjoc_encoder".into()),
+            measure_atmos: Some("dee_measure_loudness".into()),
             truehdd: Some("truehdd".into()),
             shim: profile.map(|_| crate::tools::Shim {
                 run: "dee_shim".into(),
@@ -1234,7 +1233,7 @@ mod tests {
     }
 
     #[test]
-    fn measuring_an_atmos_source_decodes_and_measures_like_ddp_atmos() {
+    fn measuring_an_atmos_source_decodes_and_measures_the_master() {
         let probe = test_probe(8, true);
         for format in ["ddp", "ddp-atmos", "thd"] {
             let job = measure_job("/in/a.mkv", &probe, |a| a.format = format.into());
@@ -1246,16 +1245,13 @@ mod tests {
             assert!(job.decode_args.contains(&join("/t", "a")));
             assert_eq!(
                 job.measure_args,
-                measure_atmos_args(
-                    "dee_ddpjoc_encoder",
-                    &join("/t", "a.atmos"),
-                    &join(&job.dee_temp, "measure.ec3")
-                )
+                measure_atmos_args("dee_measure_loudness", &join("/t", "a.atmos"))
             );
             assert!(!job.measure_args.contains(&"--temp-dir".to_string()));
             assert!(job.encode_args.is_empty());
-            assert!(job.stop_when_measured && job.measure_only);
+            assert!(!job.stop_when_measured && job.measure_only);
             assert!(job.temp_files.contains(&join("/t", "a.atmos")));
+            assert!(!job.temp_files.contains(&job.loudness_path));
         }
         // a raw stream goes to truehdd directly
         let mut raw = probe.clone();

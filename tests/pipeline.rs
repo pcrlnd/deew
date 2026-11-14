@@ -50,10 +50,11 @@ if [ "$1" = "--help" ]; then
   exit 0
 fi
 { echo "--- $tool"; for a in "$@"; do printf '%s\n' "$a"; done; } >> "$dir/$tool.args"
-input=""; output=""; tempdir=""; omanifest=""; imanifest=""
+input=""; informat=""; output=""; tempdir=""; omanifest=""; imanifest=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -i) input="$2"; shift ;;
+    --input-format) informat="$2"; shift ;;
     -o) output="$2"; shift ;;
     --temp-dir) tempdir="$2"; shift ;;
     --output-manifest) omanifest="$2"; shift ;;
@@ -95,6 +96,26 @@ if [ "$FAKE_FAIL_TOOL" = "$tool" ]; then fail "$FAKE_ERROR"; fi
 if [ -n "$FAKE_WARN" ]; then
   echo "[2026-11-01 22:11:54.300] WARNING: $FAKE_WARN"
   echo "[2026-11-01 22:11:54.300] WARNING: $FAKE_WARN"
+fi
+if [ "$tool" = dee_measure_loudness ] && [ "$informat" = atmos_mezz ]; then
+  # an Atmos master: the binaural block first, then the multichannel one
+  echo "[2026-11-01 22:03:14.420] Step 1/1 : Loudness Measurement"
+  printf '[>          ] 0 %%\r[==========>] 100 %%\r\n'
+  for kind in binaural multichannel; do
+    loud=-30.0; itu=-21.9; range=9.8; peak=-8.9
+    if [ "$kind" = multichannel ]; then loud=${FAKE_LOUDNESS:--23.4}; itu=-24.3; range=5.6; peak=-15.3; fi
+    echo "[2026-11-01 22:03:14.570] Atmos loudness type: $kind"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] measured_loudness=$loud"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] gating=dialogue"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] speech_percentage=16.1"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] dialogue_loudness=$loud"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] itu_loudness=$itu"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] loudness_range=$range"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] sample_peak=-15.4"
+    echo "[2026-11-01 22:03:14.570] [Source loudness] true_peak=$peak"
+  done
+  echo "Exit code: 0"
+  exit 0
 fi
 if [ "$tool" = dee_measure_loudness ]; then
   echo "[2026-11-01 22:03:14.420] Step 1/1 : Loudness Measurement"
@@ -1349,7 +1370,7 @@ fn missing_dee_tool_is_named() {
 }
 
 #[test]
-fn measure_only_of_an_atmos_source_measures_it_as_atmos() {
+fn measure_only_of_an_atmos_source_measures_the_master() {
     let env = env_or_skip!();
     env.truehd("atmos.thd");
     // the format and the downmix do not matter
@@ -1363,12 +1384,11 @@ fn measure_only_of_an_atmos_source_measures_it_as_atmos() {
     {
         let mut args = vec!["-i", "atmos.thd", "-mo", "-la"];
         args.extend(extra);
-        // the fake encoder would sleep for two minutes after the loudness
-        let out = env.deew_env(&args, &[("FAKE_HANG_AFTER_BLOCK", "1")]);
+        let out = env.deew(&args);
         ok(&out);
         let text = stdout(&out);
         assert!(
-            text.contains("finished: atmos.thd (-23 dB, dialogue-gated, 16% speech) - took "),
+            text.contains("finished: atmos.thd (-23 dB, dialogue-gated, 16% speech, program -24.3 LKFS, LRA 5.6 LU, true peak -15.3 dBTP) - took "),
             "{index}: {text}"
         );
         let truehdd = env.truehdd_run().unwrap();
@@ -1376,18 +1396,24 @@ fn measure_only_of_an_atmos_source_measures_it_as_atmos() {
             opt(&truehdd, "--output-path"),
             env.temp().join("atmos").to_str().unwrap()
         );
-        let args = env.run("dee_ddpjoc_encoder");
+        let args = env.run("dee_measure_loudness");
         assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
         assert_eq!(
             opt(&args, "-i"),
             env.temp().join("atmos.atmos").to_str().unwrap()
         );
-        assert_eq!(opt(&args, "-e"), "drc_profile=none");
-        assert_eq!(opt(&args, "--data-rate"), "1024");
-        assert_eq!(opt(&args, "--loudness-management"), "measure_only");
-        assert!(!has(&args, "--temp-dir"));
+        for flag in [
+            "-o",
+            "-e",
+            "--data-rate",
+            "--loudness-management",
+            "--temp-dir",
+            "--output-manifest",
+        ] {
+            assert!(!has(&args, flag), "{flag}");
+        }
         assert!(env.dshim_run().is_none());
-        assert!(env.last_run("dee_measure_loudness").is_none());
+        assert!(env.last_run("dee_ddpjoc_encoder").is_none());
         assert!(env.last_run("dee_ddp_encoder").is_none());
         assert!(!env.out().join("atmos.ec3").exists());
         assert!(temp_is_empty(&env));

@@ -208,6 +208,8 @@ static DEE_RANGE: LazyLock<Regex> = LazyLock::new(|| {
 static DEE_TRUE_PEAK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[^A-Za-z0-9_])true_peak=(-?[0-9]+(?:\.[0-9]+)?)").expect("valid regex")
 });
+static DEE_ATMOS_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"Atmos loudness type: ([A-Za-z_]+)").expect("valid regex"));
 static DEE_ERROR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"ERROR: (.*)").expect("valid regex"));
 static DEE_WARNING: LazyLock<Regex> =
@@ -273,6 +275,9 @@ pub struct DeeParser {
     unclamped: bool,
     /// DEE repeats errors and warnings at the end.
     seen: Vec<String>,
+    /// Inside the binaural block of an Atmos measurement: its loudness is not
+    /// reported, only the multichannel one is.
+    skip_loudness: bool,
 }
 
 impl DeeParser {
@@ -299,6 +304,9 @@ impl DeeParser {
 
     pub fn feed(&mut self, line: &str) -> Vec<DeeEvent> {
         let mut events = Vec::new();
+        if let Some(c) = DEE_ATMOS_TYPE.captures(line) {
+            self.skip_loudness = c[1].eq_ignore_ascii_case("binaural");
+        }
         if let Some(c) = DEE_STEP.captures(line) {
             let name = c[3].to_lowercase();
             if name.contains("measurement") || name.contains("preprocessing") {
@@ -307,10 +315,11 @@ impl DeeParser {
                 events.push(DeeEvent::Step(Stage::Encode));
             }
         }
-        if let Some(value) = DEE_LOUDNESS
-            .captures(line)
-            .and_then(|c| c[1].parse::<f64>().ok())
-            .filter(|v| v.is_finite())
+        if !self.skip_loudness
+            && let Some(value) = DEE_LOUDNESS
+                .captures(line)
+                .and_then(|c| c[1].parse::<f64>().ok())
+                .filter(|v| v.is_finite())
         {
             let rounded = value.round_ties_even() as i64;
             events.push(DeeEvent::Measured(if self.unclamped {
@@ -319,23 +328,32 @@ impl DeeParser {
                 clamp_i(rounded, -31, 0)
             }));
         }
-        if let Some(gating) = DEE_GATING.captures(line).and_then(|c| Gating::parse(&c[1])) {
+        if !self.skip_loudness
+            && let Some(gating) = DEE_GATING.captures(line).and_then(|c| Gating::parse(&c[1]))
+        {
             events.push(DeeEvent::Gating(gating));
         }
-        if let Some(value) = DEE_SPEECH
-            .captures(line)
-            .and_then(|c| c[1].parse::<f64>().ok())
-            .filter(|v| v.is_finite())
+        if !self.skip_loudness
+            && let Some(value) = DEE_SPEECH
+                .captures(line)
+                .and_then(|c| c[1].parse::<f64>().ok())
+                .filter(|v| v.is_finite())
         {
             events.push(DeeEvent::Speech(value.round() as i64));
         }
-        if let Some(value) = tenths(&DEE_ITU, line) {
+        if !self.skip_loudness
+            && let Some(value) = tenths(&DEE_ITU, line)
+        {
             events.push(DeeEvent::Program(value));
         }
-        if let Some(value) = tenths(&DEE_RANGE, line) {
+        if !self.skip_loudness
+            && let Some(value) = tenths(&DEE_RANGE, line)
+        {
             events.push(DeeEvent::Range(value));
         }
-        if let Some(value) = tenths(&DEE_TRUE_PEAK, line) {
+        if !self.skip_loudness
+            && let Some(value) = tenths(&DEE_TRUE_PEAK, line)
+        {
             events.push(DeeEvent::TruePeak(value));
         }
         if let Some(c) = DEE_PROGRESS.captures(line)
@@ -374,6 +392,7 @@ impl DeeParser {
     /// error or warning output, whatever it makes of it.
     pub fn recognizes(line: &str) -> bool {
         DEE_STEP.is_match(line)
+            || DEE_ATMOS_TYPE.is_match(line)
             || DEE_LOUDNESS.is_match(line)
             || DEE_GATING.is_match(line)
             || DEE_SPEECH.is_match(line)
@@ -1894,6 +1913,47 @@ mod tests {
 
     fn events(parser: &mut DeeParser, lines: &[&str]) -> Vec<DeeEvent> {
         lines.iter().flat_map(|l| parser.feed(l)).collect()
+    }
+
+    #[test]
+    fn dee_atmos_loudness_ignores_the_binaural_block() {
+        let block = |kind: &str, itu: &str, range: &str, peak: &str| -> Vec<String> {
+            vec![
+                format!("[2026-11-01 22:01:25.000] Atmos loudness type: {kind}"),
+                "[2026-11-01 22:01:25.000] [Source loudness] measured_loudness=-33.0".into(),
+                "[2026-11-01 22:01:25.000] [Source loudness] gating=dialogue".into(),
+                "[2026-11-01 22:01:25.000] [Source loudness] speech_percentage=16.1".into(),
+                "[2026-11-01 22:01:25.000] [Source loudness] dialogue_loudness=-33.0".into(),
+                format!("[2026-11-01 22:01:25.000] [Source loudness] itu_loudness={itu}"),
+                format!("[2026-11-01 22:01:25.000] [Source loudness] loudness_range={range}"),
+                "[2026-11-01 22:01:25.000] [Source loudness] sample_peak=-8.9".into(),
+                format!("[2026-11-01 22:01:25.000] [Source loudness] true_peak={peak}"),
+            ]
+        };
+        let feed = |lines: Vec<String>| {
+            let mut p = DeeParser::unclamped();
+            lines.iter().flat_map(|l| p.feed(l)).collect::<Vec<_>>()
+        };
+        assert!(DeeParser::recognizes("Atmos loudness type: binaural"));
+        let mut lines = vec!["[x] Step 1/1 : Loudness Measurement".to_string()];
+        lines.extend(block("binaural", "-21.9", "9.8", "-8.9"));
+        lines.extend(block("multichannel", "-24.3", "5.6", "-15.3"));
+        let got = feed(lines);
+        assert_eq!(
+            got,
+            vec![
+                DeeEvent::Step(Stage::Measure),
+                DeeEvent::Measured(-33),
+                DeeEvent::Gating(Gating::Dialogue),
+                DeeEvent::Speech(16),
+                DeeEvent::Program(-243),
+                DeeEvent::Range(56),
+                DeeEvent::TruePeak(-153),
+            ]
+        );
+        let got = feed(block("binaural", "-21.9", "9.8", "-8.9"));
+        assert!(!got.iter().any(|e| matches!(e, DeeEvent::Measured(_))));
+        assert!(got.is_empty());
     }
 
     #[test]

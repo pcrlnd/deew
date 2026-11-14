@@ -1,3 +1,8 @@
+# deew 5.3.1:
+- `-mo` measures a TrueHD Atmos source with `dee_measure_loudness`
+  (the multichannel loudness of the Atmos master) instead of stopping
+  DEE's DDP Atmos encoder once it has measured
+
 # deew 5.3.0:
 - `-gt` downloads the glibc (gnu) build of truehdd on Linux instead of
   the musl one (DEE needs glibc anyway)

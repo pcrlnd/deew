@@ -725,10 +725,10 @@ pub fn measure_with_encoder_args(
     ])
 }
 
-/// `-mo` of a TrueHD Atmos source: the DDP Atmos encoder (`dee_ddpjoc_encoder`,
-/// it has no `--temp-dir`) on the decoded `.atmos` with `measure_only`. The
-/// caller stops it once it has printed the loudness, `output` is a throwaway file.
-pub fn measure_atmos_args(tool: &str, atmos: &str, output: &str) -> Vec<String> {
+/// `-mo` of a TrueHD Atmos source: `dee_measure_loudness` on the decoded
+/// `.atmos` (`--input-format atmos_mezz`). It prints the binaural and the
+/// multichannel loudness, exits on its own and writes no file.
+pub fn measure_atmos_args(tool: &str, atmos: &str) -> Vec<String> {
     strings(&[
         tool,
         "--progress",
@@ -739,14 +739,6 @@ pub fn measure_atmos_args(tool: &str, atmos: &str, output: &str) -> Vec<String> 
         "atmos_mezz",
         "-i",
         atmos,
-        "-o",
-        output,
-        "-e",
-        "drc_profile=none",
-        "--data-rate",
-        "1024",
-        "--loudness-management",
-        "measure_only",
     ])
 }
 
@@ -1999,12 +1991,12 @@ mod tests {
     }
 
     #[test]
-    fn measuring_atmos_with_the_encoder() {
-        let args = measure_atmos_args("/dee/dee_ddpjoc_encoder", "/t/a.atmos", "/t/d/measure.ec3");
+    fn measuring_atmos_with_the_meter() {
+        let args = measure_atmos_args("/dee/dee_measure_loudness", "/t/a.atmos");
         assert_eq!(
             args,
             v(&[
-                "/dee/dee_ddpjoc_encoder",
+                "/dee/dee_measure_loudness",
                 "--progress",
                 "1",
                 "--overwrite",
@@ -2013,14 +2005,6 @@ mod tests {
                 "atmos_mezz",
                 "-i",
                 "/t/a.atmos",
-                "-o",
-                "/t/d/measure.ec3",
-                "-e",
-                "drc_profile=none",
-                "--data-rate",
-                "1024",
-                "--loudness-management",
-                "measure_only",
             ])
         );
         assert!(!args.contains(&"--temp-dir".to_string()));
