@@ -236,6 +236,9 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     guiSettings()
       .then((settings) => {
         if (cancelled) return
+        if (settings.useSystemFont) {
+          document.documentElement.dataset.font = "system"
+        }
         setDefaultOutput(settings.defaultOutput)
         setDefaultModes(
           parseDefaultModes(

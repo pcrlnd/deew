@@ -101,7 +101,16 @@ section, and can also be edited by hand:
 [gui]
     progress = 'cli' # or 'native'
     output = '' # output directory (-o), empty: home folder
+    scaling = '100%' # window zoom of deew-gui, '80%' to '150%'
+    use_system_font = false # true: the system's font instead of IBM Plex Sans
 ```
+
+`scaling` zooms the `deew-gui` window (80-150%, default 100%); it is applied at
+startup, so restart the app after changing it. `deew-web` ignores it, use the
+browser's own zoom (Ctrl +/-). `use_system_font = true` makes the interface text
+use the operating system's font instead of the bundled IBM Plex Sans (both
+`deew-gui` and `deew-web`; the terminal keeps its monospace font). The GUI never
+changes these two keys, edit them by hand.
 
 The Output directory field is saved there too (`output`) and loaded on startup.
 

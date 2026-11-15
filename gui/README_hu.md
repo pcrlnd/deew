@@ -101,7 +101,17 @@ szerkeszthető:
 [gui]
     progress = 'cli' # vagy 'native'
     output = '' # kimeneti mappa (-o), üres: a home mappa
+    scaling = '100%' # a deew-gui ablak nagyítása, '80%' - '150%'
+    use_system_font = false # true: a rendszer betűtípusa az IBM Plex Sans helyett
 ```
+
+A `scaling` a `deew-gui` ablak nagyítását állítja (80-150%, alapértelmezés: 100%);
+induláskor lép életbe, ezért módosítás után indítsd újra az alkalmazást. A
+`deew-web` figyelmen kívül hagyja, ott a böngésző saját nagyítását használd
+(Ctrl +/-). A `use_system_font = true` beállítással a felület szövege a
+mellékelt IBM Plex Sans helyett az operációs rendszer betűtípusát használja
+(`deew-gui` és `deew-web` esetén is; a terminál megtartja a fix szélességű
+betűtípusát). A GUI ezt a két kulcsot soha nem módosítja, kézzel szerkeszd őket.
 
 A Kimeneti mappa mező értéke is ide kerül (`output`), és induláskor betöltődik.
 

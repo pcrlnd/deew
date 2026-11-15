@@ -83,5 +83,9 @@ pipe = true
 
 # Settings of deew-gui and deew-web:
 # progress: 'cli' shows the terminal output of the CLI, 'native' shows progress bars, warnings and pop-up prompts in the window.
+# scaling: zoom of the deew-gui window, '80%' to '150%' (deew-web uses the browser's zoom).
+# use_system_font: true uses the system's font instead of the bundled IBM Plex Sans.
 [gui]
     progress = 'cli'
+    scaling = '100%'
+    use_system_font = false

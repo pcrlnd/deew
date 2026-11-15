@@ -232,6 +232,12 @@ pub fn run() {
                     if let Err(e) = window.set_title(&title) {
                         log::warn!("could not set the window title: {e}");
                     }
+                    let scaling = cli::gui_settings().settings.scaling;
+                    if scaling != 100
+                        && let Err(e) = window.set_zoom(f64::from(scaling) / 100.0)
+                    {
+                        log::warn!("could not set the window zoom: {e}");
+                    }
                 }
                 None => log::warn!("main window not found, keeping the default title"),
             }

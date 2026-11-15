@@ -171,6 +171,10 @@ export interface GuiSettings {
 }
 
 export interface LoadedGuiSettings extends GuiSettings {
+  /** `gui.scaling` (read-only here; deew-gui applies it natively at startup). */
+  scaling: number
+  /** `gui.use_system_font`: the OS font instead of IBM Plex Sans (read-only here). */
+  useSystemFont: boolean
   /** The folder deew runs in (the home folder), empty when unknown. */
   defaultOutput: string
   /** `default_modes.ddp` of the config. */

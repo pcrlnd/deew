@@ -178,7 +178,9 @@ fn template_matches_python() {
     assert!(t.starts_with("# deew looks for the programs next to the deew executable first, then in your system PATH:\n"));
     assert!(t.contains("max_instances = '50%'\n"));
     assert!(t.contains("    other = true\n"));
-    assert!(t.ends_with("[gui]\n    progress = 'cli'\n"));
+    assert!(t.ends_with(
+        "[gui]\n    progress = 'cli'\n    scaling = '100%'\n    use_system_font = false\n"
+    ));
 }
 
 #[cfg(target_os = "linux")]

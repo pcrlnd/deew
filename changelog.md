@@ -2,6 +2,12 @@
 - `-mo` measures a TrueHD Atmos source with `dee_measure_loudness`
   (the multichannel loudness of the Atmos master) instead of stopping
   DEE's DDP Atmos encoder once it has measured
+- `deew-gui`/`deew-web` 0.8.0:
+  - new `scaling` key in the `[gui]` section of the config: zoom of the
+    `deew-gui` window, `'80%'` to `'150%'`, default `'100%'`
+    (`deew-web` uses the browser's zoom)
+  - new `use_system_font` key in `[gui]`: `true` uses the system's font
+    instead of the bundled IBM Plex Sans, default `false`
 
 # deew 5.3.0:
 - `-gt` downloads the glibc (gnu) build of truehdd on Linux instead of

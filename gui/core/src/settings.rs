@@ -1,6 +1,8 @@
-//! GUI settings, stored in the deew `config.toml`: `gui.progress` (the CLI
-//! ignores the `[gui]` section) and the CLI's `output.path` / `output.to_input`.
-//! Saving edits only these three keys and keeps the rest of the file
+//! GUI settings, stored in the deew `config.toml`: `gui.progress`,
+//! `gui.scaling` and `gui.use_system_font` (the CLI ignores the `[gui]`
+//! section) and the CLI's `output.path` / `output.to_input`.
+//! Saving edits only `gui.progress` and the two `output` keys (`scaling` and
+//! `use_system_font` are only written when a new `[gui]` section is added) and keeps the rest of the file
 //! (comments, quoting, indentation) as it is.
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +37,7 @@ impl ProgressView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiSettings {
     pub progress: ProgressView,
@@ -45,6 +47,47 @@ pub struct GuiSettings {
     /// `output.to_input`: save each output next to its input (`-oi`).
     #[serde(default)]
     pub to_input: bool,
+    /// `gui.scaling`: zoom of the deew-gui window in percent (80 to 150).
+    /// Read-only for the GUI: saving keeps the value in the file.
+    #[serde(default = "default_scaling")]
+    pub scaling: u16,
+    /// `gui.use_system_font`: the operating system's font instead of IBM Plex
+    /// Sans. Read-only for the GUI: saving keeps the value in the file.
+    #[serde(default)]
+    pub use_system_font: bool,
+}
+
+fn default_scaling() -> u16 {
+    100
+}
+
+impl Default for GuiSettings {
+    fn default() -> Self {
+        GuiSettings {
+            progress: ProgressView::default(),
+            output: String::new(),
+            to_input: false,
+            scaling: default_scaling(),
+            use_system_font: false,
+        }
+    }
+}
+
+/// `gui.scaling` as a percent: `'125%'`, `'125'` or `125`, clamped to 80..=150.
+/// Anything else gives 100.
+fn parse_scaling(value: Option<&toml::Value>) -> u16 {
+    let number = match value {
+        Some(toml::Value::String(s)) => s
+            .trim()
+            .strip_suffix('%')
+            .unwrap_or(s.trim())
+            .trim()
+            .parse::<i64>()
+            .ok(),
+        Some(toml::Value::Integer(i)) => Some(*i),
+        _ => None,
+    };
+    number.map_or(100, |n| n.clamp(80, 150) as u16)
 }
 
 /// The settings plus read-only values for the window.
@@ -107,6 +150,8 @@ impl SettingsView {
 /// Comment above the `[gui]` section when it is added to an existing config.
 const SECTION_COMMENT: &str = "# Settings of deew-gui and deew-web:
 # progress: 'cli' shows the terminal output of the CLI, 'native' shows progress bars, warnings and pop-up prompts in the window.
+# scaling: zoom of the deew-gui window, '80%' to '150%' (deew-web uses the browser's zoom).
+# use_system_font: true uses the system's font instead of the bundled IBM Plex Sans.
 ";
 
 /// Comment above the section when it is added to an existing config.
@@ -138,10 +183,16 @@ pub fn parse(text: &str) -> GuiSettings {
     let to_input = section
         .and_then(|o| o.get("to_input")?.as_bool())
         .unwrap_or_default();
+    let scaling = parse_scaling(gui.and_then(|g| g.get("scaling")));
+    let use_system_font = gui
+        .and_then(|g| g.get("use_system_font")?.as_bool())
+        .unwrap_or_default();
     GuiSettings {
         progress,
         output,
         to_input,
+        scaling,
+        use_system_font,
     }
 }
 
@@ -244,8 +295,10 @@ pub fn update_text(text: &str, settings: &GuiSettings) -> Result<String, String>
         blank(&mut out);
         out.push_str(SECTION_COMMENT);
         out.push_str(&format!(
-            "[gui]\n    progress = '{}'\n",
-            settings.progress.as_str()
+            "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n",
+            settings.progress.as_str(),
+            settings.scaling,
+            settings.use_system_font
         ));
     }
     Ok(out)
@@ -288,12 +341,14 @@ mod tests {
         GuiSettings {
             progress: ProgressView::Native,
             output: output.to_string(),
-            to_input: false,
+            ..GuiSettings::default()
         }
     }
 
     fn gui_block(value: &str) -> String {
-        format!("{SECTION_COMMENT}[gui]\n    progress = '{value}'\n")
+        format!(
+            "{SECTION_COMMENT}[gui]\n    progress = '{value}'\n    scaling = '100%'\n    use_system_font = false\n"
+        )
     }
 
     fn output_block(path: &str, to_input: bool) -> String {
@@ -304,7 +359,7 @@ mod tests {
     fn serde_shape() {
         assert_eq!(
             serde_json::to_string(&native()).unwrap(),
-            r#"{"progress":"native","output":"","toInput":false}"#
+            r#"{"progress":"native","output":"","toInput":false,"scaling":100,"useSystemFont":false}"#
         );
         let cli: GuiSettings = serde_json::from_str(r#"{"progress":"cli"}"#).unwrap();
         assert_eq!(cli, GuiSettings::default());
@@ -320,10 +375,88 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"progress":"cli","output":"/m","toInput":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":""}"#
+            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":""}"#
         );
         let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","toInput":true}"#).unwrap();
         assert!(o.to_input);
+    }
+
+    #[test]
+    fn scaling_parse() {
+        let sc = |t: &str| parse(t).scaling;
+        assert_eq!(sc(""), 100);
+        assert_eq!(sc("[gui]\n"), 100);
+        assert_eq!(sc("[gui]\nscaling = '125%'\n"), 125);
+        assert_eq!(sc("[gui]\nscaling = ' 125 % '\n"), 125);
+        assert_eq!(sc("[gui]\nscaling = '125'\n"), 125);
+        assert_eq!(sc("[gui]\nscaling = 125\n"), 125);
+        assert_eq!(sc("[gui]\nscaling = '70%'\n"), 80);
+        assert_eq!(sc("[gui]\nscaling = '200%'\n"), 150);
+        assert_eq!(sc("[gui]\nscaling = -5\n"), 80);
+        assert_eq!(sc("[gui]\nscaling = 'abc'\n"), 100);
+        assert_eq!(sc("[gui]\nscaling = '12.5%'\n"), 100);
+        assert_eq!(sc("[gui]\nscaling = true\n"), 100);
+        assert_eq!(sc("[gui]\nscaling = 1.5\n"), 100);
+    }
+
+    #[test]
+    fn use_system_font_parse() {
+        let f = |t: &str| parse(t).use_system_font;
+        assert!(f("[gui]\nuse_system_font = true\n"));
+        assert!(!f("[gui]\nuse_system_font = false\n"));
+        assert!(!f("[gui]\n"));
+        assert!(!f(""));
+        assert!(!f("[gui]\nuse_system_font = 'true'\n"));
+    }
+
+    #[test]
+    fn scaling_and_font_are_kept_in_an_existing_gui_section() {
+        let text =
+            "[gui]\n  progress = 'cli'\n  scaling = \"130%\" # mine\n  use_system_font = true\n";
+        let updated = update_text(text, &native()).unwrap();
+        assert!(
+            updated.starts_with(
+                "[gui]\n  progress = 'native'\n  scaling = \"130%\" # mine\n  use_system_font = true\n"
+            ),
+            "{updated}"
+        );
+        // a section without the keys does not get them
+        let updated = update_text("[gui]\n    progress = 'cli'\n", &native()).unwrap();
+        assert!(
+            updated.starts_with("[gui]\n    progress = 'native'\n\n"),
+            "{updated}"
+        );
+        assert!(!updated.contains("scaling"), "{updated}");
+        assert!(!updated.contains("use_system_font"), "{updated}");
+        // other settings in the call do not change the file's values
+        let other = GuiSettings {
+            scaling: 90,
+            use_system_font: false,
+            ..native()
+        };
+        let updated = update_text(text, &other).unwrap();
+        assert!(updated.contains("scaling = \"130%\" # mine"), "{updated}");
+        assert!(updated.contains("use_system_font = true"), "{updated}");
+    }
+
+    #[test]
+    fn new_gui_section_has_all_keys() {
+        let updated = update_text("", &native()).unwrap();
+        assert!(
+            updated.ends_with("[gui]\n    progress = 'native'\n    scaling = '100%'\n    use_system_font = false\n"),
+            "{updated}"
+        );
+        let custom = GuiSettings {
+            scaling: 125,
+            use_system_font: true,
+            ..native()
+        };
+        let updated = update_text("", &custom).unwrap();
+        assert!(
+            updated.ends_with("    scaling = '125%'\n    use_system_font = true\n"),
+            "{updated}"
+        );
+        assert_eq!(parse(&updated), custom);
     }
 
     #[test]
