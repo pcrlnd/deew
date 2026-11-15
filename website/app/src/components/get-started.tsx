@@ -81,7 +81,7 @@ export function GetStarted({ platform }: { platform: Platform }) {
     >
       <TabsList
         aria-label="Platform"
-        className="h-auto! w-full max-w-full sm:w-fit"
+        className="grid h-auto! w-full max-w-full grid-cols-2 gap-0.5 sm:inline-flex sm:w-fit sm:gap-0"
       >
         <TabsTrigger value="windows" className="h-8 px-3">
           <WindowsIcon className="size-3.5" /> Windows

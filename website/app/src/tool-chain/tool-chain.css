@@ -35,6 +35,7 @@
     margin: 0 auto;
     padding: 40px 16px 72px;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 48px;
   }
   header {
@@ -252,6 +253,7 @@
   /* ---------- chains ---------- */
   .chains {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     background: var(--card);
     border: 1px solid var(--border);
   }
@@ -297,6 +299,7 @@
     padding: 0 8px;
     border: 1px solid;
     white-space: nowrap;
+    max-width: 100%;
   }
   .chip.tool {
     background: var(--tool-bg);
@@ -340,6 +343,7 @@
   /* ---------- loudness decision trees ---------- */
   .ltrees {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
   .ltree {
@@ -421,6 +425,7 @@
   /* ---------- module cards ---------- */
   .modules {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 20px;
   }
   .module {
@@ -428,6 +433,7 @@
     border: 1px solid var(--border);
     border-top: 3px solid var(--tool-bd);
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
   .module:has(.tag.step) {
     border-top-color: var(--step-bd);
@@ -458,12 +464,14 @@
   }
   .module-head p {
     flex-basis: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
     color: var(--muted-foreground);
     font-size: 13px;
   }
   .ports {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
     border-bottom: 1px solid var(--border);
   }
   .port {
@@ -570,6 +578,24 @@
   }
 
   @media (max-width: 640px) {
+    .lt-foot code,
+    .sec-head p code,
+    td code {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .arr {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .chip {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      height: auto;
+      min-height: 22px;
+    }
     .ltree {
       padding: 12px 10px;
     }
