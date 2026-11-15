@@ -49,9 +49,6 @@ export function SiteHeader({ current }: { current: SitePage }) {
           <span className="text-base font-semibold tracking-tight">deew</span>
         </Link>
         <div className="flex min-w-0 flex-wrap items-center gap-0 min-[360px]:gap-1">
-          <NavLink internal href={HOME} active={current === "home"}>
-            Home
-          </NavLink>
           <NavLink internal href={TOOL_CHAIN} active={current === "tool-chain"}>
             Tool chain
           </NavLink>
