@@ -52,7 +52,8 @@ function DownloadButton({
       href={href}
       className={buttonVariants({
         size: "lg",
-        className: "h-11 px-5 text-sm",
+        className:
+          "h-11 px-5 text-sm max-w-full whitespace-normal! max-[239px]:h-auto max-[239px]:min-h-11 max-[239px]:px-3 max-[239px]:py-2 max-[239px]:w-full",
       })}
     >
       <Icon className="size-5" />
@@ -67,17 +68,17 @@ export default function App() {
   return (
     <div>
       <header className="border-b">
-        <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-10 sm:px-6 sm:py-16 lg:grid-cols-2">
+        <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-10 max-[239px]:px-2 sm:px-6 sm:py-16 lg:grid-cols-2">
           <div className="min-w-0">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 max-[239px]:gap-2">
               <img
                 src="logo.svg"
                 alt="deew logo"
                 width={640}
                 height={640}
-                className="size-14 shrink-0 sm:size-20"
+                className="size-14 shrink-0 max-[239px]:size-8 sm:size-20"
               />
-              <h1 className="text-2xl font-semibold tracking-tight sm:text-4xl">
+              <h1 className="min-w-0 text-2xl font-semibold tracking-tight break-words max-[239px]:text-base sm:text-4xl">
                 Dolby Encoding Engine Wrapper
               </h1>
             </div>
@@ -96,7 +97,8 @@ export default function App() {
                 className={buttonVariants({
                   size: "lg",
                   variant: "outline",
-                  className: "h-11 px-5 text-sm",
+                  className:
+          "h-11 px-5 text-sm max-w-full whitespace-normal! max-[239px]:h-auto max-[239px]:min-h-11 max-[239px]:px-3 max-[239px]:py-2 max-[239px]:w-full",
                 })}
               >
                 <GithubIcon className="size-5" />
@@ -125,7 +127,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 sm:px-6">
+      <main className="mx-auto max-w-6xl px-4 max-[239px]:px-2 sm:px-6">
         <section
           id="features"
           aria-labelledby="features-h"
@@ -197,13 +199,13 @@ export default function App() {
           <GetStarted platform={platform} />
 
           <div className="mt-6 border bg-card text-card-foreground">
-            <div className="border-b p-4">
+            <div className="border-b p-4 max-[239px]:p-2">
               <h3 className="text-base font-semibold">Requirements</h3>
               <p className="text-sm text-muted-foreground">
                 deew drives these tools, so they need to be installed.
               </p>
             </div>
-            <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-4 p-4 max-[239px]:p-2 sm:flex-row sm:items-center sm:justify-between">
               <ul className="flex flex-wrap gap-2">
                 {[
                   { label: "ffmpeg" },
@@ -221,11 +223,11 @@ export default function App() {
                     href: "https://github.com/truehdd/dee-shim",
                   },
                 ].map(({ label, href }) => (
-                  <li key={label}>
+                  <li key={label} className="max-w-full min-w-0">
                     {href ? (
                       <Badge
                         variant="outline"
-                        className="h-6 px-2.5 text-sm"
+                        className="h-6 max-w-full px-2.5 text-sm max-[239px]:h-auto max-[239px]:min-h-6 max-[239px]:break-all max-[239px]:whitespace-normal!"
                         render={<ExternalLink href={href} />}
                       >
                         {label}
@@ -235,7 +237,7 @@ export default function App() {
                         />
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="h-6 px-2.5 text-sm">
+                      <Badge variant="outline" className="h-6 max-w-full px-2.5 text-sm max-[239px]:h-auto max-[239px]:min-h-6 max-[239px]:break-all max-[239px]:whitespace-normal!">
                         {label}
                       </Badge>
                     )}
@@ -262,7 +264,7 @@ export default function App() {
           </p>
 
           <div className="border bg-card text-card-foreground">
-            <div className="flex flex-col gap-3 border-b p-4">
+            <div className="flex flex-col gap-3 border-b p-4 max-[239px]:p-2">
               <p className="text-sm font-medium">pcroland</p>
               <ExternalLink
                 className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
@@ -284,7 +286,7 @@ export default function App() {
                 />
               </div>
             </div>
-            <div className="flex flex-col gap-2 p-4">
+            <div className="flex flex-col gap-2 p-4 max-[239px]:p-2">
               <p className="flex items-start gap-2 text-sm font-medium">
                 <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />
                 rainbaby (developer of truehdd and dee_shim)

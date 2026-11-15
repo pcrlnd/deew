@@ -37,7 +37,7 @@ export function SiteHeader({ current }: { current: SitePage }) {
       aria-label="Site"
       className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur"
     >
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-2 py-3 min-[360px]:gap-4 min-[360px]:px-4 sm:px-6">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 py-3 min-[360px]:gap-x-4 min-[360px]:px-4 sm:px-6">
         <Link href={HOME} className="inline-flex items-center gap-2">
           <img
             src="logo.svg"
@@ -48,7 +48,7 @@ export function SiteHeader({ current }: { current: SitePage }) {
           />
           <span className="text-base font-semibold tracking-tight">deew</span>
         </Link>
-        <div className="flex min-w-0 items-center gap-0 min-[360px]:gap-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-0 min-[360px]:gap-1">
           <NavLink internal href={HOME} active={current === "home"}>
             Home
           </NavLink>
@@ -68,7 +68,7 @@ export function SiteHeader({ current }: { current: SitePage }) {
 export function SiteFooter() {
   return (
     <footer className="border-t">
-      <div className="mx-auto flex max-w-6xl items-center justify-between flex-wrap gap-x-4 gap-y-2 px-4 py-6 text-sm text-muted-foreground sm:px-6">
+      <div className="mx-auto flex max-w-6xl items-center justify-between flex-wrap gap-x-4 gap-y-2 px-4 py-6 text-sm text-muted-foreground max-[239px]:px-2 sm:px-6">
         <span>deew - Dolby Encoding Engine Wrapper</span>
         <ExternalLink
           className="inline-flex items-center gap-2 hover:text-foreground"

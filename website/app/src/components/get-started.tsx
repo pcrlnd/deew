@@ -19,11 +19,11 @@ function Panel({
 }) {
   return (
     <div className="border bg-card text-card-foreground">
-      <div className="border-b p-4">
+      <div className="border-b p-4 max-[239px]:p-2">
         <h3 className="text-base font-semibold">{title}</h3>
         <p className="text-sm text-muted-foreground">{desc}</p>
       </div>
-      <div className="flex flex-col gap-4 p-4">{children}</div>
+      <div className="flex flex-col gap-4 p-4 max-[239px]:p-2">{children}</div>
     </div>
   )
 }
@@ -50,7 +50,8 @@ function DownloadRow({
         className={buttonVariants({
           size: "lg",
           variant: primary ? "default" : "outline",
-          className: "w-full shrink-0 sm:w-40",
+          className:
+            "w-full shrink-0 max-[239px]:h-auto max-[239px]:min-h-9 max-[239px]:py-1 sm:w-40",
         })}
       >
         <DownloadIcon />
@@ -81,7 +82,7 @@ export function GetStarted({ platform }: { platform: Platform }) {
     >
       <TabsList
         aria-label="Platform"
-        className="grid h-auto! w-full max-w-full grid-cols-2 gap-0.5 sm:inline-flex sm:w-fit sm:gap-0"
+        className="grid h-auto! w-full max-w-full grid-cols-2 gap-0.5 max-[239px]:grid-cols-1 sm:inline-flex sm:w-fit sm:gap-0"
       >
         <TabsTrigger value="windows" className="h-8 px-3">
           <WindowsIcon className="size-3.5" /> Windows
@@ -121,7 +122,7 @@ export function GetStarted({ platform }: { platform: Platform }) {
           />
           <div
             aria-disabled="true"
-            className="flex items-center justify-between gap-3 border border-dashed p-3 opacity-70"
+            className="flex items-center justify-between gap-3 border border-dashed p-3 opacity-70 max-[239px]:flex-wrap max-[239px]:p-2"
           >
             <div className="flex min-w-0 items-center gap-3">
               <PackageIcon className="size-5 shrink-0 text-muted-foreground" />

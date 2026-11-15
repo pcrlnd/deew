@@ -40,6 +40,7 @@
   }
   header {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
   .eyebrow {
@@ -149,6 +150,7 @@
 
   section {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
   }
   .sec-head {
@@ -578,6 +580,18 @@
   }
 
   @media (max-width: 640px) {
+    code,
+    h2,
+    h3,
+    .port li,
+    .lt-cond,
+    .lt-note {
+      overflow-wrap: anywhere;
+    }
+    h3 {
+      min-width: 0;
+      max-width: 100%;
+    }
     .lt-foot code,
     .sec-head p code,
     td code {
