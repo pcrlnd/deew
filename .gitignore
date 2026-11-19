@@ -5,6 +5,7 @@ __pycache__
 # rust
 /target
 /target-win
+/target-win-exp
 
 # pyinstaller
 build

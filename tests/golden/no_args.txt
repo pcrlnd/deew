@@ -1,27 +1,33 @@
-deew 5.3.1
+deew 5.4.0
 
-USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-nps] [-d DELAY] [-r DRC] [-dn DIALNORM]
-            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
-            [-gc] [-gt]
+USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
+            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE]
+            [--ac4-ims-mode MODE] [-b BITRATE] [-dm CHANNELS] [-dl] [-d DELAY]
+            [-r DRC] [-dn DIALNORM] [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la]
+            [-np] [-pl] [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
+  -fh, --full-help          show all options, including the advanced ones
   -v, --version             show version and the versions of the tools.
   -i, --input [INPUT ...]   audio file(s) or folder(s)
-  -ti, --track-index INDEX  default: 0
-                            select audio track index of input(s)
+                            wildcards (*, ?, **) work, quoted or not
+                            ADM BWF and DAMF (.atmos) Atmos masters work for
+                            dd/ddp and the Atmos formats
+  -ti, --track-index INDEX  examples: 1, a:1, s:3
+                            default: 0
+                            select the audio track of input(s)
+                            N or a:N: Nth audio track, s:N: stream index N
   -o, --output DIRECTORY    default: output path of the config, else the current
                             directory
                             specifies output directory
   -oi, --output-to-input    save each output next to its input file
                             overrides -o and the output path of the config
   -f, --format FORMAT       options: dd / ddp / ddp-atmos / thd / thd-atmos /
-                            ac4 / ac4-atmos / aac
+                            ac4 / ac4-atmos / ac4-ims / aac
                             default: ddp
                             ddp-atmos and thd-atmos use truehdd and dee_shim,
-                            ac4-atmos uses truehdd
+                            ac4-atmos and ac4-ims (from Atmos) use truehdd
   --ddp-mode MODE           options: standard / bluray
                             default: run -c/--config
                             profile of 7.1 DDP, 5.1 and below are not affected
@@ -34,21 +40,23 @@ FLAGS:
                             standard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
                             bluray: 7.1 with Atmos, AC-3 core + E-AC-3,
                             1152-1664 kbps
+  --ac4-ims-mode MODE       options: general / music
+                            default: run -c/--config
+                            profile of ac4-ims (stereo for headphones and TV
+                            speakers, from 5.1 or Atmos)
+                            music: no dialogue enhancement, DRC music_light
   -b, --bitrate BITRATE     options: run -lb/--list-bitrates
                             default: run -c/--config
   -dm, --downmix CHANNELS   options: 1 / 2 / 6
                             specifies downmix, only works for DD/DDP/AC4/AAC and
                             TrueHD (2 / 6)
-                            DD and AC4 will be automatically downmixed to 5.1 in
-                            case of a 7.1 source
+                            DD, AC4 and ac4-ims will be automatically downmixed
+                            to 5.1 in case of a 7.1 source
                             AAC output is always 2.0
   -dl, --disable-lfe        remove the LFE channel of 5.1 and 7.1 inputs
                             DD and DDP get a real 5.0 or 7.0, the others keep a
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
-  -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
-                            only works for DD/DDP/DDP Atmos, config:
-                            surround_phase_shift
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -59,12 +67,12 @@ FLAGS:
                             default: none (music_light for AC4)
                             specifies drc profile
                             none uses dee_shim for TrueHD, not available
-                            for AC4 (AC4 Atmos has it)
+                            for AC4 (AC4 Atmos and ac4-ims have it)
   -dn, --dialnorm DIALNORM  options: between -31 and 0 (in case of 0 DEE's
                             measurement will be used)
                             default: 0
-                            applied dialnorm value, doesn't work for AAC and
-                            AC4 Atmos
+                            applied dialnorm value, doesn't work for AAC,
+                            AC4 Atmos and ac4-ims
   -in, --instances NUMBER   examples: 1, 4, 50%
                             default: 50%
                             specifies how many encodes can run at the same time
@@ -77,7 +85,8 @@ FLAGS:
                             for each output
   -mo, --measure-only       only measures the loudness of the source with DEE,
                             no encoding, -f and the encoding options are
-                            ignored, TrueHD Atmos sources are measured as Atmos
+                            ignored, TrueHD Atmos sources and Atmos masters are
+                            measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
   -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
                             input
@@ -86,7 +95,8 @@ FLAGS:
   -pl, --print-logos        show all logo variants you can set in the config
   -cl, --changelog          show changelog
   -c, --config              show config and config location
-  -gc, --generate-config    generate a new config
+  -gc, --generate-config    generate a new config, asks before overwriting an
+                            existing config (-np skips the question)
   -gt, --get-tools          download ffmpeg, ffprobe, truehdd and dee_shim next
                             to deew
 

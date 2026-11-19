@@ -94,10 +94,33 @@ pub fn progress(job: usize, stage: Stage, percent: Option<f64>, level: Option<Le
     }
 }
 
-/// The job's bar finished.
-pub fn done(job: usize) {
+/// How a job ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobResult<'a> {
+    Finished,
+    /// The plain-text reason.
+    Failed(&'a str),
+    Stopped,
+}
+
+fn done_value(job: usize, result: JobResult, took: u64) -> Value {
+    let mut value = json!({"type": "done", "job": job, "took": took});
+    let (name, error) = match result {
+        JobResult::Finished => ("finished", None),
+        JobResult::Failed(error) => ("failed", Some(error)),
+        JobResult::Stopped => ("stopped", None),
+    };
+    value["result"] = json!(name);
+    if let Some(error) = error {
+        value["error"] = json!(error);
+    }
+    value
+}
+
+/// The job is over after `took` whole seconds.
+pub fn done(job: usize, result: JobResult, took: u64) {
     if enabled() {
-        emit(json!({"type": "done", "job": job}));
+        emit(done_value(job, result, took));
     }
 }
 
@@ -194,6 +217,21 @@ mod tests {
             progress_value(0, Stage::Decode, Some(50.0), None)["stage"],
             "decode"
         );
+    }
+
+    #[test]
+    fn done_shape() {
+        assert_eq!(
+            done_value(1, JobResult::Finished, 615),
+            json!({"type": "done", "job": 1, "result": "finished", "took": 615})
+        );
+        assert_eq!(
+            done_value(0, JobResult::Failed("DEE: \"oops\""), 3),
+            json!({"type": "done", "job": 0, "result": "failed", "took": 3, "error": "DEE: \"oops\""})
+        );
+        let stopped = done_value(2, JobResult::Stopped, 0);
+        assert_eq!(stopped["result"], "stopped");
+        assert!(stopped.get("error").is_none());
     }
 
     #[test]

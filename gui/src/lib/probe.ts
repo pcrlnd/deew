@@ -12,6 +12,8 @@ export interface FileProbe {
   codec: string | null
   /** ffprobe's stream profile mentions Dolby Atmos. */
   atmos: boolean
+  /** An Atmos master (ADM BWF / DAMF); `codec` is its label. */
+  master: boolean
   error: string | null
   /** A file of a folder that isn't audio: left out, not an error. */
   skipped: boolean
@@ -30,12 +32,16 @@ export interface ProbeSummary {
   sampleRate: number | null
   /** The distinct (normalised) bit depths, sorted; more than one if mixed. */
   bitDepths: number[]
-  /** The distinct codec names of the probed files, sorted. */
+  /** The distinct codec names of the probed files (not the masters), sorted. */
   codecs: string[]
+  /** The distinct labels of the Atmos masters, sorted. */
+  masters: string[]
+  /** Every probed file is an Atmos master (and there is at least one). */
+  onlyMasters: boolean
   /** Every probed file is Atmos (and there is at least one). */
   atmos: boolean
   /** The distinct (codec, Atmos) kinds of the probed files. */
-  inputs: { codec: string; atmos: boolean }[]
+  inputs: { codec: string; atmos: boolean; master: boolean }[]
   /** Like the CLI's mismatch errors. */
   mismatches: string[]
   errors: { path: string; error: string }[]
@@ -54,14 +60,22 @@ function intList(values: number[]): string {
 
 function distinctInputs(
   ok: readonly FileProbe[]
-): { codec: string; atmos: boolean }[] {
-  const seen = new Map<string, { codec: string; atmos: boolean }>()
+): { codec: string; atmos: boolean; master: boolean }[] {
+  const seen = new Map<
+    string,
+    { codec: string; atmos: boolean; master: boolean }
+  >()
   for (const f of ok) {
     if (f.codec === null) continue
-    seen.set(`${f.codec}/${f.atmos}`, { codec: f.codec, atmos: f.atmos })
+    seen.set(`${f.codec}/${f.atmos}/${f.master}`, {
+      codec: f.codec,
+      atmos: f.atmos,
+      master: f.master,
+    })
   }
   return [...seen.values()].sort(
-    (a, b) => a.codec.localeCompare(b.codec) || Number(a.atmos) - Number(b.atmos)
+    (a, b) =>
+      a.codec.localeCompare(b.codec) || Number(a.atmos) - Number(b.atmos)
   )
 }
 
@@ -75,8 +89,12 @@ export function summarizeProbe(all: readonly FileProbe[]): ProbeSummary {
     .filter((f) => f.error !== null)
     .map((f) => ({ path: f.path, error: f.error ?? "" }))
   const ok = files.filter((f) => f.error === null)
+  // Like the CLI: a master has no say in the rate and channels of the others
+  // (it counts as 5.1 at 48 kHz only when every input is a master).
+  const real = ok.filter((f) => !f.master)
+  const onlyMasters = ok.length > 0 && real.length === 0
   const pick = (get: (f: FileProbe) => number | null): number[] =>
-    ok.map(get).filter((v): v is number => v !== null)
+    (onlyMasters ? ok : real).map(get).filter((v): v is number => v !== null)
 
   const rates = pick((f) => f.sampleRate)
   const channels = pick((f) => f.channels)
@@ -102,8 +120,19 @@ export function summarizeProbe(all: readonly FileProbe[]): ProbeSummary {
     sampleRate: common(rates),
     // Compared after the CLI's normalisation.
     bitDepths: unique(depths.map(normalizeBitDepth)).sort((a, b) => a - b),
+    masters: [
+      ...new Set(
+        ok
+          .filter((f) => f.master)
+          .map((f) => f.codec)
+          .filter((c): c is string => c !== null)
+      ),
+    ].sort(),
+    onlyMasters,
     codecs: [
-      ...new Set(ok.map((f) => f.codec).filter((c): c is string => c !== null)),
+      ...new Set(
+        real.map((f) => f.codec).filter((c): c is string => c !== null)
+      ),
     ].sort(),
     atmos: ok.length > 0 && ok.every((f) => f.atmos),
     inputs: distinctInputs(ok),
@@ -141,6 +170,12 @@ export function formatSampleRate(hz: number): string {
 /** E.g. `Atmos 7.1 - 48 kHz - 24-bit - 1 file`, `5.1 - 48 kHz - 24-bit - 3 files`, or `16/24/32-bit` for mixed bit depths. */
 export function formatSummary(s: ProbeSummary): string {
   const parts: string[] = []
+  if (s.onlyMasters) {
+    // A master has no channel layout of its own to show.
+    parts.push(s.masters.join(" + "))
+    parts.push(s.files === 1 ? "1 file" : `${s.files} files`)
+    return parts.join(" - ")
+  }
   if (s.channels !== null) {
     const channels = formatChannels(s.channels)
     parts.push(s.atmos ? `Atmos ${channels}` : channels)
@@ -148,5 +183,6 @@ export function formatSummary(s: ProbeSummary): string {
   if (s.sampleRate !== null) parts.push(formatSampleRate(s.sampleRate))
   if (s.bitDepths.length > 0) parts.push(`${s.bitDepths.join("/")}-bit`)
   parts.push(s.files === 1 ? "1 file" : `${s.files} files`)
+  if (s.masters.length > 0) parts.push(`with ${s.masters.join(" + ")}`)
   return parts.join(" - ")
 }

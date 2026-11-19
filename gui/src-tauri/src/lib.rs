@@ -1,12 +1,13 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use deew_gui_core::cli;
+use deew_gui_core::info::{self, Gate};
 use deew_gui_core::probe::ProbeResult;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
 use deew_gui_core::settings::{GuiSettings, SettingsView};
 use serde::Serialize;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WindowEvent};
@@ -35,9 +36,23 @@ struct ActiveSession {
 #[derive(Default)]
 struct Runner(Mutex<Option<ActiveSession>>);
 
+/// The one running Utilities command (`deew -v` and the like), if any. It has
+/// its own pseudo-terminal, independent of the encode's.
+#[derive(Default)]
+struct InfoRunner(Mutex<Option<ActiveSession>>);
+
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn lock(runner: &Runner) -> Result<std::sync::MutexGuard<'_, Option<ActiveSession>>, String> {
+    runner
+        .0
+        .lock()
+        .map_err(|_| "internal error: state poisoned".to_string())
+}
+
+fn info_lock(
+    runner: &InfoRunner,
+) -> Result<std::sync::MutexGuard<'_, Option<ActiveSession>>, String> {
     runner
         .0
         .lock()
@@ -62,6 +77,9 @@ async fn run_deew(
     if active.is_some() {
         return Err("deew is already running".into());
     }
+    // Refused while `-gt` / `-gc` runs.
+    let gate = app.state::<Arc<Gate>>();
+    gate.begin_encode()?;
     let id = NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst);
 
     let config = SpawnConfig {
@@ -95,11 +113,86 @@ async fn run_deew(
             {
                 *active = None;
             }
+            exit_app.state::<Arc<Gate>>().end_encode();
+            let _ = on_output.send(RunEvent::Exit { code: Some(code) });
+        },
+    );
+    let session = match session {
+        Ok(session) => session,
+        Err(e) => {
+            gate.end_encode();
+            return Err(e);
+        }
+    };
+    *active = Some(ActiveSession { id, session });
+    Ok(())
+}
+
+/// Starts one allowlisted Utilities command (`flag`, e.g. `-v`) in its own
+/// pseudo-terminal while an encode may be running, and streams its output
+/// like [`run_deew`] does. `-gt` and `-gc` are refused during an encode.
+#[tauri::command]
+async fn run_info(
+    app: AppHandle,
+    runner: State<'_, InfoRunner>,
+    gate: State<'_, Arc<Gate>>,
+    flag: String,
+    cols: u16,
+    rows: u16,
+    on_output: Channel<RunEvent>,
+) -> Result<(), String> {
+    let mut active = info_lock(&runner)?;
+    let id = NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst);
+    let output = on_output.clone();
+    let exit_app = app.clone();
+    let session = info::spawn_info(
+        &gate,
+        cli::sidecar_path()?,
+        &flag,
+        (cols, rows),
+        app.path().home_dir().ok(),
+        move |bytes| {
+            let _ = output.send(RunEvent::Output(BASE64.encode(bytes)));
+        },
+        move |code| {
+            if let Ok(mut active) = info_lock(&exit_app.state::<InfoRunner>())
+                && active.as_ref().is_some_and(|a| a.id == id)
+            {
+                *active = None;
+            }
             let _ = on_output.send(RunEvent::Exit { code: Some(code) });
         },
     )?;
     *active = Some(ActiveSession { id, session });
     Ok(())
+}
+
+/// Tells the Utilities command the new size of its terminal.
+#[tauri::command]
+async fn resize_info(runner: State<'_, InfoRunner>, cols: u16, rows: u16) -> Result<(), String> {
+    match info_lock(&runner)?.as_ref() {
+        Some(active) => active.session.resize(cols, rows),
+        None => Ok(()),
+    }
+}
+
+/// Stops the running Utilities command.
+#[tauri::command]
+async fn stop_info(runner: State<'_, InfoRunner>) -> Result<(), String> {
+    if let Some(active) = info_lock(&runner)?.as_mut() {
+        active.session.stop();
+    }
+    Ok(())
+}
+
+/// Sends the Utilities terminal's replies (e.g. the ConPTY cursor position
+/// report) and keystrokes to the running utility.
+#[tauri::command]
+async fn write_info(runner: State<'_, InfoRunner>, data: String) -> Result<(), String> {
+    match info_lock(&runner)?.as_mut() {
+        Some(active) => active.session.write(data.as_bytes()),
+        None => Ok(()),
+    }
 }
 
 /// Sends keystrokes typed into the terminal to the running process.
@@ -142,8 +235,8 @@ async fn default_bitrates() -> std::collections::BTreeMap<String, i64> {
 /// ffprobe that the deew config points to. Runs on a blocking thread so the
 /// UI never waits for it.
 #[tauri::command]
-async fn probe_inputs(inputs: Vec<String>, track_index: u32) -> Result<ProbeResult, String> {
-    tauri::async_runtime::spawn_blocking(move || cli::probe_inputs(&inputs, track_index))
+async fn probe_inputs(inputs: Vec<String>, track_index: String) -> Result<ProbeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || cli::probe_inputs(&inputs, &track_index))
         .await
         .map_err(|e| format!("probing failed: {e}"))?
 }
@@ -214,11 +307,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(external_navigation_plugin())
         .manage(Runner::default())
+        .manage(InfoRunner::default())
+        .manage(Arc::new(Gate::default()))
         .invoke_handler(tauri::generate_handler![
             run_deew,
             write_stdin,
             resize,
             stop,
+            run_info,
+            resize_info,
+            write_info,
+            stop_info,
             probe_inputs,
             default_bitrates,
             cli_version,
@@ -253,6 +352,11 @@ pub fn run() {
             // Do not leave an encode running behind a closed window.
             if matches!(event, WindowEvent::Destroyed)
                 && let Ok(mut active) = lock(&window.state::<Runner>())
+            {
+                active.take();
+            }
+            if matches!(event, WindowEvent::Destroyed)
+                && let Ok(mut active) = info_lock(&window.state::<InfoRunner>())
             {
                 active.take();
             }

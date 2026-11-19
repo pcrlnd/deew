@@ -3,6 +3,7 @@
 
 use axum::body::Bytes;
 use deew_gui_core::cli;
+use deew_gui_core::info::Gate;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -166,11 +167,17 @@ pub struct Job {
     inner: Arc<Mutex<Inner>>,
     /// Program to run; `None` means the deew CLI next to this executable.
     program: Option<PathBuf>,
+    /// Shared with the Utilities runner: no encode next to `-gt` / `-gc`.
+    gate: Arc<Gate>,
     next_id: AtomicU64,
 }
 
 impl Job {
     pub fn new(program: Option<PathBuf>) -> Self {
+        Self::with_gate(program, Arc::new(Gate::default()))
+    }
+
+    pub fn with_gate(program: Option<PathBuf>, gate: Arc<Gate>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 job_id: 0,
@@ -182,6 +189,7 @@ impl Job {
                 subscribers: Vec::new(),
             })),
             program,
+            gate,
             next_id: AtomicU64::new(1),
         }
     }
@@ -236,6 +244,8 @@ impl Job {
         if inner.running {
             return Err("deew is already running".into());
         }
+        // Refused while `-gt` / `-gc` runs.
+        self.gate.begin_encode()?;
         let job_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let config = SpawnConfig {
             program,
@@ -249,9 +259,10 @@ impl Job {
         let out_inner = Arc::clone(&self.inner);
         let event_inner = Arc::clone(&self.inner);
         let exit_inner = Arc::clone(&self.inner);
+        let exit_gate = Arc::clone(&self.gate);
         // The callbacks run on other threads and wait for this lock, so they
         // cannot observe the state before it is complete.
-        let session = pty_session::spawn(
+        let spawned = pty_session::spawn(
             config,
             move |bytes| {
                 let mut inner = lock(&out_inner);
@@ -272,10 +283,18 @@ impl Job {
                 if inner.job_id == job_id {
                     inner.session = None;
                     inner.running = false;
+                    exit_gate.end_encode();
                     inner.broadcast(Event::Exit(Some(code)));
                 }
             },
-        )?;
+        );
+        let session = match spawned {
+            Ok(session) => session,
+            Err(e) => {
+                self.gate.end_encode();
+                return Err(e);
+            }
+        };
         inner.job_id = job_id;
         inner.session = Some(session);
         inner.running = true;

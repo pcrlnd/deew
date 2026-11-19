@@ -3,7 +3,7 @@
 use crate::auth::{self, Sessions};
 use crate::config::Credentials;
 use crate::job::{Event, Job};
-use crate::{assets, fsapi, security};
+use crate::{assets, fsapi, info, security};
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -13,6 +13,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use deew_gui_core::cli;
+use deew_gui_core::info::Gate;
 use deew_gui_core::settings::{self, GuiSettings, SettingsView};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,6 +27,11 @@ pub struct AppState {
     pub auth: Option<Credentials>,
     pub sessions: Sessions,
     pub job: Job,
+    /// Decides who may run: shared by the encode and the Utilities commands.
+    pub gate: Arc<Gate>,
+    /// Program of the Utilities commands; `None` is the CLI next to this
+    /// executable.
+    pub program: Option<PathBuf>,
     /// Config file of the settings API; `None` uses the one next to the CLI.
     pub config_path: Option<PathBuf>,
     /// Bound to a loopback address: enables the Host check.
@@ -42,10 +48,13 @@ impl AppState {
     /// `program` overrides the deew CLI to run (tests); `None` uses the CLI
     /// next to the executable.
     pub fn new(auth: Option<Credentials>, loopback: bool, program: Option<PathBuf>) -> Self {
+        let gate = Arc::new(Gate::default());
         Self {
             auth,
             sessions: Sessions::default(),
-            job: Job::new(program),
+            job: Job::with_gate(program.clone(), Arc::clone(&gate)),
+            gate,
+            program,
             config_path: None,
             loopback,
             login_fail_delay: Duration::from_secs(1),
@@ -55,7 +64,7 @@ impl AppState {
     }
 }
 
-type Shared = Arc<AppState>;
+pub(crate) type Shared = Arc<AppState>;
 
 pub struct ApiError(StatusCode, String);
 
@@ -92,6 +101,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/probe", post(probe))
         .route("/api/fs", get(fs_list))
         .route("/api/run", get(run_socket))
+        .route("/api/info", get(info::info_socket))
         .fallback(fallback)
         .layer(middleware::from_fn_with_state(state.clone(), auth_layer))
         .layer(middleware::from_fn_with_state(state.clone(), guard_layer))
@@ -307,13 +317,13 @@ async fn set_settings(State(state): State<Shared>, body: Bytes) -> Result<Status
 #[serde(rename_all = "camelCase")]
 struct ProbeBody {
     inputs: Vec<String>,
-    track_index: u32,
+    track_index: String,
 }
 
 async fn probe(body: Bytes) -> Result<Response, ApiError> {
     let body: ProbeBody = parse_json(&body)?;
     let result =
-        tokio::task::spawn_blocking(move || cli::probe_inputs(&body.inputs, body.track_index))
+        tokio::task::spawn_blocking(move || cli::probe_inputs(&body.inputs, &body.track_index))
             .await
             .map_err(|e| ApiError::internal(format!("probing failed: {e}")))?
             .map_err(ApiError::internal)?;

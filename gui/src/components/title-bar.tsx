@@ -98,10 +98,12 @@ function WindowControls() {
  * maximizes), so the brand is pointer-transparent.
  */
 export function TitleBar({
-  menuDisabled,
+  encoding,
+  utilityRunning,
   onRunInfo,
 }: {
-  menuDisabled: boolean
+  encoding: boolean
+  utilityRunning: boolean
   onRunInfo: (flag: InfoFlag) => void
 }) {
   const [version, setVersion] = useState<string>()
@@ -134,7 +136,11 @@ export function TitleBar({
       </div>
       <div data-tauri-drag-region className="h-full flex-1" />
       <div className="mr-1 flex items-center gap-1">
-        <UtilitiesMenu disabled={menuDisabled} onRun={onRunInfo} />
+        <UtilitiesMenu
+          encoding={encoding}
+          utilityRunning={utilityRunning}
+          onRun={onRunInfo}
+        />
         <ThemeToggle />
       </div>
       {inTauri() && <WindowControls />}

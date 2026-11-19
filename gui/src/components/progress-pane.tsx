@@ -3,9 +3,11 @@ import { CircleCheck, CircleX } from "lucide-react"
 
 import { NoteLine } from "@/components/note-line"
 import {
+  barColor,
   formatPercent,
+  isFinished,
+  jobStatusText,
   overallPercent,
-  stageLabel,
   statusText,
   type JobProgress,
   type RunEntry,
@@ -20,21 +22,23 @@ interface ProgressPaneProps {
 /** Bar of one job; `failed` marks an unfinished job of a failed run. */
 function Bar({ job, failed }: { job: JobProgress; failed: boolean }) {
   const indeterminate = job.percent === null && !job.done
+  const finished = isFinished(job)
+  const { color, dim } = barColor(job, failed)
   return (
-    <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
+    <div className="relative h-1.5 overflow-hidden rounded-full bg-muted-foreground/25">
       {indeterminate ? (
-        <div className="absolute inset-y-0 w-2/5 rounded-full bg-primary motion-safe:animate-indeterminate motion-reduce:w-full motion-reduce:opacity-40" />
+        <div
+          className="absolute inset-y-0 w-2/5 rounded-full motion-safe:animate-indeterminate motion-reduce:w-full motion-reduce:opacity-40"
+          style={{ backgroundColor: color, opacity: dim ? 0.5 : undefined }}
+        />
       ) : (
         <div
-          className={cn(
-            "h-full rounded-full transition-[width] duration-100",
-            job.done
-              ? "bg-green-600"
-              : failed
-                ? "bg-destructive/60"
-                : "bg-primary"
-          )}
-          style={{ width: `${job.done ? 100 : (job.percent ?? 0)}%` }}
+          className="h-full rounded-full transition-[width] duration-100"
+          style={{
+            width: `${finished ? 100 : (job.percent ?? 0)}%`,
+            backgroundColor: color,
+            opacity: dim ? 0.5 : undefined,
+          }}
         />
       )}
     </div>
@@ -42,27 +46,46 @@ function Bar({ job, failed }: { job: JobProgress; failed: boolean }) {
 }
 
 /**
- * One job: file name, stage, bar and percent. Narrow: file name and stage on
- * one line, bar and percent below; wide: all four in one row.
+ * One job, two lines: the file name, then the status (like the CLI shows it),
+ * the bar and the percent. Odd rows get a tinted background.
  */
-function JobRow({ job, failed }: { job: JobProgress; failed: boolean }) {
-  const percent = job.done ? 100 : job.percent
-  const stage = job.done ? "done" : stageLabel(job)
+function JobRow({
+  job,
+  failed,
+  odd,
+}: {
+  job: JobProgress
+  failed: boolean
+  odd: boolean
+}) {
+  const percent = isFinished(job) ? 100 : job.percent
+  const status = jobStatusText(job)
   return (
-    <div className="grid grid-cols-1 gap-y-1 @min-[520px]:grid-cols-[minmax(0,1fr)_10rem_minmax(0,12rem)_4.5rem] @min-[520px]:items-center @min-[520px]:gap-x-3">
-      <div className="flex min-w-0 items-center gap-x-3 @min-[520px]:contents">
-        <span className="min-w-0 flex-1 truncate font-mono" title={job.file}>
-          {job.file || "…"}
+    <div
+      className={cn(
+        "flex min-w-0 flex-col gap-y-1 rounded-md px-2 py-1.5",
+        odd && "bg-neutral-100 dark:bg-muted/60"
+      )}
+    >
+      <span className="min-w-0 truncate font-mono" title={job.file}>
+        {job.file || "…"}
+      </span>
+      <div className="flex min-w-0 items-center gap-x-3">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            job.done && job.result === "failed"
+              ? "text-destructive"
+              : "text-muted-foreground"
+          )}
+          title={status}
+        >
+          {status}
         </span>
-        <span className="shrink-0 text-right whitespace-nowrap text-muted-foreground @min-[520px]:min-w-0 @min-[520px]:shrink @min-[520px]:truncate @min-[520px]:text-left">
-          {stage}
-        </span>
-      </div>
-      <div className="flex items-center gap-x-3 @min-[520px]:contents">
-        <div className="min-w-0 flex-1">
+        <div className="w-20 shrink-[2] @min-[520px]:w-40">
           <Bar job={job} failed={failed} />
         </div>
-        <span className="w-14 shrink-0 text-right tabular-nums @min-[520px]:w-auto">
+        <span className="w-14 shrink-0 text-right tabular-nums">
           {formatPercent(percent)}
         </span>
       </div>
@@ -76,7 +99,7 @@ function RunSection({ run }: { run: RunEntry }) {
   const running = status.kind === "running"
   const failed = !running && status.kind !== "success"
   const overall = overallPercent(progress.jobs)
-  const doneCount = progress.jobs.filter((j) => j.done).length
+  const doneCount = progress.jobs.filter(isFinished).length
   const silentCli = !running && !progress.cliReports
 
   return (
@@ -94,7 +117,7 @@ function RunSection({ run }: { run: RunEntry }) {
         </p>
       )}
       {progress.jobs.map((job, i) => (
-        <JobRow key={i} job={job} failed={failed} />
+        <JobRow key={i} job={job} failed={failed} odd={i % 2 === 1} />
       ))}
       {progress.notes.map((n, i) => (
         <NoteLine key={i} tone={n.tone} text={n.text} />
@@ -124,7 +147,6 @@ function RunSection({ run }: { run: RunEntry }) {
 
 /** Native view: every encode run of the session, oldest first. */
 export function ProgressPane({ runs, className }: ProgressPaneProps) {
-  const shown = runs.filter((r) => !r.info)
   const ref = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
 
@@ -147,12 +169,12 @@ export function ProgressPane({ runs, className }: ProgressPaneProps) {
         className
       )}
     >
-      {shown.length === 0 && (
+      {runs.length === 0 && (
         <p className="text-muted-foreground">
           Progress of the encodes is shown here.
         </p>
       )}
-      {shown.map((run, i) => (
+      {runs.map((run, i) => (
         <div
           key={run.id}
           className={cn("flex flex-col", i > 0 && "border-t pt-3")}

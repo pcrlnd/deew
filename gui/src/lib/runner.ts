@@ -8,10 +8,12 @@ import type { ProbeResult } from "@/lib/probe"
 import { fsRequestPath, type FsListing } from "@/lib/fs-browser"
 import {
   RunClient,
+  infoSocketUrl,
+  parseInfoMessage,
   runSocketUrl,
   type RunClientHandlers,
 } from "@/lib/run-client"
-import { checkSession, requestJson } from "@/lib/web-api"
+import { checkSession, errorMessage, requestJson } from "@/lib/web-api"
 
 type RunEvent =
   | { event: "output"; data: string } // base64 of raw pty bytes
@@ -135,9 +137,99 @@ export const resizePty = (cols: number, rows: number): Promise<void> =>
 export const stopDeew = (): Promise<void> =>
   inWeb() ? sendWeb({ type: "stop" }) : invoke("stop")
 
+export interface InfoHandlers {
+  onOutput: (bytes: Uint8Array) => void
+  /** The command ended; `code` is null when unknown (connection lost). */
+  onExit: (code: number | null) => void
+  /** The command was refused or could not start; no `onExit` follows. */
+  onError: (message: string) => void
+}
+
+// Web: the socket of the running Utilities command (it ends with it).
+let infoSocket: WebSocket | null = null
+
+/**
+ * Runs one Utilities command (an allowlisted flag, see `INFO_COMMANDS`) in
+ * its own terminal, independent of the encode. Output, the end and refusals
+ * (e.g. -gt during an encode) arrive through `handlers`.
+ */
+export async function runInfo(
+  flag: string,
+  cols: number,
+  rows: number,
+  handlers: InfoHandlers
+): Promise<void> {
+  if (inWeb()) {
+    const socket = new WebSocket(infoSocketUrl(location))
+    socket.binaryType = "arraybuffer"
+    infoSocket = socket
+    let finished = false
+    const finish = (end: () => void) => {
+      if (finished) return
+      finished = true
+      if (infoSocket === socket) infoSocket = null
+      socket.onmessage = socket.onclose = socket.onerror = null
+      socket.close()
+      end()
+    }
+    socket.onopen = () =>
+      socket.send(JSON.stringify({ type: "start", flag, cols, rows }))
+    socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        handlers.onOutput(new Uint8Array(event.data))
+        return
+      }
+      const message =
+        typeof event.data === "string" ? parseInfoMessage(event.data) : null
+      if (message?.type === "exit") finish(() => handlers.onExit(message.code))
+      else if (message?.type === "error")
+        finish(() => handlers.onError(message.message))
+    }
+    const lost = () => {
+      void checkSession()
+      finish(() => handlers.onExit(null))
+    }
+    socket.onclose = lost
+    socket.onerror = lost
+    return
+  }
+  const channel = new Channel<RunEvent>()
+  channel.onmessage = (message) => {
+    if (message.event === "output")
+      handlers.onOutput(decodeBase64(message.data))
+    else if (message.event === "exit") handlers.onExit(message.data.code)
+  }
+  try {
+    await invoke("run_info", { flag, cols, rows, onOutput: channel })
+  } catch (error) {
+    handlers.onError(errorMessage(error))
+  }
+}
+
+export const resizeInfo = (cols: number, rows: number): Promise<void> => {
+  if (!inWeb()) return invoke("resize_info", { cols, rows })
+  if (infoSocket?.readyState === WebSocket.OPEN)
+    infoSocket.send(JSON.stringify({ type: "resize", cols, rows }))
+  return Promise.resolve()
+}
+
+export const writeInfo = (data: string): Promise<void> => {
+  if (!inWeb()) return invoke("write_info", { data })
+  if (infoSocket?.readyState === WebSocket.OPEN)
+    infoSocket.send(JSON.stringify({ type: "input", data }))
+  return Promise.resolve()
+}
+
+export const stopInfo = (): Promise<void> => {
+  if (!inWeb()) return invoke("stop_info")
+  if (infoSocket?.readyState === WebSocket.OPEN)
+    infoSocket.send(JSON.stringify({ type: "stop" }))
+  return Promise.resolve()
+}
+
 export const probeInputs = (
   inputs: string[],
-  trackIndex: number
+  trackIndex: string
 ): Promise<ProbeResult> =>
   inWeb()
     ? requestJson("/api/probe", {
@@ -181,6 +273,14 @@ export interface LoadedGuiSettings extends GuiSettings {
   defaultDdpMode: string
   /** `default_modes.ddp_atmos` of the config. */
   defaultDdpAtmosMode: string
+  /** `default_modes.ac4_ims` of the config. */
+  defaultAc4ImsMode: string
+  /** `surround_phase_shift` of the config (true when missing). */
+  surroundPhaseShift: boolean
+  /** `low_pass_filter` of the config (true when missing). */
+  lowPassFilter: boolean
+  /** `surround_3db_attenuation` of the config (false when missing). */
+  surround3dbAttenuation: boolean
 }
 
 /** The GUI settings of the config (`gui.progress`, `output.*`, `default_modes`). */

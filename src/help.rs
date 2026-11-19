@@ -1,26 +1,37 @@
 //! Static help text, captured from the markup the Python version passes to rich.
+//!
+//! `RAW_HELP` holds both the basic (`-h`) and the full (`-fh`) help; [`help`]
+//! picks one. Markers in the text: `~` at the start of a line marks an
+//! advanced row (full help only), `<<..>>` inside a line an advanced part of
+//! it.
 
-/// Full help text (without the outer `[not bold white]` wrapper).
-pub const HELP: &str = concat!(
+/// Help text with the markers (without the outer `[not bold white]` wrapper).
+const RAW_HELP: &str = concat!(
     r#"[bold cyan][bold cyan]deew[/bold cyan][/bold cyan] "#,
     env!("CARGO_PKG_VERSION"),
     r#"
 
-[yellow]USAGE[/yellow]: [bold cyan]deew[/bold cyan] [[green]-h[/green]] [[green]-v[/green]] [[green]-i[/green] [[bold color(231)]INPUT[/bold color(231)] ...]] [[green]-ti[/green] [bold color(231)]INDEX[/bold color(231)]] [[green]-o[/green] [bold color(231)]DIRECTORY[/bold color(231)]] [[green]-oi[/green]] [[green]-f[/green] [bold color(231)]FORMAT[/bold color(231)]] [[green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]-b[/green] [bold color(231)]BITRATE[/bold color(231)]] [[green]-dm[/green] [bold color(231)]CHANNELS[/bold color(231)]] [[green]-dl[/green]] [[green]-nps[/green]] [[green]-d[/green] [bold color(231)]DELAY[/bold color(231)]] [[green]-r[/green] [bold color(231)]DRC[/bold color(231)]] [[green]-dn[/green] [bold color(231)]DIALNORM[/bold color(231)]] [[green]-in[/green] [bold color(231)]NUMBER[/bold color(231)]] [[green]-k[/green]] [[green]-kl[/green]] [[green]-mo[/green]] [[green]-lb[/green]] [[green]-la[/green]] [[green]-np[/green]] [[green]-pl[/green]] [[green]-cl[/green]] [[green]-c[/green]] [[green]-gc[/green]] [[green]-gt[/green]]
+[yellow]USAGE[/yellow]: [bold cyan]deew[/bold cyan] [[green]-h[/green]] [[green]-fh[/green]] [[green]-v[/green]] [[green]-i[/green] [[bold color(231)]INPUT[/bold color(231)] ...]] [[green]-ti[/green] [bold color(231)]INDEX[/bold color(231)]] [[green]-o[/green] [bold color(231)]DIRECTORY[/bold color(231)]] [[green]-oi[/green]] [[green]-f[/green] [bold color(231)]FORMAT[/bold color(231)]] [[green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]-b[/green] [bold color(231)]BITRATE[/bold color(231)]] [[green]-dm[/green] [bold color(231)]CHANNELS[/bold color(231)]] [[green]-dl[/green]]<< [[green]-sps[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-lpf[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-s3a[/green] [bold color(231)]SWITCH[/bold color(231)]]>> [[green]-d[/green] [bold color(231)]DELAY[/bold color(231)]] [[green]-r[/green] [bold color(231)]DRC[/bold color(231)]] [[green]-dn[/green] [bold color(231)]DIALNORM[/bold color(231)]] [[green]-in[/green] [bold color(231)]NUMBER[/bold color(231)]] [[green]-k[/green]] [[green]-kl[/green]] [[green]-mo[/green]] [[green]-lb[/green]] [[green]-la[/green]] [[green]-np[/green]] [[green]-pl[/green]] [[green]-cl[/green]] [[green]-c[/green]] [[green]-gc[/green]] [[green]-gt[/green]]
 
 [yellow]FLAGS[/yellow]:
   [green]-h[/green], [green]--help[/green]                show this help message.
+  [green]-fh[/green], [green]--full-help[/green]          show all options, including the advanced ones
   [green]-v[/green], [green]--version[/green]             show version and the versions of the tools.
   [green]-i[/green], [green]--input[/green] [[bold color(231)]INPUT[/bold color(231)] ...]   audio file(s) or folder(s)
-  [green]-ti[/green], [green]--track[/green][green]-index[/green] [bold color(231)]INDEX[/bold color(231)]  [underline magenta]default:[/underline magenta] [bold color(231)]0[/bold color(231)]
-                            select audio track index of input(s)
+                            wildcards ([bold color(231)]*[/bold color(231)], [bold color(231)]?[/bold color(231)], [bold color(231)]**[/bold color(231)]) work, quoted or not
+                            ADM BWF and DAMF (.atmos) Atmos masters work for
+                            dd/ddp and the Atmos formats
+  [green]-ti[/green], [green]--track[/green][green]-index[/green] [bold color(231)]INDEX[/bold color(231)]  [underline magenta]examples:[/underline magenta] [bold color(231)]1[/bold color(231)], [bold color(231)]a:1[/bold color(231)], [bold color(231)]s:3[/bold color(231)]
+                            [underline magenta]default:[/underline magenta] [bold color(231)]0[/bold color(231)]
+                            select the audio track of input(s)
+                            [bold color(231)]N[/bold color(231)] or [bold color(231)]a:N[/bold color(231)]: Nth audio track, [bold color(231)]s:N[/bold color(231)]: stream index N
   [green]-o[/green], [green]--output[/green] [bold color(231)]DIRECTORY[/bold color(231)]    [underline magenta]default:[/underline magenta] output path of the config, else the current directory
                             specifies output directory
   [green]-oi[/green], [green]--output[/green][green]-to-input[/green]    save each output next to its input file
                             overrides [bold color(231)]-o[/bold color(231)] and the output path of the config
-  [green]-f[/green], [green]--format[/green] [bold color(231)]FORMAT[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]dd[/bold color(231)] / [bold color(231)]ddp[/bold color(231)] / [bold bright_blue]ddp-atmos[/bold bright_blue] / [bold color(231)]thd[/bold color(231)] / [bold bright_blue]thd-atmos[/bold bright_blue] / [bold color(231)]ac4[/bold color(231)] / [bold color(231)]ac4-atmos[/bold color(231)] / [bold color(231)]aac[/bold color(231)]
+  [green]-f[/green], [green]--format[/green] [bold color(231)]FORMAT[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]dd[/bold color(231)] / [bold color(231)]ddp[/bold color(231)] / [bold bright_blue]ddp-atmos[/bold bright_blue] / [bold color(231)]thd[/bold color(231)] / [bold bright_blue]thd-atmos[/bold bright_blue] / [bold color(231)]ac4[/bold color(231)] / [bold color(231)]ac4-atmos[/bold color(231)] / [bold color(231)]ac4-ims[/bold color(231)] / [bold color(231)]aac[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]ddp[/bold color(231)]
-                            [bold bright_blue]ddp-atmos[/bold bright_blue] and [bold bright_blue]thd-atmos[/bold bright_blue] use truehdd and dee_shim, ac4-atmos uses truehdd
+                            [bold bright_blue]ddp-atmos[/bold bright_blue] and [bold bright_blue]thd-atmos[/bold bright_blue] use truehdd and dee_shim, ac4-atmos and ac4-ims (from Atmos) use truehdd
   [green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]           [underline magenta]options:[/underline magenta] [bold bright_blue]standard[/bold bright_blue] / [bold color(231)]bluray[/bold color(231)]
                             [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
                             profile of 7.1 DDP, 5.1 and below are not affected
@@ -32,17 +43,35 @@ pub const HELP: &str = concat!(
                             [bold bright_blue]streaming[/bold bright_blue]: 5.1 with Atmos, 384-1024 kbps
                             [bold bright_blue]standard[/bold bright_blue]: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
                             [bold bright_blue]bluray[/bold bright_blue]: 7.1 with Atmos, AC-3 core + E-AC-3, 1152-1664 kbps
+  [green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]general[/bold color(231)] / [bold color(231)]music[/bold color(231)]
+                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
+                            profile of [bold color(231)]ac4-ims[/bold color(231)] (stereo for headphones and TV speakers, from 5.1 or Atmos)
+                            [bold color(231)]music[/bold color(231)]: no dialogue enhancement, DRC [bold color(231)]music_light[/bold color(231)]
   [green]-b[/green], [green]--bitrate[/green] [bold color(231)]BITRATE[/bold color(231)]     [underline magenta]options:[/underline magenta] run [green][green]-lb[/green][/green]/[green][green]--list[/green][green]-bitrates[/green][/green]
                             [underline magenta]default:[/underline magenta] run [green][green]-c[/green][/green]/[green][green]--config[/green][/green]
   [green]-dm[/green], [green]--downmix[/green] [bold color(231)]CHANNELS[/bold color(231)]   [underline magenta]options:[/underline magenta] [bold color(231)]1[/bold color(231)] / [bold color(231)]2[/bold color(231)] / [bold color(231)]6[/bold color(231)]
                             specifies downmix, only works for DD/DDP/AC4/AAC and TrueHD (2 / 6)
-                            DD and AC4 will be automatically downmixed to 5.1 in case of a 7.1 source
+                            DD, AC4 and ac4-ims will be automatically downmixed to 5.1 in case of a 7.1 source
                             AAC output is always 2.0
   [green]-dl[/green], [green]--disable-lfe[/green]        remove the LFE channel of 5.1 and 7.1 inputs
                             DD and DDP get a real 5.0 or [bold bright_blue]7.0[/bold bright_blue], the others keep a silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
-  [green]-nps[/green], [green]--no-phase-shift[/green]    turn off DEE's 90° phase shift of surround channels
-                            only works for DD/DDP/DDP Atmos, config: [bold color(231)]surround_phase_shift[/bold color(231)]
+~  [green]-sps[/green], [green]--surround-phase-shift[/green] [bold color(231)]SWITCH[/bold color(231)]
+~                            [underline magenta]options:[/underline magenta] [bold color(231)]on[/bold color(231)] / [bold color(231)]off[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] [bold color(231)]on[/bold color(231)]
+~                            DEE's 90° phase shift of the surround channels
+~                            only works for DD/DDP/DDP Atmos, config: [bold color(231)]surround_phase_shift[/bold color(231)]
+~  [green]-lpf[/green], [green]--low-pass-filter[/green] [bold color(231)]SWITCH[/bold color(231)]
+~                            [underline magenta]options:[/underline magenta] [bold color(231)]on[/bold color(231)] / [bold color(231)]off[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] [bold color(231)]on[/bold color(231)]
+~                            DEE's 120 Hz low-pass filter on the LFE channel
+~                            only works for DD/DDP, config: [bold color(231)]low_pass_filter[/bold color(231)]
+~  [green]-s3a[/green], [green]--surround-3db-attenuation[/green] [bold color(231)]SWITCH[/bold color(231)]
+~                            [underline magenta]options:[/underline magenta] [bold color(231)]on[/bold color(231)] / [bold color(231)]off[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] [bold color(231)]off[/bold color(231)]
+~                            3 dB attenuation of the surround channels
+~                            only works for DD/DDP/TrueHD, config: [bold color(231)]surround_3db_attenuation[/bold color(231)]
+~                            TrueHD asks first: the output is no longer identical to the source
   [green]-d[/green], [green]--delay[/green] [bold color(231)]DELAY[/bold color(231)]         [underline magenta]examples:[/underline magenta] [bold color(231)]-5.1ms[/bold color(231)], [bold color(231)]+1,52s[/bold color(231)], [bold color(231)]-24@pal[/bold color(231)], [bold color(231)]+10@24000/1001[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]0ms[/bold color(231)] or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -52,11 +81,11 @@ pub const HELP: &str = concat!(
                             [underline magenta]default:[/underline magenta] [bold color(231)]none[/bold color(231)] ([bold color(231)]music_light[/bold color(231)] for AC4)
                             specifies drc profile
                             [bold bright_blue]none[/bold bright_blue] uses dee_shim for TrueHD, not available
-                            for AC4 (AC4 Atmos has it)
+                            for AC4 (AC4 Atmos and ac4-ims have it)
   [green]-dn[/green], [green]--dialnorm[/green] [bold color(231)]DIALNORM[/bold color(231)]  [underline magenta]options:[/underline magenta] between [bold color(231)]-31[/bold color(231)] and [bold color(231)]0[/bold color(231)] (in case of [bold color(231)]0[/bold color(231)] DEE's measurement will be used)
                             [underline magenta]default:[/underline magenta] [bold color(231)]0[/bold color(231)]
-                            applied dialnorm value, doesn't work for AAC and
-                            AC4 Atmos
+                            applied dialnorm value, doesn't work for AAC,
+                            AC4 Atmos and ac4-ims
   [green]-in[/green], [green]--instances[/green] [bold color(231)]NUMBER[/bold color(231)]   [underline magenta]examples:[/underline magenta] [bold color(231)]1[/bold color(231)], [bold color(231)]4[/bold color(231)], [bold color(231)]50%[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]50%[/bold color(231)]
                             specifies how many encodes can run at the same time
@@ -65,18 +94,45 @@ pub const HELP: &str = concat!(
                             (this option overrides the config's number)
   [green]-k[/green], [green]--keeptemp[/green]            keep temp files
   [green]-kl[/green], [green]--keep[/green][green]-log[/green]           keep TrueHD's log and write a .deew-log.html report for each output
-  [green]-mo[/green], [green]--measure[/green][green]-only[/green]       only measures the loudness of the source with DEE, no encoding, -f and the encoding options are ignored, TrueHD Atmos sources are measured as Atmos
+  [green]-mo[/green], [green]--measure[/green][green]-only[/green]       only measures the loudness of the source with DEE, no encoding, -f and the encoding options are ignored, TrueHD Atmos sources and Atmos masters are measured as Atmos
   [green]-lb[/green], [green]--list[/green][green]-bitrates[/green]      list bitrates that DEE can do for each format
   [green]-la[/green], [green]--long[/green][green]-argument[/green]      print ffmpeg, truehdd and DEE arguments for each input
   [green]-np[/green], [green]--no[/green][green]-prompt[/green]          skip confirmation questions, print them as notes and continue
   [green]-pl[/green], [green]--print[/green][green]-logos[/green]        show all logo variants you can set in the config
   [green]-cl[/green], [green]--changelog[/green]          show changelog
   [green]-c[/green], [green]--config[/green]              show config and config location
-  [green]-gc[/green], [green]--generate[/green][green]-config[/green]    generate a new config
+  [green]-gc[/green], [green]--generate[/green][green]-config[/green]    generate a new config, asks before overwriting an existing config (-np skips the question)
   [green]-gt[/green], [green]--get[/green][green]-tools[/green]          download ffmpeg, ffprobe, truehdd and dee_shim next to deew
 
 [bold bright_blue]blue[/bold bright_blue]: uses dee_shim"#
 );
+
+/// The help text: `full` (`-fh`) keeps the advanced options, the basic one
+/// (`-h`) leaves them out.
+pub fn help(full: bool) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in RAW_HELP.split('\n') {
+        if let Some(rest) = line.strip_prefix('~') {
+            if full {
+                out.push(rest.to_string());
+            }
+        } else if line.contains("<<") {
+            let mut text = line.to_string();
+            while let (Some(a), Some(b)) = (text.find("<<"), text.find(">>")) {
+                let inner = if full {
+                    text[a + 2..b].to_string()
+                } else {
+                    String::new()
+                };
+                text.replace_range(a..b + 2, &inner);
+            }
+            out.push(text);
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n")
+}
 
 /// Column where option descriptions start in the FLAGS section.
 const DESC_COL: usize = 28;
@@ -222,7 +278,22 @@ pub fn wrap_help(text: &str, width: usize) -> String {
             }
             _ => (lead, false),
         };
-        if option_row && narrow {
+        // the flags are wider than the description column: no description on this row (no gap)
+        let flags_only = option_row && {
+            let visible: Vec<char> = at
+                .iter()
+                .filter(|a| a.width > 0)
+                .flat_map(|a| a.raw.chars())
+                .collect();
+            !visible[lead..].windows(2).any(|w| w == [' ', ' '])
+        };
+        if flags_only {
+            if total <= width {
+                lines.push(line.to_string());
+            } else {
+                lines.push(wrap_line("  ", 2, &at[lead..], NARROW_INDENT, width, false));
+            }
+        } else if option_row && narrow {
             // split flags and description at the description column
             let mut w = 0;
             let mut split = at.len();
@@ -309,12 +380,57 @@ mod tests {
     }
 
     #[test]
+    fn basic_help_hides_the_advanced_options() {
+        let basic = strip(&help(false));
+        let full = strip(&help(true));
+        for flag in [
+            "-sps",
+            "-lpf",
+            "-s3a",
+            "--surround-phase-shift",
+            "surround_3db_attenuation",
+        ] {
+            assert!(!basic.contains(flag), "{flag}");
+            assert!(full.contains(flag), "{flag}");
+        }
+        for text in [&basic, &full] {
+            assert!(text.contains("[-h] [-fh] [-v]"));
+            assert!(text.contains("-fh, --full-help"));
+            assert!(!text.contains(['~', '!', '<', '>']));
+        }
+        assert!(full.contains("[-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH] [-d DELAY]"));
+        assert!(basic.contains("[-dl] [-d DELAY]"));
+        for text in [&basic, &full] {
+            assert!(text.ends_with("blue: uses dee_shim"));
+        }
+        // everything else is the same
+        let rows = |t: &str| t.lines().filter(|l| l.starts_with("  -")).count();
+        assert_eq!(rows(&full), rows(&basic) + 3);
+    }
+
+    #[test]
+    fn long_flags_rows_wrap_at_every_width() {
+        for width in 40..=200 {
+            let out = wrap_help(&help(true), width);
+            assert_fits(&out, width);
+            let plain = strip(&out);
+            assert!(plain.contains("--surround-3db-attenuation SWITCH") || width < 45);
+            for l in plain.lines().filter(|l| l.contains("3 dB attenuation")) {
+                assert!(
+                    l.starts_with("    ") || l.starts_with(&" ".repeat(28)),
+                    "{l:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn wide_is_identity() {
         let flags = |t: &str| t.split_once("\n\n[yellow]FLAGS").unwrap().1.to_string();
-        assert_eq!(flags(&wrap_help(HELP, 200)), flags(HELP));
-        let rest = flags(HELP);
+        assert_eq!(flags(&wrap_help(&help(true), 200)), flags(&help(true)));
+        let rest = flags(&help(true));
         let longest = rest.lines().map(visible_width).max().unwrap();
-        assert_eq!(flags(&wrap_help(HELP, longest.max(80))), rest);
+        assert_eq!(flags(&wrap_help(&help(true), longest.max(80))), rest);
     }
 
     fn usage_lines(out: &str) -> Vec<String> {
@@ -326,7 +442,7 @@ mod tests {
     #[test]
     fn usage_wraps_at_80_max() {
         for width in [80, 120, 200] {
-            let lines = usage_lines(&wrap_help(HELP, width));
+            let lines = usage_lines(&wrap_help(&help(true), width));
             assert!(lines.len() > 1);
             for (i, l) in lines.iter().enumerate() {
                 assert!(l.chars().count() <= 80, "{width}: {l:?}");
@@ -337,7 +453,7 @@ mod tests {
             }
         }
         for width in [79, 50] {
-            let lines = usage_lines(&wrap_help(HELP, width));
+            let lines = usage_lines(&wrap_help(&help(true), width));
             for (i, l) in lines.iter().enumerate() {
                 assert!(l.chars().count() <= width, "{width}: {l:?}");
                 if i > 0 {
@@ -351,10 +467,10 @@ mod tests {
     #[test]
     fn wraps_with_description_indent() {
         for width in [200, 100, 80] {
-            let out = wrap_help(HELP, width);
+            let out = wrap_help(&help(true), width);
             assert_fits(&out, width);
             let plain = strip(&out);
-            assert!(plain.lines().count() > strip(HELP).lines().count());
+            assert!(plain.lines().count() > strip(&help(true)).lines().count());
             let mut in_flags = false;
             for line in plain.lines() {
                 if line.starts_with("FLAGS") {
@@ -374,7 +490,7 @@ mod tests {
     #[test]
     fn narrow_splits_option_rows() {
         for width in [79, 60, 40] {
-            let out = wrap_help(HELP, width);
+            let out = wrap_help(&help(true), width);
             assert_fits(&out, width);
             let plain = strip(&out);
             let lines: Vec<&str> = plain.lines().collect();
@@ -407,7 +523,7 @@ mod tests {
     #[test]
     fn usage_groups_stay_whole() {
         for width in 40..=200 {
-            let out = strip(&wrap_help(HELP, width));
+            let out = strip(&wrap_help(&help(true), width));
             let usage = out.split("\n\nFLAGS").next().unwrap();
             for line in usage.lines().skip(2) {
                 let mut depth = 0i32;

@@ -12,13 +12,20 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   bitrateChoices as buildBitrateChoices,
+  AC4_IMS_MODES,
+  ac4ImsModeApplies,
   DEFAULT_MODE,
   DDP_ATMOS_MODES,
   DDP_MODES,
   ddpAtmosModeApplies,
   ddpModeApplies,
   disableLfeApplies,
-  noPhaseShiftApplies,
+  ddFilterApplies,
+  effectiveAc4ImsMode,
+  setAc4ImsMode,
+  supportsDownmix,
+  TRACK_INDEX_HINT,
+  effectiveDdFilter,
   drcChoiceDisabled,
   drcChoices,
   FORMATS,
@@ -27,7 +34,11 @@ import {
   supportsDrc,
   setFlag,
   setFormat,
+  type Ac4ImsMode,
+  type Ac4ImsModeChoice,
   type BooleanOption,
+  type DdFilterDefaults,
+  type DdFilterOption,
   type DdpAtmosMode,
   type DdpAtmosModeChoice,
   type DdpMode,
@@ -106,7 +117,7 @@ function modeValue(choice: string, defaultMode: string): string {
 }
 
 const CHECKBOXES: {
-  key: BooleanOption
+  key: BooleanOption | DdFilterOption
   flag: string
   label: string
   help: string
@@ -118,10 +129,22 @@ const CHECKBOXES: {
     help: HELP.disableLfe,
   },
   {
-    key: "noPhaseShift",
-    flag: "-nps",
-    label: "No surround phase shift",
-    help: HELP.noPhaseShift,
+    key: "surroundPhaseShift",
+    flag: "-sps",
+    label: "Surround phase shift",
+    help: HELP.surroundPhaseShift,
+  },
+  {
+    key: "lowPassFilter",
+    flag: "-lpf",
+    label: "LFE low-pass filter",
+    help: HELP.lowPassFilter,
+  },
+  {
+    key: "surround3dbAttenuation",
+    flag: "-s3a",
+    label: "Surround 3 dB attenuation",
+    help: HELP.surround3dbAttenuation,
   },
   {
     key: "keepTemp",
@@ -149,6 +172,23 @@ const CHECKBOXES: {
   },
   { key: "noPrompt", flag: "-np", label: "No prompt", help: HELP.noPrompt },
 ]
+
+const DD_FILTER_KEYS: readonly string[] = [
+  "surroundPhaseShift",
+  "lowPassFilter",
+  "surround3dbAttenuation",
+]
+
+function isDdFilter(key: string): key is DdFilterOption {
+  return DD_FILTER_KEYS.includes(key)
+}
+
+/** Where each toggle works (shown in the tooltip while it is greyed out). */
+const DD_FILTER_FORMATS: Record<DdFilterOption, string> = {
+  surroundPhaseShift: "DD, DDP and DDP Atmos",
+  lowPassFilter: "DD and DDP",
+  surround3dbAttenuation: "DD, DDP and TrueHD",
+}
 
 function FlagCode({ flag }: { flag: string }) {
   return (
@@ -270,6 +310,8 @@ interface OptionsFormProps {
   defaultBitrates: Record<string, number>
   /** The config's `[default_modes]`. */
   defaultModes: DefaultModes
+  /** The config's `surround_phase_shift`, `low_pass_filter`, `surround_3db_attenuation`. */
+  ddFilterDefaults: DdFilterDefaults
   /** Downmix values that fit the probed input. */
   downmixChoices: Downmix[]
   /** Right-aligned in the "Input(s)" row (web mode, no window bar). */
@@ -289,6 +331,7 @@ export function OptionsForm({
   bitrateInfo,
   defaultBitrates,
   defaultModes,
+  ddFilterDefaults,
   downmixChoices,
   toolbar,
 }: OptionsFormProps) {
@@ -418,13 +461,12 @@ export function OptionsForm({
           >
             <Input
               id={id("ti")}
-              type="number"
-              min={0}
-              step={1}
               className="h-7"
+              placeholder={TRACK_INDEX_HINT}
               value={value.trackIndex}
               onChange={(e) => patch({ trackIndex: e.target.value })}
               disabled={waiting}
+              spellCheck={false}
             />
           </Field>
           <Field
@@ -438,7 +480,9 @@ export function OptionsForm({
               id={id("f")}
               value={value.format}
               choices={FORMAT_CHOICES}
-              onChange={(v) => onChange(setFormat(value, v as Format))}
+              onChange={(v) =>
+                onChange(setFormat(value, v as Format, defaultModes))
+              }
               disabled={waiting}
             />
           </Field>
@@ -481,6 +525,29 @@ export function OptionsForm({
             />
           </Field>
           <Field
+            label="AC-4 IMS mode"
+            flag="--ac4-ims-mode"
+            disabled={waiting || !ac4ImsModeApplies(value.format)}
+            help={HELP.ac4ImsMode}
+            htmlFor={id("ims")}
+          >
+            <SimpleSelect
+              id={id("ims")}
+              value={modeValue(value.ac4ImsMode, defaultModes.ac4Ims)}
+              choices={modeChoices<Ac4ImsMode>(
+                AC4_IMS_MODES,
+                defaultModes.ac4Ims,
+                []
+              )}
+              onChange={(v) =>
+                onChange(
+                  setAc4ImsMode(value, v as Ac4ImsModeChoice, defaultModes)
+                )
+              }
+              disabled={waiting || !ac4ImsModeApplies(value.format)}
+            />
+          </Field>
+          <Field
             label="Bitrate"
             flag="-b"
             disabled={waiting}
@@ -498,7 +565,11 @@ export function OptionsForm({
           <Field
             label="Downmix"
             flag="-dm"
-            disabled={waiting || downmixChoices.length <= 1}
+            disabled={
+              waiting ||
+              downmixChoices.length <= 1 ||
+              !supportsDownmix(value.format)
+            }
             help={HELP.downmix}
             htmlFor={id("dm")}
           >
@@ -507,7 +578,11 @@ export function OptionsForm({
               value={value.downmix}
               choices={downmixSelectChoices}
               onChange={(v) => patch({ downmix: v as Downmix })}
-              disabled={waiting || downmixChoices.length <= 1}
+              disabled={
+                waiting ||
+                downmixChoices.length <= 1 ||
+                !supportsDownmix(value.format)
+              }
             />
           </Field>
           <Field
@@ -542,7 +617,11 @@ export function OptionsForm({
                 value: d,
                 label: d,
                 shim: isShimDrc(value.format, d),
-                disabled: drcChoiceDisabled(value.format, d),
+                disabled: drcChoiceDisabled(
+                  value.format,
+                  d,
+                  effectiveAc4ImsMode(value.ac4ImsMode, defaultModes)
+                ),
               }))}
               onChange={(v) => patch({ drc: v as Drc })}
               disabled={waiting || !supportsDrc(value.format)}
@@ -644,6 +723,8 @@ export function OptionsForm({
           </Hint>
         </div>
         {CHECKBOXES.map(({ key, flag, label, help }) => {
+          const isFilter = isDdFilter(key)
+          const filterOff = isFilter && !ddFilterApplies(key, value.format)
           const off =
             disabled ||
             (key === "disableLfe" &&
@@ -652,7 +733,7 @@ export function OptionsForm({
                 probedChannels,
                 value.downmix
               )) ||
-            (key === "noPhaseShift" && !noPhaseShiftApplies(value.format))
+            filterOff
           return (
             <div
               key={key}
@@ -663,14 +744,26 @@ export function OptionsForm({
             >
               <Checkbox
                 id={id(key)}
-                checked={value[key]}
+                checked={
+                  isDdFilter(key)
+                    ? effectiveDdFilter(value, key, ddFilterDefaults)
+                    : value[key]
+                }
                 onCheckedChange={(checked) =>
-                  onChange(setFlag(value, key, checked === true))
+                  onChange(
+                    isDdFilter(key)
+                      ? { ...value, [key]: checked === true }
+                      : setFlag(value, key, checked === true)
+                  )
                 }
                 disabled={off}
               />
               <Hint
-                text={help}
+                text={
+                  filterOff
+                    ? `${help}\n\nOnly available for ${DD_FILTER_FORMATS[key]}.`
+                    : help
+                }
                 render={
                   <Label
                     htmlFor={id(key)}
@@ -681,9 +774,10 @@ export function OptionsForm({
                 {label}
                 <FlagCode flag={flag} />
               </Hint>
-              {key === "noPhaseShift" && isShimNoPhaseShift(value.format) && (
-                <ShimBadge className="ml-0" />
-              )}
+              {key === "surroundPhaseShift" &&
+                isShimNoPhaseShift(value.format) && (
+                  <ShimBadge className="ml-0" />
+                )}
             </div>
           )
         })}

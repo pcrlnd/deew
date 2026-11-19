@@ -17,12 +17,12 @@ type Outcome = { summary: ProbeSummary } | { error: string }
 
 /**
  * Probes `inputs` whenever they or the track index change. `trackIndex` is
- * the parsed index (`null` while the field is invalid). Responses of
+ * the normalized `-ti` text (`null` while the field is invalid). Responses of
  * superseded requests are dropped.
  */
 export function useProbe(
   inputs: readonly string[],
-  trackIndex: number | null
+  trackIndex: string | null
 ): ProbeState {
   const key = useMemo(
     () =>

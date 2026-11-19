@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  barColor,
+  BAR_COLORS,
   EMPTY_HISTORY,
   EMPTY_PROGRESS,
+  formatClock,
   formatPercent,
-  isInfoRun,
+  isFinished,
+  jobStatusText,
   overallPercent,
   parseProgressEvent,
   reduceHistory,
@@ -308,14 +312,6 @@ describe("statusText", () => {
   })
 })
 
-describe("isInfoRun", () => {
-  it("is true without -i", () => {
-    expect(isInfoRun(["--version"])).toBe(true)
-    expect(isInfoRun([])).toBe(true)
-    expect(isInfoRun(["-i", "a.mkv", "-b", "448"])).toBe(false)
-  })
-})
-
 describe("formatPercent", () => {
   it("keeps two decimals until the job is finished", () => {
     expect(formatPercent(45.55)).toBe("45.55%")
@@ -327,16 +323,13 @@ describe("formatPercent", () => {
 })
 
 describe("reduceHistory", () => {
-  const begin = (h: RunHistory, command: string, info = false) =>
-    reduceHistory(h, { type: "begin", command, info })
+  const begin = (h: RunHistory, command: string) =>
+    reduceHistory(h, { type: "begin", command })
   const jobs: ProgressEvent = { type: "jobs", files: ["a.ac3"] }
 
   it("appends a running entry on begin", () => {
-    const h = begin(begin(EMPTY_HISTORY, "one"), "two", true)
-    expect(h.runs.map((r) => [r.command, r.info])).toEqual([
-      ["one", false],
-      ["two", true],
-    ])
+    const h = begin(begin(EMPTY_HISTORY, "one"), "two")
+    expect(h.runs.map((r) => r.command)).toEqual(["one", "two"])
     expect(h.runs[1].status).toEqual({ kind: "running" })
     expect(h.runs[1].progress).toBe(EMPTY_PROGRESS)
     expect(h.runs[0].id).not.toBe(h.runs[1].id)
@@ -387,5 +380,171 @@ describe("reduceHistory", () => {
     expect(h.runs).toHaveLength(50)
     expect(h.runs[0].command).toBe("run 5")
     expect(h.runs[49].command).toBe("run 54")
+  })
+})
+
+describe("done events", () => {
+  const apply = (events: ProgressEvent[], from = EMPTY_PROGRESS) =>
+    events.reduce(reduceProgress, from)
+
+  it("parses the outcome, duration and reason", () => {
+    expect(
+      parseProgressEvent(
+        '{"type":"done","job":1,"result":"finished","took":615}'
+      )
+    ).toEqual({ type: "done", job: 1, result: "finished", took: 615 })
+    expect(
+      parseProgressEvent(
+        '{"type":"done","job":0,"result":"failed","took":3,"error":"DEE: oops"}'
+      )
+    ).toEqual({
+      type: "done",
+      job: 0,
+      result: "failed",
+      took: 3,
+      error: "DEE: oops",
+    })
+    expect(
+      parseProgressEvent('{"type":"done","job":0,"result":"stopped","took":0}')
+    ).toEqual({ type: "done", job: 0, result: "stopped", took: 0 })
+  })
+
+  it("ignores invalid extras and keeps an old CLI's done", () => {
+    expect(
+      parseProgressEvent('{"type":"done","job":0,"result":"x","took":"1"}')
+    ).toEqual({ type: "done", job: 0 })
+    expect(parseProgressEvent('{"type":"done","job":0,"took":-1}')).toEqual({
+      type: "done",
+      job: 0,
+    })
+  })
+
+  it("stores the outcome; failed and stopped keep their percent", () => {
+    const base = apply([
+      { type: "jobs", files: ["a", "b", "c"] },
+      { type: "progress", job: 1, stage: "encode", percent: 40, db: -25 },
+    ])
+    const state = apply(
+      [
+        { type: "done", job: 0, result: "finished", took: 5 },
+        { type: "done", job: 1, result: "failed", took: 9, error: "oops" },
+        { type: "done", job: 2 },
+      ],
+      base
+    )
+    expect(state.jobs[0]).toMatchObject({ done: true, percent: 100, took: 5 })
+    expect(state.jobs[1]).toMatchObject({
+      done: true,
+      percent: 40,
+      result: "failed",
+      error: "oops",
+    })
+    expect(state.jobs[2]).toMatchObject({ done: true, percent: 100 })
+    expect(state.jobs.map(isFinished)).toEqual([true, false, true])
+    expect(overallPercent(state.jobs)).toBeCloseTo((100 + 40 + 100) / 3)
+  })
+})
+
+describe("jobStatusText", () => {
+  it("formats the clock like the CLI", () => {
+    expect(formatClock(0)).toBe("0:00")
+    expect(formatClock(65)).toBe("1:05")
+    expect(formatClock(615)).toBe("10:15")
+    expect(formatClock(3600)).toBe("1:00:00")
+    expect(formatClock(3725)).toBe("1:02:05")
+  })
+
+  it("shows the stage while running", () => {
+    expect(jobStatusText(job({ stage: "encode", db: -25, percent: 3 }))).toBe(
+      "DEE encode (-25 dB)"
+    )
+  })
+
+  it("shows finished with and without level and duration", () => {
+    const done = { done: true, percent: 100 }
+    expect(
+      jobStatusText(job({ ...done, result: "finished", db: -25, took: 615 }))
+    ).toBe("finished (-25 dB) - took 10:15")
+    expect(jobStatusText(job({ ...done, result: "finished", took: 5 }))).toBe(
+      "finished - took 0:05"
+    )
+    expect(
+      jobStatusText(job({ ...done, result: "finished", took: 3725 }))
+    ).toBe("finished - took 1:02:05")
+    expect(
+      jobStatusText(
+        job({
+          ...done,
+          result: "finished",
+          took: 5,
+          db: -24,
+          gating: "dialogue",
+          speech: 45,
+          program: -21.6,
+          lra: 10.3,
+          true_peak: -2.8,
+        })
+      )
+    ).toBe(
+      "finished (-24 dB, dialogue-gated, 45% speech, program -21.6 LKFS, LRA 10.3 LU, true peak -2.8 dBTP) - took 0:05"
+    )
+  })
+
+  it("handles an old CLI's done", () => {
+    expect(jobStatusText(job({ done: true, percent: 100 }))).toBe("finished")
+    expect(jobStatusText(job({ done: true, percent: 100, db: -25 }))).toBe(
+      "finished (-25 dB)"
+    )
+  })
+
+  it("shows failed and stopped", () => {
+    expect(
+      jobStatusText(job({ done: true, result: "failed", error: "DEE: oops" }))
+    ).toBe("failed: DEE: oops")
+    expect(jobStatusText(job({ done: true, result: "failed" }))).toBe("failed")
+    expect(jobStatusText(job({ done: true, result: "stopped" }))).toBe(
+      "stopped"
+    )
+  })
+})
+
+describe("barColor", () => {
+  it("uses the CLI stage colours", () => {
+    expect(barColor(job({ stage: "ffmpeg" }), false).color).toBe("#00afff")
+    expect(barColor(job({ stage: "decode" }), false).color).toBe("#00afff")
+    expect(barColor(job({ stage: "measure" }), false).color).toBe("#ffaf00")
+    expect(barColor(job({ stage: "encode" }), false).color).toBe("#ff005f")
+  })
+
+  it("is green only for a finished job", () => {
+    const done = job({ stage: "encode", done: true, percent: 100 })
+    expect(barColor(done, false)).toEqual({
+      color: BAR_COLORS.finished,
+      dim: false,
+    })
+    expect(barColor({ ...done, result: "finished" }, true).color).toBe(
+      BAR_COLORS.finished
+    )
+    expect(barColor(job({ stage: "encode" }), true).color).not.toBe(
+      BAR_COLORS.finished
+    )
+  })
+
+  it("marks failed and stopped jobs", () => {
+    const end = { stage: "encode", done: true } as const
+    expect(barColor(job({ ...end, result: "failed" }), true).color).toBe(
+      BAR_COLORS.failed
+    )
+    expect(barColor(job({ ...end, result: "stopped" }), true).color).toBe(
+      BAR_COLORS.stopped
+    )
+  })
+
+  it("dims the stage colour of a running job in a failed run", () => {
+    expect(barColor(job({ stage: "measure" }), true)).toEqual({
+      color: "#ffaf00",
+      dim: true,
+    })
+    expect(barColor(job({ stage: "measure" }), false).dim).toBe(false)
   })
 })

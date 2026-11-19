@@ -89,8 +89,10 @@ A Stop gomb utáni kapcsoló választja ki, mit mutat az ablak a futásból:
 
 - **CLI** (alapértelmezett): a CLI terminálkimenete.
 - **GUI**: natív folyamatjelző sávok fájlonként, a figyelmeztetések és hibák sorokként,
-  a CLI i/n kérdései pedig felugró dialógusként. A Segédeszközök menü
-  parancsainak nincs folyamatjelzőjük, ezért ezeknél a terminálkimenet látszik.
+  a CLI i/n kérdései pedig felugró dialógusként.
+- **Segédeszközök** (csavarkulcs ikon, felirat nélkül): a Segédeszközök menü
+  parancsainak kimenete, lásd lent. Nem kerül a configba; a CLI és a GUI azt
+  mutatja tovább, amit eddig.
 
 A futás módja az indításakor rögzül; a kapcsoló csak azt váltja, mit mutat az ablak,
 futás közben is (a CLI kimenettel indított futásnál a GUI nézet megjegyzést mutat). A
@@ -122,15 +124,72 @@ A `deew-gui` és a `deew-web` is a mellettük lévő `deew` binárist futtatja; 
 a GUI mód egy megjegyzést mutat, hogy a CLI nem jelent folyamatot, ilyenkor válts
 CLI kimenetre.
 
+## Segédeszközök
+
+A Segédeszközök menü (a `deew-gui` címsorában, a `deew-web` eszköztárában) a CLI
+egyszeri parancsait futtatja: Help, Full help, Version, Changelog, List bitrates,
+Print logos, Show config, Generate config és Download tools. Egy elem kiválasztása
+átvált a Segédeszközök fülre (a CLI és a GUI utáni harmadik fül), és a parancs a
+saját terminálján fut; a következő parancs törli az előző
+kimenetét, a Stop pedig leállítja a futót.
+
+- Külön pszeudo-terminálban futnak, ezért egy kódolás közben is működnek, és nem
+  érintik annak terminálját, folyamatjelzőjét, előzményeit és Stop gombját.
+  Egyszerre egy segédparancs fut.
+- A Download tools (`-gt`) lecseréli az ffmpeg-et, a truehdd-t és a dee_shim-et,
+  a Generate config (`-gc`) pedig újraírja a `config.toml`-t, ezért kódolás
+  közben mindkettő szürke, és amíg valamelyik fut, kódolás sem indítható. A
+  háttérrendszerek ezt is kikényszerítik.
+- A Generate config mindig rákérdez: felülírja a `config.toml`-t az
+  alapértékekkel, beleértve a `[gui]` beállításokat, az alapértelmezett
+  bitrate-eket és a `deew-web` bejelentkezést.
+- A háttérrendszerek csak ezeket a rögzített kapcsolókat fogadják el (`-h`, `-fh`,
+  `-v`, `-cl`, `-lb`, `-pl`, `-c`, `-gc`, `-gt`), más argumentumot soha. A
+  `deew-web` a `/api/info` WebSocketen szolgálja ki őket (ugyanaz a bejelentkezés,
+  Host és Origin ellenőrzés, mint a `/api/run`-nál); a kimenet csak a kérő
+  fülhöz megy, a fül bezárása leállítja a parancsot.
+
 ## Formátumok
 
-A formátum legördülő menü a DD, DDP, DDP Atmos, AC4, AC4 Atmos, AAC és TrueHD
-formátumokat kínálja. Az opciók űrlap a CLI szabályait követi: a `-dm` csak
+A formátum legördülő menü a DD, DDP, DDP Atmos, AC4, AC4 Atmos, AC-4 IMS, AAC és
+TrueHD formátumokat kínálja. Az opciók űrlap a CLI szabályait követi: a `-dm` csak
 DD/DDP/AC4/AAC esetén, a `-dn` csak DD/DDP/AC4 esetén érhető el, az Atmos
 formátumoknak (TrueHD Atmos input, truehdd-vel dekódolva) pedig nincs `-dm`-jük
 és `-mo`-juk. GUI kimenetben az Atmos formátumok egy extra dekódolási szakaszt
 mutatnak a truehdd-hez. Maguk az eszközök (DEE 6.7, truehdd, dee_shim) a CLI
 mellé vagy a PATH-ba kerülnek, lásd a [fő leírást](../README_hu.md).
+
+A „Surround phase shift” (`-sps`), „LFE low-pass filter” (`-lpf`) és „Surround
+3 dB attenuation” (`-s3a`) jelölőnégyzetek a config értékeit mutatják
+(`surround_phase_shift`, `low_pass_filter`, `surround_3db_attenuation`), és csak
+akkor kerül jelző a parancsba, ha az adott futásra megváltoztatod valamelyiket.
+A fázistolás DD/DDP/DDP Atmos esetén, az `-lpf` csak DD/DDP esetén, az `-s3a`
+DD/DDP/TrueHD esetén érhető el (TrueHD-nél a CLI előbb rákérdez, mert a kimenet
+nem lesz azonos a forrással; a kérdés a prompt ablakban / terminálban jelenik
+meg); máshol szürkék.
+
+Az **AC-4 IMS** (`ac4-ims`, immersive stereo, `.ac4`) 5.1 / 5.0 / 7.0 / 7.1 vagy
+Atmos inputot (TrueHD Atmos, ADM BWF, DAMF) fogad, de Atmos és csatornaalapú
+inputot nem egyszerre (a GUI figyelmeztet a sztereó / mono és a vegyes
+inputokra). Bitrátái: 64, 96, 128, 144, 256 és 320 kbps (alapértelmezett: a
+config `ac4_ims` értéke). A `-dm`, `-dl` és `-dn` szürke hozzá, a DRC
+alapértelmezetten `none`, az „AC-4 IMS mode” választó (`--ac4-ims-mode`,
+`general` vagy `music`) csak `music` esetén kerül a parancsba, ami a `music_light`
+DRC-t választja (bekapcsolva a többi DRC érték szürke).
+
+**Atmos masterek**: az ADM BWF (`chna` és `axml` chunkot tartalmazó `.wav`) és a
+DAMF (`.atmos` a `.atmos.audio` és `.atmos.metadata` fájlokkal) felismerése
+ugyanaz a fejléc-ellenőrzés, mint a CLI-ben (a GUI a CLI-vel vizsgáltatja meg az
+inputokat), ffprobe nélkül; „ADM BWF Atmos master” / „DAMF Atmos master”
+néven jelennek meg. DDP Atmos, TrueHD Atmos, AC4 Atmos és AC-4 IMS formátumra
+kódolhatók, DD/DDP-re pedig (renderelés, más inputtal nem együtt); TrueHD, AC4
+és AAC esetén a GUI figyelmeztet. A `-ti`-t figyelmen kívül hagyják. A fájlválasztó
+ablakban és a webes fájlböngészőben nincs kiterjesztés-szűrő, minden `.wav` és
+`.atmos` kiválasztható.
+
+**Sávindex** (`-ti`): az `N` vagy `a:N` az N. hangsáv, az `s:N` a konténer N
+indexű streamje (hangstreamnek kell lennie, különben hibát mutat az input). A GUI
+ugyanazt a streamet vizsgálja, amelyet a CLI használni fog.
 
 macOS-en a `deew-gui-macos` / `deew-web-macos` release binárisokat használd
 (`chmod +x`, mint Linuxon).

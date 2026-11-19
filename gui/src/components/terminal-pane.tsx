@@ -13,6 +13,7 @@ import "@fontsource/ibm-plex-mono/400.css"
 import "@fontsource/ibm-plex-mono/700.css"
 
 import { fittingFontSize } from "@/lib/fitting-font-size"
+import { useTheme, type Theme } from "@/lib/theme"
 import {
   TAP_SLOP_PX,
   boundaryLeftover,
@@ -171,6 +172,8 @@ interface TerminalPaneProps {
   className?: string
 }
 
+// The terminal is dark in every UI theme: near black in the dark one, dark
+// grey next to the light one.
 const DARK: ITheme = {
   background: "#0a0a0a",
   foreground: "#e5e5e5",
@@ -179,12 +182,27 @@ const DARK: ITheme = {
   selectionBackground: "#404040",
 }
 
+const GREY: ITheme = {
+  background: "#2b2b2b",
+  foreground: "#e5e5e5",
+  cursor: "#e5e5e5",
+  cursorAccent: "#2b2b2b",
+  selectionBackground: "#505050",
+}
+
+const TERMINAL_THEMES: Record<Theme, { xterm: ITheme; border: string }> = {
+  dark: { xterm: DARK, border: "#262626" },
+  light: { xterm: GREY, border: "#404040" },
+}
+
 export const TerminalPane = forwardRef<TerminalHandle, TerminalPaneProps>(
   function TerminalPane({ onData, onResize, className }, ref) {
     const container = useRef<HTMLDivElement>(null)
     const term = useRef<Terminal | null>(null)
     const onDataRef = useRef(onData)
     const onResizeRef = useRef(onResize)
+    const uiTheme = useTheme()
+    const themeRef = useRef(uiTheme)
 
     useEffect(() => {
       onDataRef.current = onData
@@ -201,6 +219,13 @@ export const TerminalPane = forwardRef<TerminalHandle, TerminalPaneProps>(
     }, [])
 
     useEffect(() => {
+      themeRef.current = uiTheme
+      run((t) => {
+        t.options.theme = TERMINAL_THEMES[uiTheme].xterm
+      })
+    }, [uiTheme, run])
+
+    useEffect(() => {
       const el = container.current
       if (!el) return
       let cancelled = false
@@ -213,7 +238,7 @@ export const TerminalPane = forwardRef<TerminalHandle, TerminalPaneProps>(
           scrollback: 10000,
           cursorBlink: true,
           allowProposedApi: true,
-          theme: DARK,
+          theme: TERMINAL_THEMES[themeRef.current].xterm,
         })
         const fit = new FitAddon()
         terminal.loadAddon(fit)
@@ -312,9 +337,8 @@ export const TerminalPane = forwardRef<TerminalHandle, TerminalPaneProps>(
       <div
         className={className}
         style={{
-          // The terminal stays dark in every UI theme.
-          backgroundColor: DARK.background,
-          borderColor: "#262626",
+          backgroundColor: TERMINAL_THEMES[uiTheme].xterm.background,
+          borderColor: TERMINAL_THEMES[uiTheme].border,
         }}
       >
         <div ref={container} className="size-full" />

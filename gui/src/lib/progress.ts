@@ -7,6 +7,8 @@ export type Stage = "starting" | "ffmpeg" | "decode" | "measure" | "encode"
 
 export type Gating = "dialogue" | "level"
 
+export type JobResult = "finished" | "failed" | "stopped"
+
 export type ProgressEvent =
   | { type: "hello"; version: string }
   | { type: "jobs"; files: string[] }
@@ -24,7 +26,16 @@ export type ProgressEvent =
       lra?: number
       true_peak?: number
     }
-  | { type: "done"; job: number }
+  | {
+      type: "done"
+      job: number
+      /** Absent from an older CLI: finished, duration unknown. */
+      result?: JobResult
+      /** Whole seconds the job took. */
+      took?: number
+      /** Plain-text reason of a failed job. */
+      error?: string
+    }
   | { type: "warning"; text: string }
   | { type: "error"; text: string }
   | { type: "prompt"; text: string }
@@ -89,7 +100,20 @@ export function parseProgressEvent(line: string): ProgressEvent | null {
         ...(typeof m.true_peak === "number" ? { true_peak: m.true_peak } : {}),
       }
     case "done":
-      return isIndex(m.job) ? { type: "done", job: m.job } : null
+      if (!isIndex(m.job)) return null
+      return {
+        type: "done",
+        job: m.job,
+        ...(m.result === "finished" ||
+        m.result === "failed" ||
+        m.result === "stopped"
+          ? { result: m.result }
+          : {}),
+        ...(typeof m.took === "number" && Number.isFinite(m.took) && m.took >= 0
+          ? { took: Math.floor(m.took) }
+          : {}),
+        ...(typeof m.error === "string" ? { error: m.error } : {}),
+      }
     case "warning":
     case "error":
     case "prompt":
@@ -112,7 +136,12 @@ export interface JobProgress {
   program?: number
   lra?: number
   true_peak?: number
+  /** The job is over (finished, failed or stopped). */
   done: boolean
+  /** How it ended; an old CLI sends none (= finished). */
+  result?: JobResult
+  took?: number
+  error?: string
 }
 
 export interface ProgressNote {
@@ -186,8 +215,14 @@ export function reduceProgress(
         ...state,
         jobs: withJob(state.jobs, event.job, (job) => ({
           ...job,
-          percent: 100,
+          percent:
+            event.result === "failed" || event.result === "stopped"
+              ? job.percent
+              : 100,
           done: true,
+          result: event.result,
+          took: event.took,
+          error: event.error,
         })),
       }
     case "warning":
@@ -225,9 +260,14 @@ const STAGE_LABELS: Record<JobProgress["stage"], string> = {
 
 export function stageLabel(job: JobProgress): string {
   const label = STAGE_LABELS[job.stage]
-  if (job.db === null) return label
-  // like the CLI: (-20 dB, dialogue-gated, 37% speech, program -18.9 LKFS,
-  // LRA 13.1 LU, true peak -4.9 dBTP)
+  const level = levelText(job)
+  return level ? `${label} (${level})` : label
+}
+
+/** Like the CLI: `-20 dB, dialogue-gated, 37% speech, program -18.9 LKFS,
+ * LRA 13.1 LU, true peak -4.9 dBTP`; empty without a level. */
+function levelText(job: JobProgress): string {
+  if (job.db === null) return ""
   const parts = [`${job.db} dB`]
   if (job.gating) parts.push(`${job.gating}-gated`)
   if (job.speech !== undefined) parts.push(`${job.speech}% speech`)
@@ -236,7 +276,32 @@ export function stageLabel(job: JobProgress): string {
   if (job.lra !== undefined) parts.push(`LRA ${job.lra.toFixed(1)} LU`)
   if (job.true_peak !== undefined)
     parts.push(`true peak ${job.true_peak.toFixed(1)} dBTP`)
-  return `${label} (${parts.join(", ")})`
+  return parts.join(", ")
+}
+
+/** `10:15` or `1:02:05` like the CLI's `clock`. */
+export function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor(total / 60) % 60
+  const s = total % 60
+  const ss = String(s).padStart(2, "0")
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`
+}
+
+/**
+ * The status of a job like the CLI shows it, without the file name: the
+ * stage while running, `finished (-25 dB) - took 10:15`, `failed: reason`
+ * or `stopped`.
+ */
+export function jobStatusText(job: JobProgress): string {
+  if (!job.done) return stageLabel(job)
+  if (job.result === "failed")
+    return job.error ? `failed: ${job.error}` : "failed"
+  if (job.result === "stopped") return "stopped"
+  const level = levelText(job)
+  const took = job.took === undefined ? "" : ` - took ${formatClock(job.took)}`
+  return `finished${level ? ` (${level})` : ""}${took}`
 }
 
 /** `45.55%` like the CLI bar: `100%` when finished, at most `99.99%` before. */
@@ -246,11 +311,15 @@ export function formatPercent(percent: number | null): string {
   return `${Math.min(percent, 99.99).toFixed(2)}%`
 }
 
-/** Mean percent over all jobs (done = 100, unknown = 0); null without jobs. */
+/** Whether the job finished (an old CLI's `done` counts as finished). */
+export const isFinished = (job: JobProgress): boolean =>
+  job.done && (job.result === undefined || job.result === "finished")
+
+/** Mean percent over all jobs (finished = 100, unknown = 0); null without jobs. */
 export function overallPercent(jobs: JobProgress[]): number | null {
   if (jobs.length === 0) return null
   const sum = jobs.reduce(
-    (total, job) => total + (job.done ? 100 : (job.percent ?? 0)),
+    (total, job) => total + (isFinished(job) ? 100 : (job.percent ?? 0)),
     0
   )
   return sum / jobs.length
@@ -280,15 +349,10 @@ export function statusText(status: RunStatus): string {
   }
 }
 
-/** Utilities-menu commands (`--version` and the like) encode nothing. */
-export const isInfoRun = (args: string[]): boolean => !args.includes("-i")
-
 /** One run in the history of the native view. */
 export interface RunEntry {
   id: number
   command: string
-  /** Only prints information (no encode, no bars). */
-  info: boolean
   progress: ProgressState
   status: RunStatus
 }
@@ -304,7 +368,7 @@ export const EMPTY_HISTORY: RunHistory = { runs: [], nextId: 1 }
 export const MAX_RUNS = 50
 
 export type HistoryAction =
-  | { type: "begin"; command: string; info: boolean }
+  | { type: "begin"; command: string }
   | { type: "event"; event: ProgressEvent }
   | { type: "end"; status: RunStatus }
   | { type: "restart" }
@@ -329,7 +393,6 @@ export function reduceHistory(
       const entry: RunEntry = {
         id: history.nextId,
         command: action.command,
-        info: action.info,
         progress: EMPTY_PROGRESS,
         status: { kind: "running" },
       }
@@ -356,4 +419,35 @@ export function reduceHistory(
         status: { kind: "running" },
       }))
   }
+}
+
+/** Bar colours, the CLI's 256-colour codes (src/ui.rs). */
+export const BAR_COLORS = {
+  decode: "#00afff",
+  measure: "#ffaf00",
+  encode: "#ff005f",
+  finished: "#5faf00",
+  failed: "#d70000",
+  stopped: "#8a8a8a",
+} as const
+
+/**
+ * Fill colour of a job's bar and whether it is dimmed. Green only for a
+ * finished job; an unfinished job of a failed run keeps its stage colour,
+ * dimmed.
+ */
+export function barColor(
+  job: JobProgress,
+  runFailed: boolean
+): { color: string; dim: boolean } {
+  if (isFinished(job)) return { color: BAR_COLORS.finished, dim: false }
+  if (job.result === "failed") return { color: BAR_COLORS.failed, dim: false }
+  if (job.result === "stopped") return { color: BAR_COLORS.stopped, dim: false }
+  const color =
+    job.stage === "measure"
+      ? BAR_COLORS.measure
+      : job.stage === "encode"
+        ? BAR_COLORS.encode
+        : BAR_COLORS.decode
+  return { color, dim: runFailed }
 }

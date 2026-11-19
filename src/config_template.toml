@@ -20,11 +20,22 @@ logo = 1
 # examples: 1, 4, '50%'
 max_instances = '50%'
 
-# DD/DDP/DDP Atmos: DEE's 90° phase shift on the surround channels, set to false to turn it off (-nps turns it off for one run).
+# DD/DDP/DDP Atmos: DEE's 90° phase shift on the surround channels, set to false to turn it off (-sps off turns it off for one run, -sps on turns it back on).
 surround_phase_shift = true
 
-# Feed the decoded audio from ffmpeg straight into DEE instead of writing a temp .wav (DD, DDP, AC4, AAC, -mo). Set to false if it causes problems.
-pipe = true
+# DD/DDP: DEE's 120 Hz low-pass filter on the LFE channel, set to false to turn it off (-lpf overrides it for one run).
+low_pass_filter = true
+
+# DD/DDP/TrueHD: 3 dB attenuation of the surround channels, set to true to turn it on (-s3a overrides it for one run).
+# TrueHD asks first: the output is no longer identical to the source.
+surround_3db_attenuation = false
+
+# Feed the decoded audio from ffmpeg straight into DEE instead of writing a temp .wav (DD, DDP, AC4, AAC, -mo).
+# 'auto': always on Linux/macOS; on Windows only when fewer than 2 encodes run at once, because DEE's
+#   named pipe is much slower when several encodes run in parallel (those use the temp .wav).
+# 'always': always use the pipe.
+# false: never use the pipe, set it if the pipe causes problems.
+pipe = 'auto'
 
 # Where the encoded files are saved.
 # path: the output directory, empty uses the current directory.
@@ -50,10 +61,11 @@ pipe = true
     ac4_2_0 = 256
     ac4_5_1 = 448
     ac4_atmos = 448
+    ac4_ims = 256
     aac_2_0 = 256
 
-# The profile used for 7.1 DDP and for DDP Atmos.
-# You can override these settings with --ddp-mode and --ddp-atmos-mode.
+# The profile used for 7.1 DDP, for DDP Atmos and for AC4 IMS.
+# You can override these settings with --ddp-mode, --ddp-atmos-mode and --ac4-ims-mode.
 # ddp (7.1 only, 5.1 and below are not affected):
 #   standard: E-AC-3 only, 384-1792 kbps, needs dee_shim
 #   bluray: AC-3 core + E-AC-3, 768-1664 kbps, also plays on AC-3 only devices
@@ -61,10 +73,14 @@ pipe = true
 #   streaming: 5.1 with Atmos, 384-1024 kbps, the format of streaming services, best device support
 #   standard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
 #   bluray: 7.1 with Atmos, AC-3 core + E-AC-3, 1152-1664 kbps
+# ac4_ims:
+#   general: the default profile
+#   music: no dialogue enhancement, DRC music_light (-r can only be music_light)
 # Use -lb/--list-bitrates to see the exact bitrates of each profile.
 [default_modes]
     ddp = 'standard' # standard/bluray
     ddp_atmos = 'streaming' # streaming/standard/bluray
+    ac4_ims = 'general' # general/music
 
 # You can toggle what sections you would like to see in the encoding summary
 [summary_sections]

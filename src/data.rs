@@ -61,6 +61,7 @@ pub const BITRATES: &[(&str, &[u32])] = &[
         &[96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
     ),
     ("ac4_atmos", &[256, 320, 448, 768]),
+    ("ac4_ims", &[64, 96, 128, 144, 256, 320]),
     (
         "aac_20",
         &[
@@ -124,6 +125,9 @@ pub enum ErrorKind {
     DownmixValue,
     DialnormFormat,
     PhaseShiftFormat,
+    LowPassFilterFormat,
+    Surround3dbFormat,
+    OnOff,
     Ac4Drc,
     AtmosInput,
     AtmosNoAtmos,
@@ -147,6 +151,14 @@ pub enum ErrorKind {
     Ac4InputChannels,
     DdpMode,
     DdpAtmosMode,
+    Ac4ImsMode,
+    Ac4ImsMusicDrc,
+    Ac4ImsLfe,
+    Ac4ImsDownmix,
+    Ac4ImsInput,
+    Ac4ImsMixed,
+    MasterFormat,
+    MasterMixed,
 }
 
 impl ErrorKind {
@@ -156,7 +168,7 @@ impl ErrorKind {
             Self::Delay => "unsupported delay value.",
             Self::CreateDir => "failed to create [bold yellow]🤠[/bold yellow].",
             Self::Format => {
-                "[bold yellow]-f[/bold yellow]/[bold yellow]--format[/bold yellow] can only be [bold yellow]dd[/bold yellow], [bold yellow]ddp[/bold yellow], [bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd[/bold yellow], [bold yellow]thd-atmos[/bold yellow], [bold yellow]ac4[/bold yellow], [bold yellow]ac4-atmos[/bold yellow] or [bold yellow]aac[/bold yellow]."
+                "[bold yellow]-f[/bold yellow]/[bold yellow]--format[/bold yellow] can only be [bold yellow]dd[/bold yellow], [bold yellow]ddp[/bold yellow], [bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd[/bold yellow], [bold yellow]thd-atmos[/bold yellow], [bold yellow]ac4[/bold yellow], [bold yellow]ac4-atmos[/bold yellow], [bold yellow]ac4-ims[/bold yellow] or [bold yellow]aac[/bold yellow]."
             }
             Self::Downmix => {
                 "[bold yellow]-dm[/bold yellow]/[bold yellow]--downmix[/bold yellow] can only be [bold yellow]1[/bold yellow], [bold yellow]2[/bold yellow] or [bold yellow]6[/bold yellow]."
@@ -177,7 +189,16 @@ impl ErrorKind {
                 "custom dialnorm is only supported for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow], [bold yellow]DDP Atmos[/bold yellow], [bold yellow]TrueHD[/bold yellow], [bold yellow]TrueHD Atmos[/bold yellow] and [bold yellow]AC4[/bold yellow] encoding."
             }
             Self::PhaseShiftFormat => {
-                "[bold yellow]-nps[/bold yellow]/[bold yellow]--no-phase-shift[/bold yellow] only works for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]DDP Atmos[/bold yellow]."
+                "[bold yellow]-sps[/bold yellow]/[bold yellow]--surround-phase-shift[/bold yellow] only works for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]DDP Atmos[/bold yellow]."
+            }
+            Self::LowPassFilterFormat => {
+                "[bold yellow]-lpf[/bold yellow]/[bold yellow]--low-pass-filter[/bold yellow] only works for [bold yellow]DD[/bold yellow] and [bold yellow]DDP[/bold yellow]."
+            }
+            Self::Surround3dbFormat => {
+                "[bold yellow]-s3a[/bold yellow]/[bold yellow]--surround-3db-attenuation[/bold yellow] only works for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]TrueHD[/bold yellow]."
+            }
+            Self::OnOff => {
+                "[bold yellow]-sps[/bold yellow], [bold yellow]-lpf[/bold yellow] and [bold yellow]-s3a[/bold yellow] can only be [bold yellow]on[/bold yellow] or [bold yellow]off[/bold yellow]."
             }
             Self::Ac4Drc => {
                 "DRC [bold yellow]none[/bold yellow] is not supported for AC4 encoding (AC4 Atmos supports it)."
@@ -237,6 +258,30 @@ impl ErrorKind {
             Self::DdpMode => {
                 "[bold yellow]--ddp-mode[/bold yellow] can only be [bold yellow]standard[/bold yellow] or [bold yellow]bluray[/bold yellow]."
             }
+            Self::Ac4ImsMode => {
+                "[bold yellow]--ac4-ims-mode[/bold yellow] can only be [bold yellow]general[/bold yellow] or [bold yellow]music[/bold yellow]."
+            }
+            Self::Ac4ImsMusicDrc => {
+                "[bold yellow]--ac4-ims-mode music[/bold yellow] (or [bold yellow]ac4_ims = 'music'[/bold yellow] in the config) needs the DRC profile [bold yellow]music_light[/bold yellow] (DEE's music mode takes no other), leave out [bold yellow]-r[/bold yellow] or use [bold yellow]-r music_light[/bold yellow]."
+            }
+            Self::Ac4ImsDownmix => {
+                "[bold yellow]-dm[/bold yellow]/[bold yellow]--downmix[/bold yellow] doesn't work for [bold yellow]ac4-ims[/bold yellow], it always encodes immersive stereo (a 7.1 input is downmixed to 5.1 first)."
+            }
+            Self::Ac4ImsLfe => {
+                "[bold yellow]-dl[/bold yellow]/[bold yellow]--disable-lfe[/bold yellow] doesn't work for [bold yellow]ac4-ims[/bold yellow], it needs the LFE channel of a 5.1 source."
+            }
+            Self::Ac4ImsInput => {
+                "[bold yellow]ac4-ims[/bold yellow] needs a 5.1 (or 5.0, 7.0, 7.1) or an Atmos input, stereo and mono can't be encoded to immersive stereo."
+            }
+            Self::Ac4ImsMixed => {
+                "[bold yellow]ac4-ims[/bold yellow] can't encode Atmos inputs (TrueHD Atmos, ADM BWF, DAMF) and channel-based inputs in the same run."
+            }
+            Self::MasterFormat => {
+                "Atmos masters (ADM BWF, DAMF) can't be encoded to [bold yellow]🤠[/bold yellow], use [bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow], [bold yellow]ac4-atmos[/bold yellow] or [bold yellow]ac4-ims[/bold yellow] (or [bold yellow]dd[/bold yellow]/[bold yellow]ddp[/bold yellow] for a 5.1 render)."
+            }
+            Self::MasterMixed => {
+                "Atmos masters (ADM BWF, DAMF) can't be encoded to [bold yellow]dd[/bold yellow]/[bold yellow]ddp[/bold yellow] together with other inputs."
+            }
             Self::DdpAtmosMode => {
                 "[bold yellow]--ddp-atmos-mode[/bold yellow] can only be [bold yellow]streaming[/bold yellow], [bold yellow]standard[/bold yellow] or [bold yellow]bluray[/bold yellow]."
             }
@@ -250,7 +295,8 @@ mod tests {
 
     #[test]
     fn bitrates() {
-        assert_eq!(BITRATES.len(), 15);
+        assert_eq!(BITRATES.len(), 16);
+        assert_eq!(allowed_bitrates("ac4_ims"), &[64, 96, 128, 144, 256, 320]);
         assert_eq!(allowed_bitrates("ac4_atmos"), &[256, 320, 448, 768]);
         assert_eq!(allowed_bitrates("ddp_71").last(), Some(&1792));
         assert_eq!(allowed_bitrates("ddp_71").len(), 19);

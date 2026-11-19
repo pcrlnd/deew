@@ -91,7 +91,7 @@ fn parse_scaling(value: Option<&toml::Value>) -> u16 {
 }
 
 /// The settings plus read-only values for the window.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
     #[serde(flatten)]
@@ -102,11 +102,51 @@ pub struct SettingsView {
     pub default_ddp_mode: String,
     /// `default_modes.ddp_atmos` of the config (program default when missing).
     pub default_ddp_atmos_mode: String,
+    /// `default_modes.ac4_ims` of the config (program default when missing).
+    pub default_ac4_ims_mode: String,
+    /// `surround_phase_shift` of the config (true when missing).
+    pub surround_phase_shift: bool,
+    /// `low_pass_filter` of the config (true when missing).
+    pub low_pass_filter: bool,
+    /// `surround_3db_attenuation` of the config (false when missing).
+    pub surround_3db_attenuation: bool,
 }
 
-/// `default_modes.ddp` and `.ddp_atmos` of a config text; a missing or
+impl Default for SettingsView {
+    fn default() -> Self {
+        SettingsView {
+            settings: GuiSettings::default(),
+            default_output: String::new(),
+            default_ddp_mode: String::new(),
+            default_ddp_atmos_mode: String::new(),
+            default_ac4_ims_mode: String::new(),
+            surround_phase_shift: true,
+            low_pass_filter: true,
+            surround_3db_attenuation: false,
+        }
+    }
+}
+
+/// The top-level `surround_phase_shift`, `low_pass_filter` and
+/// `surround_3db_attenuation` of a config text; a missing key or a value of
+/// the wrong type gives the program default (true, true, false).
+pub fn parse_dd_filters(text: &str) -> (bool, bool, bool) {
+    let doc = text.parse::<toml::Table>().ok();
+    let pick = |key: &str, default: bool| {
+        doc.as_ref()
+            .and_then(|d| d.get(key)?.as_bool())
+            .unwrap_or(default)
+    };
+    (
+        pick("surround_phase_shift", true),
+        pick("low_pass_filter", true),
+        pick("surround_3db_attenuation", false),
+    )
+}
+
+/// `default_modes.ddp`, `.ddp_atmos` and `.ac4_ims` of a config text; a missing or
 /// unknown value gives the program default.
-pub fn parse_default_modes(text: &str) -> (String, String) {
+pub fn parse_default_modes(text: &str) -> (String, String, String) {
     let modes = text
         .parse::<toml::Table>()
         .ok()
@@ -126,20 +166,27 @@ pub fn parse_default_modes(text: &str) -> (String, String) {
             &["streaming", "standard", "bluray"],
             "streaming",
         ),
+        pick("ac4_ims", &["general", "music"], "general"),
     )
 }
 
 impl SettingsView {
     pub fn new(settings: GuiSettings, config: Option<&Path>) -> SettingsView {
-        let (default_ddp_mode, default_ddp_atmos_mode) = parse_default_modes(
-            &config
-                .and_then(|path| std::fs::read_to_string(path).ok())
-                .unwrap_or_default(),
-        );
+        let text = config
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        let (default_ddp_mode, default_ddp_atmos_mode, default_ac4_ims_mode) =
+            parse_default_modes(&text);
+        let (surround_phase_shift, low_pass_filter, surround_3db_attenuation) =
+            parse_dd_filters(&text);
         SettingsView {
             settings,
             default_ddp_mode,
             default_ddp_atmos_mode,
+            default_ac4_ims_mode,
+            surround_phase_shift,
+            low_pass_filter,
+            surround_3db_attenuation,
             default_output: std::env::home_dir()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
@@ -375,7 +422,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":""}"#
+            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false}"#
         );
         let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","toInput":true}"#).unwrap();
         assert!(o.to_input);
@@ -524,16 +571,59 @@ mod tests {
     #[test]
     fn default_modes_come_from_the_config() {
         let d = |t: &str| parse_default_modes(t);
-        assert_eq!(d(""), ("standard".into(), "streaming".into()));
-        assert_eq!(d(TEMPLATE), ("standard".into(), "streaming".into()));
+        let s = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+        assert_eq!(d(""), s("standard", "streaming", "general"));
+        assert_eq!(d(TEMPLATE), s("standard", "streaming", "general"));
         assert_eq!(
-            d("[default_modes]\nddp = 'bluray'\nddp_atmos = 'standard'\n"),
-            ("bluray".into(), "standard".into())
+            d("[default_modes]\nddp = 'bluray'\nddp_atmos = 'standard'\nac4_ims = 'music'\n"),
+            s("bluray", "standard", "music")
         );
         // unknown values give the program default
         assert_eq!(
-            d("[default_modes]\nddp = 'x'\nddp_atmos = 3\n"),
-            ("standard".into(), "streaming".into())
+            d("[default_modes]\nddp = 'x'\nddp_atmos = 3\nac4_ims = 'x'\n"),
+            s("standard", "streaming", "general")
+        );
+    }
+
+    #[test]
+    fn dd_filters_come_from_the_config() {
+        let f = |t: &str| parse_dd_filters(t);
+        assert_eq!(f(""), (true, true, false));
+        assert_eq!(f("not toml [[["), (true, true, false));
+        assert_eq!(f(TEMPLATE), (true, true, false));
+        assert_eq!(
+            f(
+                "surround_phase_shift = false\nlow_pass_filter = false\nsurround_3db_attenuation = true\n"
+            ),
+            (false, false, true)
+        );
+        // wrong types give the default
+        assert_eq!(
+            f(
+                "surround_phase_shift = 'no'\nlow_pass_filter = 0\nsurround_3db_attenuation = 'yes'\n"
+            ),
+            (true, true, false)
+        );
+        // only top-level keys count
+        assert_eq!(f("[gui]\nlow_pass_filter = false\n"), (true, true, false));
+    }
+
+    #[test]
+    fn settings_view_reads_the_filters_from_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "surround_phase_shift = false\nsurround_3db_attenuation = true\n",
+        )
+        .unwrap();
+        let view = SettingsView::new(GuiSettings::default(), Some(&path));
+        assert!(!view.surround_phase_shift);
+        assert!(view.low_pass_filter);
+        assert!(view.surround_3db_attenuation);
+        let view = SettingsView::new(GuiSettings::default(), None);
+        assert!(
+            view.surround_phase_shift && view.low_pass_filter && !view.surround_3db_attenuation
         );
     }
 

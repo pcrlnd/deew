@@ -89,8 +89,10 @@ The toggle after the Stop button picks what the window shows of a run:
 
 - **CLI** (default): the terminal output of the CLI.
 - **GUI**: native progress bars per file, warnings and errors as lines, and the
-  CLI's y/n questions as pop-up dialogs. The Utilities menu commands have no
-  progress, so their output is shown in the terminal instead.
+  CLI's y/n questions as pop-up dialogs.
+- **Utilities** (wrench icon, no label): the output of the Utilities menu's
+  commands, see below. It is not saved in the config; CLI and GUI keep what they
+  showed.
 
 The mode of a run is fixed when it starts; the toggle only switches what is
 shown, also while a job runs (a run started with the CLI output shows a note in
@@ -121,14 +123,68 @@ Both `deew-gui` and `deew-web` run the `deew` binary next to them; with an older
 one the GUI mode shows a note that the CLI does not report progress, use the
 CLI output then.
 
+## Utilities
+
+The Utilities menu (title bar of `deew-gui`, toolbar of `deew-web`) runs the
+CLI's one-off commands: Help, Full help, Version, Changelog, List bitrates, Print
+logos, Show config, Generate config and Download tools. Choosing one switches to
+the Utilities tab (third tab after CLI and GUI) and runs the command in its own
+terminal; the next command clears the previous output, and Stop ends a
+running one.
+
+- They run in a separate pseudo-terminal, so they work while an encode is
+  running and do not touch its terminal, progress, history or Stop button. One
+  utility runs at a time.
+- Download tools (`-gt`) replaces ffmpeg, truehdd and dee_shim, and Generate
+  config (`-gc`) rewrites `config.toml`, so both are greyed out while an encode
+  runs, and an encode cannot start while one of them runs. The backends enforce
+  this too.
+- Generate config always asks first: it overwrites `config.toml` with the
+  defaults, including the `[gui]` settings, the default bitrates and the
+  `deew-web` login.
+- Only these fixed flags are accepted by the backends (`-h`, `-fh`, `-v`, `-cl`,
+  `-lb`, `-pl`, `-c`, `-gc`, `-gt`), never other arguments. `deew-web` serves them
+  on the WebSocket `/api/info` (same login, Host and Origin checks as `/api/run`);
+  the output goes only to the tab that asked, and closing the tab ends the command.
+
 ## Formats
 
-The format dropdown offers DD, DDP, DDP Atmos, AC4, AC4 Atmos, AAC and TrueHD.
-The options form follows the CLI rules: `-dm` is only available for
+The format dropdown offers DD, DDP, DDP Atmos, AC4, AC4 Atmos, AC-4 IMS, AAC and
+TrueHD. The options form follows the CLI rules: `-dm` is only available for
 DD/DDP/AC4/AAC, `-dn` for DD/DDP/AC4, and the Atmos formats (TrueHD Atmos input,
 decoded with truehdd) have neither `-dm` nor `-mo`. In GUI output the Atmos
 formats show an extra decode stage for truehdd. The tools themselves (DEE 6.7,
 truehdd, dee_shim) go next to the CLI or in your PATH, see the [main readme](../README.md).
+
+The "Surround phase shift" (`-sps`), "LFE low-pass filter" (`-lpf`) and
+"Surround 3 dB attenuation" (`-s3a`) checkboxes show the config's values
+(`surround_phase_shift`, `low_pass_filter`, `surround_3db_attenuation`) and a
+flag is only passed when you change one for the run. Phase shift is for
+DD/DDP/DDP Atmos, `-lpf` for DD/DDP only and `-s3a` for DD/DDP/TrueHD (the CLI
+asks first for TrueHD, because the output won't be identical to the source, and
+the question appears in the prompt pop-up / terminal); elsewhere they are greyed out.
+
+**AC-4 IMS** (`ac4-ims`, immersive stereo, `.ac4`) takes 5.1 / 5.0 / 7.0 / 7.1 or
+Atmos inputs (TrueHD Atmos, ADM BWF, DAMF), but not Atmos and channel-based inputs
+in one run (the GUI warns about stereo / mono inputs and about mixed inputs). Its
+bitrates are 64, 96, 128, 144, 256 and 320 kbps (default: `ac4_ims` of the
+config). `-dm`, `-dl` and `-dn` are greyed out for it, DRC is `none` by default,
+and the "AC-4 IMS mode" select (`--ac4-ims-mode`, `general` or `music`) is only
+passed for `music`, which selects the DRC `music_light` (the other DRC values are
+greyed out while it is on).
+
+**Atmos masters**: ADM BWF (`.wav` with `chna` and `axml` chunks) and DAMF
+(`.atmos` with its `.atmos.audio` and `.atmos.metadata`) are found by the same
+header check as the CLI does (the GUI asks the CLI to probe the inputs), without
+ffprobe, and shown as "ADM BWF Atmos master" / "DAMF Atmos master". They can be
+encoded to DDP Atmos, TrueHD Atmos, AC4 Atmos and AC-4 IMS, and to DD/DDP (a
+render, not together with other inputs); the GUI warns for TrueHD, AC4 and AAC.
+`-ti` is ignored for them. Every `.wav` and `.atmos` can be picked in the file
+dialog and the web file browser, there is no extension filter.
+
+**Track index** (`-ti`): `N` or `a:N` is the Nth audio track, `s:N` the stream
+with index N of the container (it has to be an audio stream, otherwise the input
+shows an error). The GUI probes the same stream that the CLI will use.
 
 On macOS use the `deew-gui-macos` / `deew-web-macos` release binaries
 (`chmod +x` them, like on Linux).

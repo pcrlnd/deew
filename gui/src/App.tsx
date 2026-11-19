@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 
 import { CommandBar } from "@/components/command-bar"
+import { ConfirmConfigDialog } from "@/components/confirm-config-dialog"
 import { NoteLine } from "@/components/note-line"
 import { ProgressPane } from "@/components/progress-pane"
 import { PromptDialog } from "@/components/prompt-dialog"
@@ -21,12 +22,16 @@ import {
 import { OptionsForm } from "@/components/options-form"
 import { TerminalPane, type TerminalHandle } from "@/components/terminal-pane"
 import { TitleBar } from "@/components/title-bar"
+import { UtilitiesPane } from "@/components/utilities-pane"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { WebToolbar } from "@/components/web-toolbar"
 import {
   DEFAULT_BITRATE,
   DEFAULT_OPTIONS,
   PROGRAM_DEFAULT_MODES,
+  PROGRAM_DD_FILTER_DEFAULTS,
+  ddFilterDefaultsOf,
+  type DdFilterDefaults,
   buildArgs,
   detectPlatform,
   effectiveDdpAtmosMode,
@@ -34,6 +39,8 @@ import {
   formatCommand,
   infoArgs,
   parseDefaultModes,
+  setAc4ImsMode,
+  normalizeTrackIndex,
   relevantBitrates,
   relevantDownmixes,
   validate,
@@ -51,12 +58,18 @@ import {
 } from "@/lib/terminal-format"
 import {
   EMPTY_HISTORY,
-  isInfoRun,
   parseProgressEvent,
   reduceHistory,
 } from "@/lib/progress"
 import { stateAction } from "@/lib/run-client"
 import { useProbe } from "@/lib/use-probe"
+import {
+  activeTab,
+  encodeBlock,
+  needsConfirmation,
+  utilityBlock,
+  type OutputTab,
+} from "@/lib/utilities"
 import { errorMessage } from "@/lib/web-api"
 import {
   cliVersion,
@@ -66,15 +79,34 @@ import {
   inTauri,
   inWeb,
   reconnectRunSocket,
+  resizeInfo,
+  writeInfo,
   resizePty,
   runDeew,
+  runInfo,
   saveGuiSettings,
   stopDeew,
+  stopInfo,
   writeStdin,
   type OutputView,
 } from "@/lib/runner"
 
 const platform = detectPlatform(navigator.userAgent)
+
+/** Resolves once the browser has laid out a change (or after 100 ms). */
+function afterLayout(): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = () => {
+      if (!done) {
+        done = true
+        resolve()
+      }
+    }
+    requestAnimationFrame(() => requestAnimationFrame(finish))
+    setTimeout(finish, 100)
+  })
+}
 
 function addUnique(list: string[], extra: string[]): string[] {
   const seen = new Set(list)
@@ -96,6 +128,16 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const [endCount, setEndCount] = useState(0)
   const [dragging, setDragging] = useState(false)
   const terminal = useRef<TerminalHandle>(null)
+  // The Utilities tab: its own terminal and its own (one) running command,
+  // independent of the encode above.
+  const utilityTerminal = useRef<TerminalHandle>(null)
+  const [utilitiesShown, setUtilitiesShown] = useState(false)
+  const utilitiesShownRef = useRef(false)
+  const [utility, setUtility] = useState<InfoFlag | null>(null)
+  const utilityRef = useRef<InfoFlag | null>(null)
+  const utilityStoppedRef = useRef(false)
+  const [utilityUsed, setUtilityUsed] = useState(false)
+  const [confirmConfig, setConfirmConfig] = useState(false)
   const runningRef = useRef(false)
   const stoppedRef = useRef(false)
   // When this tab started the job; null for a job it only attached to.
@@ -120,6 +162,9 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const savedToInputRef = useRef(false)
   const toInputTouchedRef = useRef(false)
   const toInputRef = useRef(false)
+  const [ddFilterDefaults, setDdFilterDefaults] = useState<DdFilterDefaults>({
+    ...PROGRAM_DD_FILTER_DEFAULTS,
+  })
   const [defaultModes, setDefaultModes] = useState<DefaultModes>({
     ...PROGRAM_DEFAULT_MODES,
   })
@@ -130,15 +175,16 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const [defaults, setDefaults] = useState<Record<string, number>>({})
 
   const native = view === "native"
-  // Info runs have no progress: their output is shown until the next run.
-  const showTerminal = !native || (current?.info ?? false)
+  const showTerminal = !native
+  const blockedReason = encodeBlock(utility)
 
-  const problems = useMemo(() => validate(options), [options])
+  const problems = useMemo(
+    () => validate(options, defaultModes),
+    [options, defaultModes]
+  )
   const canRun = options.inputs.length > 0 && problems.length === 0
 
-  const trackIndex = /^\d+$/.test(options.trackIndex.trim())
-    ? Number.parseInt(options.trackIndex, 10)
-    : null
+  const trackIndex = normalizeTrackIndex(options.trackIndex)
   const probe = useProbe(options.inputs, trackIndex)
   const channels = probe.status === "done" ? probe.summary.channels : null
   const codecs = probe.status === "done" ? probe.summary.codecs : []
@@ -151,6 +197,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     downmix,
     codecs,
     inputs,
+    measureOnly: options.measureOnly,
     ddpMode: effectiveDdpMode(options.ddpMode, defaultModes),
     atmosMode: effectiveDdpAtmosMode(options.ddpAtmosMode, defaultModes),
   })
@@ -158,6 +205,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     ddp71: bitrateInfo.ddp71,
     channels,
     defaultModes,
+    ddFilterDefaults,
   })
   const command = formatCommand(args, platform)
   // A downmix or bitrate that the probed layout cannot do goes back to the
@@ -240,12 +288,17 @@ export function App({ onLogout }: { onLogout?: () => void }) {
           document.documentElement.dataset.font = "system"
         }
         setDefaultOutput(settings.defaultOutput)
-        setDefaultModes(
-          parseDefaultModes(
-            settings.defaultDdpMode,
-            settings.defaultDdpAtmosMode
-          )
+        const modes = parseDefaultModes(
+          settings.defaultDdpMode,
+          settings.defaultDdpAtmosMode,
+          settings.defaultAc4ImsMode
         )
+        setDefaultModes(modes)
+        // a config with ac4_ims = 'music' needs the DRC music_light
+        setOptions((o) =>
+          o.format === "ac4-ims" ? setAc4ImsMode(o, o.ac4ImsMode, modes) : o
+        )
+        setDdFilterDefaults(ddFilterDefaultsOf(settings))
         if (!toInputTouchedRef.current) {
           savedToInputRef.current = settings.toInput
           toInputRef.current = settings.toInput
@@ -318,7 +371,6 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     dispatchHistory({
       type: "begin",
       command: formatCommand(runArgs, platform),
-      info: isInfoRun(runArgs),
     })
   }, [])
 
@@ -332,14 +384,19 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     defaultBitrates().then(setDefaults).catch(console.warn)
     // [default_modes] may have been edited too
     guiSettings()
-      .then((settings) =>
-        setDefaultModes(
-          parseDefaultModes(
-            settings.defaultDdpMode,
-            settings.defaultDdpAtmosMode
-          )
+      .then((settings) => {
+        const modes = parseDefaultModes(
+          settings.defaultDdpMode,
+          settings.defaultDdpAtmosMode,
+          settings.defaultAc4ImsMode
         )
-      )
+        setDefaultModes(modes)
+        // a config with ac4_ims = 'music' needs the DRC music_light
+        setOptions((o) =>
+          o.format === "ac4-ims" ? setAc4ImsMode(o, o.ac4ImsMode, modes) : o
+        )
+        setDdFilterDefaults(ddFilterDefaultsOf(settings))
+      })
       .catch(console.warn)
   }, [])
 
@@ -471,7 +528,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const start = useCallback(
     async (runArgs: string[]) => {
       const term = terminal.current
-      if (!term || runningRef.current) return
+      // Not next to -gt / -gc (the backends refuse it as well).
+      if (!term || runningRef.current || encodeBlock(utilityRef.current)) return
       runningRef.current = true
       awaitingStartRef.current = inWeb()
       stoppedRef.current = false
@@ -481,7 +539,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       await printStart(term, runArgs)
       // Focusing opens the on-screen keyboard on phones.
       // A hidden terminal must not take the keystrokes.
-      const visible = viewRef.current !== "native" || isInfoRun(runArgs)
+      const visible = viewRef.current !== "native" && !utilitiesShownRef.current
       if (visible && !window.matchMedia("(pointer: coarse)").matches)
         term.focus()
       startedAtRef.current = performance.now()
@@ -597,22 +655,121 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     })
   }, [attachWeb, printStart, endRun, failRun, clearStartTimer, onProgressLine])
 
-  const run = () => {
-    if (canRun) void start(args)
+  const showUtilities = (shown: boolean) => {
+    utilitiesShownRef.current = shown
+    setUtilitiesShown(shown)
   }
-  const runInfo = (flag: InfoFlag) => void start(infoArgs(flag))
+
+  const run = () => {
+    if (!canRun) return
+    // An encode shows the saved output view (CLI/GUI), not the utilities.
+    showUtilities(false)
+    void start(args)
+  }
+
+  // Not saved in the config: the saved view comes back with the other tabs.
+  const changeTab = (tab: OutputTab) => {
+    if (tab === "utilities") return showUtilities(true)
+    showUtilities(false)
+    if (tab !== viewRef.current) changeView(tab)
+  }
+
+  // The status line of a finished utility, then the slot is free again.
+  const endUtility = useCallback(
+    async (
+      term: TerminalHandle,
+      flag: InfoFlag,
+      end: { code: number | null } | { error: string }
+    ) => {
+      const stopped = utilityStoppedRef.current
+      const status =
+        "error" in end
+          ? errorStatus(end.error)
+          : stopped || end.code === 130
+            ? stoppedStatus()
+            : end.code === 0
+              ? ""
+              : exitStatus(end.code)
+      if (status !== "") await writeStatus(term, status)
+      else {
+        await term.flush()
+        if (term.cursorX() !== 0) term.write("\r\n")
+      }
+      // Like the CLI tab: a blank line and a fresh prompt.
+      term.write(`\r\n${prompt(versionRef.current)}`)
+      utilityRef.current = null
+      setUtility(null)
+      // -gc / -gt change the config and the tools.
+      if (flag === "-gc" || flag === "-gt") refreshDefaults()
+    },
+    [writeStatus, refreshDefaults]
+  )
+
+  const runUtility = useCallback(
+    async (flag: InfoFlag, confirmed = false) => {
+      const term = utilityTerminal.current
+      if (!term || utilityRef.current) return
+      // Never run a destructive command unless the user confirmed it.
+      if (needsConfirmation(flag) && !confirmed) return
+      if (
+        utilityBlock(flag, {
+          encoding: runningRef.current,
+          utilityRunning: false,
+        })
+      )
+        return
+      utilityRef.current = flag
+      utilityStoppedRef.current = false
+      setUtility(flag)
+      setUtilityUsed(true)
+      showUtilities(true)
+      // The previous output goes away.
+      term.reset()
+      // Let the terminal get its real size before deew prints for it.
+      await afterLayout()
+      await loadVersion()
+      term.write(
+        `${prompt(versionRef.current)}${formatCommand(infoArgs(flag), platform)}\r\n`
+      )
+      const { cols, rows } = term.size()
+      await runInfo(flag, cols, rows, {
+        onOutput: (bytes) => term.write(bytes),
+        onExit: (code) => void endUtility(term, flag, { code }),
+        onError: (error) => void endUtility(term, flag, { error }),
+      })
+    },
+    [endUtility, loadVersion]
+  )
+
+  // "Generate config" overwrites config.toml: always ask first.
+  const requestUtility = (flag: InfoFlag) => {
+    if (needsConfirmation(flag)) setConfirmConfig(true)
+    else void runUtility(flag)
+  }
 
   const onTerminalData = useCallback((data: string) => {
     if (runningRef.current) writeStdin(data).catch(console.error)
   }, [])
+  const onUtilityData = useCallback((data: string) => {
+    if (utilityRef.current) writeInfo(data).catch(console.error)
+  }, [])
   const onTerminalResize = useCallback((cols: number, rows: number) => {
     if (runningRef.current) resizePty(cols, rows).catch(console.error)
+  }, [])
+  const onUtilityResize = useCallback((cols: number, rows: number) => {
+    if (utilityRef.current) resizeInfo(cols, rows).catch(console.error)
   }, [])
 
   return (
     <TooltipProvider delay={400}>
       <div className="flex h-full flex-col">
-        {inTauri() && <TitleBar menuDisabled={running} onRunInfo={runInfo} />}
+        {inTauri() && (
+          <TitleBar
+            encoding={running}
+            utilityRunning={utility !== null}
+            onRunInfo={requestUtility}
+          />
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-none">
           <div
             className={`flex h-full flex-col gap-3 p-3 ${
@@ -629,12 +786,14 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               bitrateInfo={bitrateInfo}
               defaultBitrates={defaults}
               defaultModes={defaultModes}
+              ddFilterDefaults={ddFilterDefaults}
               downmixChoices={downmixes}
               toolbar={
                 inWeb() && (
                   <WebToolbar
-                    menuDisabled={running}
-                    onRunInfo={runInfo}
+                    encoding={running}
+                    utilityRunning={utility !== null}
+                    onRunInfo={requestUtility}
                     onLogout={onLogout}
                   />
                 )
@@ -655,6 +814,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               runState={running ? "running" : (outcome ?? "idle")}
               endCount={endCount}
               canRun={canRun}
+              blockedReason={blockedReason}
               onRun={run}
               onStop={() => {
                 stoppedRef.current = true
@@ -665,8 +825,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
                   setStopping(false)
                 })
               }}
-              view={view}
-              onViewChange={changeView}
+              view={activeTab(view, utilitiesShown)}
+              onViewChange={changeTab}
             />
             {saveError !== null && (
               <NoteLine
@@ -676,11 +836,15 @@ export function App({ onLogout }: { onLogout?: () => void }) {
             )}
 
             <div className="flex min-h-80 flex-1 flex-col gap-2">
-              {!showTerminal && (
+              {!utilitiesShown && !showTerminal && (
                 <ProgressPane className="min-h-24 flex-1" runs={history.runs} />
               )}
               {/* Always mounted, only hidden: remounting would lose the xterm. */}
-              <div className={showTerminal ? "min-h-0 flex-1" : "hidden"}>
+              <div
+                className={
+                  !utilitiesShown && showTerminal ? "min-h-0 flex-1" : "hidden"
+                }
+              >
                 <TerminalPane
                   ref={terminal}
                   className="size-full overflow-hidden rounded-lg border border-input p-2"
@@ -688,13 +852,33 @@ export function App({ onLogout }: { onLogout?: () => void }) {
                   onResize={onTerminalResize}
                 />
               </div>
+              <UtilitiesPane
+                ref={utilityTerminal}
+                onData={onUtilityData}
+                className={utilitiesShown ? "min-h-0 flex-1" : "hidden"}
+                running={utility !== null}
+                empty={!utilityUsed}
+                onStop={() => {
+                  utilityStoppedRef.current = true
+                  void stopInfo().catch(console.error)
+                }}
+                onResize={onUtilityResize}
+              />
             </div>
           </div>
         </div>
       </div>
+      <ConfirmConfigDialog
+        open={confirmConfig}
+        onCancel={() => setConfirmConfig(false)}
+        onConfirm={() => {
+          setConfirmConfig(false)
+          void runUtility("-gc", true)
+        }}
+      />
       <FileBrowserDialog request={browseRequest} />
       <PromptDialog
-        question={showTerminal ? null : (current?.progress.prompt ?? null)}
+        question={native ? (current?.progress.prompt ?? null) : null}
         onAnswer={answerPrompt}
       />
     </TooltipProvider>

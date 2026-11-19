@@ -286,16 +286,21 @@ export default function App() {
                 />
               </div>
             </div>
-            <div className="flex flex-col gap-2 p-4 max-[239px]:p-2">
-              <p className="flex items-start gap-2 text-sm font-medium">
-                <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />
+            <div className="flex flex-col gap-3 p-4 max-[239px]:p-2">
+              <p className="text-sm font-medium">
                 rainbaby (developer of truehdd and dee_shim)
               </p>
-              <CopyBlock
-                text="47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U"
-                label="rainbaby Monero address"
-                wrap
-              />
+              <div className="flex flex-col gap-2">
+                <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <MoneroIcon className="mt-0.5 size-4 shrink-0 text-[#ff6600]" />
+                  Monero
+                </p>
+                <CopyBlock
+                  text="47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U"
+                  label="rainbaby Monero address"
+                  wrap
+                />
+              </div>
             </div>
           </div>
         </section>

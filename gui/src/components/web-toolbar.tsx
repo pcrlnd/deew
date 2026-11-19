@@ -7,17 +7,23 @@ import type { InfoFlag } from "@/lib/deew-args"
 
 /** Utilities menu, theme toggle and log out; replaces the window bar. */
 export function WebToolbar({
-  menuDisabled,
+  encoding,
+  utilityRunning,
   onRunInfo,
   onLogout,
 }: {
-  menuDisabled: boolean
+  encoding: boolean
+  utilityRunning: boolean
   onRunInfo: (flag: InfoFlag) => void
   onLogout?: () => void
 }) {
   return (
     <div className="ml-auto flex items-center gap-1">
-      <UtilitiesMenu disabled={menuDisabled} onRun={onRunInfo} />
+      <UtilitiesMenu
+        encoding={encoding}
+        utilityRunning={utilityRunning}
+        onRun={onRunInfo}
+      />
       <ThemeToggle />
       {onLogout && (
         <Button

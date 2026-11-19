@@ -16,11 +16,12 @@ const CHANGELOG_URL: &str = "https://api.github.com/repos/pcrlnd/deew/contents/c
 
 /// The tools whose `--help` tells the DEE version, the first one that exists
 /// is asked.
-const DEE_TOOLS: [&str; 7] = [
+const DEE_TOOLS: [&str; 8] = [
     "dee_ddp_encoder",
     "dee_ddpjoc_encoder",
     "dee_ac4_encoder",
     "dee_ac4ajoc_encoder",
+    "dee_ac4ims_encoder",
     "dee_aac_encoder",
     "dee_dthd_encoder",
     "dee_measure_loudness",
@@ -341,6 +342,7 @@ pub fn bitrate_lines(d: &DefaultBitrates, modes: &DefaultModes, width: usize) ->
                 leaf("2.0", "ac4_20", d.ac4_2_0),
                 leaf("5.1", "ac4_51", d.ac4_5_1),
                 leaf("Atmos", "ac4_atmos", d.ac4_atmos),
+                leaf("IMS", "ac4_ims", d.ac4_ims),
             ],
         ),
         ("AAC", vec![leaf("2.0", "aac_20", d.aac_2_0)]),

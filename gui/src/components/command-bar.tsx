@@ -6,12 +6,13 @@ import {
   Play,
   Square,
   SquareTerminal,
+  Wrench,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { copyText } from "@/lib/clipboard"
 import { flashClass, useFlash } from "@/lib/use-flash"
-import type { OutputView } from "@/lib/runner"
+import type { OutputTab } from "@/lib/utilities"
 import { cn } from "@/lib/utils"
 
 interface CommandBarProps {
@@ -25,11 +26,13 @@ interface CommandBarProps {
   /** Changes every time a job ends, so two equal outcomes both flash. */
   endCount: number
   canRun: boolean
+  /** Why Run is disabled although the inputs are fine (e.g. -gt runs). */
+  blockedReason?: string | null
   onRun: () => void
   onStop: () => void
   /** Which output the window shows. */
-  view: OutputView
-  onViewChange: (view: OutputView) => void
+  view: OutputTab
+  onViewChange: (view: OutputTab) => void
 }
 
 const VIEWS = [
@@ -45,6 +48,13 @@ const VIEWS = [
     title: "Show progress bars, warnings and pop-up prompts",
     Icon: ChartNoAxesGantt,
   },
+  {
+    value: "utilities",
+    // Icon only.
+    label: null,
+    title: "Utilities",
+    Icon: Wrench,
+  },
 ] as const
 
 export function CommandBar({
@@ -55,6 +65,7 @@ export function CommandBar({
   runState,
   endCount,
   canRun,
+  blockedReason = null,
   onRun,
   onStop,
   view,
@@ -155,7 +166,12 @@ export function CommandBar({
               runClass
             )}
             onClick={click}
-            disabled={state === "idle" ? !canRun : state === "stopping"}
+            disabled={
+              state === "idle"
+                ? !canRun || blockedReason !== null
+                : state === "stopping"
+            }
+            title={state === "idle" ? (blockedReason ?? undefined) : undefined}
           >
             <span className="grid">
               <span
@@ -194,6 +210,7 @@ export function CommandBar({
                 key={value}
                 type="button"
                 aria-pressed={view === value}
+                aria-label={label === null ? title : undefined}
                 title={title}
                 onClick={() => onViewChange(value)}
                 className={cn(
@@ -212,6 +229,9 @@ export function CommandBar({
       </div>
       {problems.length > 0 && (
         <p className="text-xs text-destructive">{problems.join(" ")}</p>
+      )}
+      {blockedReason !== null && (
+        <p className="text-xs text-muted-foreground">{blockedReason}</p>
       )}
     </div>
   )

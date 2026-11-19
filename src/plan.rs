@@ -2,10 +2,12 @@
 //! count, channel layout, prompts and bitrate selection.
 
 use crate::cli::Args;
-use crate::config::{DdpAtmosMode, DdpMode, DefaultBitrates, DefaultModes, MaxInstances};
+use crate::config::{
+    Ac4ImsMode, DdpAtmosMode, DdpMode, DefaultBitrates, DefaultModes, MaxInstances,
+};
 use crate::data::{ErrorKind, allowed_bitrates};
 use crate::error::{escape, print_exit};
-use crate::probe::Probe;
+use crate::probe::{Probe, TrackIndex};
 use crate::util::{clamp_f, clamp_i, find_closest_allowed};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +19,7 @@ pub enum Format {
     ThdAtmos,
     Ac4,
     Ac4Atmos,
+    Ac4Ims,
     Aac,
 }
 
@@ -32,6 +35,7 @@ impl Format {
             "thd-atmos" | "thd_atmos" => Format::ThdAtmos,
             "ac4" => Format::Ac4,
             "ac4-atmos" | "ac4_atmos" => Format::Ac4Atmos,
+            "ac4-ims" | "ac4_ims" => Format::Ac4Ims,
             "aac" => Format::Aac,
             _ => return None,
         })
@@ -47,6 +51,7 @@ impl Format {
             Format::ThdAtmos => "TrueHD Atmos",
             Format::Ac4 => "AC4",
             Format::Ac4Atmos => "AC4 Atmos",
+            Format::Ac4Ims => "AC4 IMS",
             Format::Aac => "AAC",
         }
     }
@@ -61,6 +66,7 @@ impl Format {
             Format::ThdAtmos => "thd-atmos",
             Format::Ac4 => "ac4",
             Format::Ac4Atmos => "ac4-atmos",
+            Format::Ac4Ims => "ac4-ims",
             Format::Aac => "aac",
         }
     }
@@ -72,6 +78,7 @@ impl Format {
             Format::DdpAtmos => "dee_ddpjoc_encoder",
             Format::Ac4 => "dee_ac4_encoder",
             Format::Ac4Atmos => "dee_ac4ajoc_encoder",
+            Format::Ac4Ims => "dee_ac4ims_encoder",
             Format::Aac => "dee_aac_encoder",
             Format::Thd | Format::ThdAtmos => "dee_dthd_encoder",
         }
@@ -82,10 +89,40 @@ impl Format {
         matches!(self, Format::DdpAtmos | Format::ThdAtmos | Format::Ac4Atmos)
     }
 
+    /// Formats whose encoder reads an Atmos master (ADM BWF, DAMF) directly:
+    /// the Atmos formats and AC4 IMS, and DD and DDP, which DEE renders to
+    /// 5.1 (or 2.0, 1.0) from it. TrueHD (DEE's `presentation` takes no
+    /// master), AC4 and AAC don't.
+    pub fn takes_master(self) -> bool {
+        matches!(
+            self,
+            Format::Dd
+                | Format::Ddp
+                | Format::DdpAtmos
+                | Format::ThdAtmos
+                | Format::Ac4Atmos
+                | Format::Ac4Ims
+        )
+    }
+
     /// Formats with a 90 degree phase shift of the surround channels: DD,
     /// DDP and DDP Atmos (via dee_shim's `--phase90`).
     pub fn has_phase_shift(self) -> bool {
         matches!(self, Format::Dd | Format::Ddp | Format::DdpAtmos)
+    }
+
+    /// Formats with DEE's LFE low-pass filter and the surround 3 dB
+    /// attenuation (`-e` options of dee_ddp_encoder): DD and DDP, not DDP
+    /// Atmos (its encoder has neither).
+    pub fn has_dd_filters(self) -> bool {
+        matches!(self, Format::Dd | Format::Ddp)
+    }
+
+    /// Formats with the surround 3 dB attenuation (`-s3a`): DD, DDP and
+    /// TrueHD (a presentation option of the 6ch and 8ch outputs), not the
+    /// Atmos downmixes.
+    pub fn has_surround_3db(self) -> bool {
+        matches!(self, Format::Dd | Format::Ddp | Format::Thd)
     }
 
     /// Formats that accept a custom dialnorm.
@@ -114,7 +151,7 @@ impl Format {
     pub fn encoder_delay(self) -> u32 {
         match self {
             Format::Dd | Format::Ddp | Format::DdpAtmos => 256,
-            Format::Ac4 | Format::Ac4Atmos => 2048,
+            Format::Ac4 | Format::Ac4Atmos | Format::Ac4Ims => 2048,
             Format::Aac => 1600,
             Format::Thd | Format::ThdAtmos => 0,
         }
@@ -127,7 +164,7 @@ impl Format {
             Format::Ddp if outchannels == 8 && bluray => "eb3",
             Format::DdpAtmos if bluray => "eb3",
             Format::Ddp | Format::DdpAtmos => "ec3",
-            Format::Ac4 | Format::Ac4Atmos => "ac4",
+            Format::Ac4 | Format::Ac4Atmos | Format::Ac4Ims => "ac4",
             Format::Aac => "aac",
             Format::Thd | Format::ThdAtmos => "thd",
         }
@@ -222,15 +259,22 @@ pub struct Validated {
     pub downmix: Option<i64>,
     /// 0 (DEE's measurement) for formats without custom dialnorm and with `-mo`.
     pub dialnorm: i64,
-    pub track_index: i64,
+    pub track_index: TrackIndex,
     /// The DRC profile: `-r`, else the default of the format.
     pub drc: String,
     /// `--ddp-mode`, else the config's default (7.1 DDP only).
     pub ddp_mode: DdpMode,
     /// `--ddp-atmos-mode`, else the config's default (DDP Atmos only).
     pub atmos_mode: DdpAtmosMode,
-    /// `-nps` (DD, DDP and DDP Atmos only; the config's `surround_phase_shift` is applied later).
-    pub no_phase_shift: bool,
+    /// `--ac4-ims-mode`, else general (AC4 IMS only).
+    pub ims_mode: Ac4ImsMode,
+    /// `-sps` (DD, DDP and DDP Atmos only); `None` leaves it to the
+    /// config's `surround_phase_shift`.
+    pub surround_phase_shift: Option<bool>,
+    /// `-lpf` (DD and DDP only); `None` leaves it to the config's `low_pass_filter`.
+    pub low_pass_filter: Option<bool>,
+    /// `-s3a` (DD and DDP only); `None` leaves it to the config's `surround_3db_attenuation`.
+    pub surround_3db_attenuation: Option<bool>,
 }
 
 pub const DRC_PROFILES: [&str; 6] = [
@@ -254,7 +298,7 @@ pub fn default_drc(format: Format) -> &'static str {
 /// Validate the arguments, the first problem wins.
 pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fail> {
     let dialnorm = clamp_i(args.dialnorm, -31, 0);
-    let track_index = args.track_index.max(0);
+    let track_index = args.track_index;
     let downmix = args.downmix.filter(|&d| d != 0);
 
     // `-mo` measures the source: the format and the encoding options are ignored
@@ -267,7 +311,10 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
             drc: default_drc(Format::Ddp).to_string(),
             ddp_mode: modes.ddp,
             atmos_mode: modes.ddp_atmos,
-            no_phase_shift: false,
+            ims_mode: Ac4ImsMode::General,
+            surround_phase_shift: None,
+            low_pass_filter: None,
+            surround_3db_attenuation: None,
         });
     }
 
@@ -275,6 +322,9 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
     if let Some(d) = downmix {
         if ![1, 2, 6].contains(&d) {
             return Err(Fail::new(ErrorKind::Downmix));
+        }
+        if format == Format::Ac4Ims {
+            return Err(Fail::new(ErrorKind::Ac4ImsDownmix));
         }
         if format.is_atmos() {
             return Err(Fail::new(ErrorKind::FormatDownmix));
@@ -290,10 +340,25 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
     {
         return Err(Fail::new(ErrorKind::Drc));
     }
-    let drc = args
-        .drc
-        .clone()
-        .unwrap_or_else(|| default_drc(format).to_string());
+    let ims_mode = match args.ac4_ims_mode.as_deref() {
+        Some(m) => Ac4ImsMode::parse(m).ok_or(Fail::new(ErrorKind::Ac4ImsMode))?,
+        None => modes.ac4_ims,
+    };
+    // DEE's music mode only takes music_light
+    let music = format == Format::Ac4Ims && ims_mode == Ac4ImsMode::Music;
+    if music && args.drc.as_deref().is_some_and(|d| d != "music_light") {
+        return Err(Fail::new(ErrorKind::Ac4ImsMusicDrc));
+    }
+    if format == Format::Ac4Ims && args.disable_lfe {
+        return Err(Fail::new(ErrorKind::Ac4ImsLfe));
+    }
+    let drc = if music {
+        "music_light".to_string()
+    } else {
+        args.drc
+            .clone()
+            .unwrap_or_else(|| default_drc(format).to_string())
+    };
     let ddp_mode = match args.ddp_mode.as_deref() {
         Some(m) => DdpMode::parse(m).ok_or(Fail::new(ErrorKind::DdpMode))?,
         None => modes.ddp,
@@ -308,8 +373,23 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
     if dialnorm != 0 && !format.has_dialnorm() {
         return Err(Fail::new(ErrorKind::DialnormFormat));
     }
-    if args.no_phase_shift && !format.has_phase_shift() {
+    let on_off = |v: &Option<String>| match v.as_deref().map(str::to_lowercase).as_deref() {
+        None => Ok(None),
+        Some("on") => Ok(Some(true)),
+        Some("off") => Ok(Some(false)),
+        Some(_) => Err(Fail::new(ErrorKind::OnOff)),
+    };
+    let surround_phase_shift = on_off(&args.surround_phase_shift)?;
+    let low_pass_filter = on_off(&args.low_pass_filter)?;
+    let surround_3db_attenuation = on_off(&args.surround_3db_attenuation)?;
+    if surround_phase_shift.is_some() && !format.has_phase_shift() {
         return Err(Fail::new(ErrorKind::PhaseShiftFormat));
+    }
+    if low_pass_filter.is_some() && !format.has_dd_filters() {
+        return Err(Fail::new(ErrorKind::LowPassFilterFormat));
+    }
+    if surround_3db_attenuation.is_some() && !format.has_surround_3db() {
+        return Err(Fail::new(ErrorKind::Surround3dbFormat));
     }
     Ok(Validated {
         format,
@@ -319,7 +399,10 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
         drc,
         ddp_mode,
         atmos_mode,
-        no_phase_shift: args.no_phase_shift,
+        ims_mode,
+        surround_phase_shift,
+        low_pass_filter,
+        surround_3db_attenuation,
     })
 }
 
@@ -338,8 +421,15 @@ fn all_equal(list: &[i64]) -> bool {
 
 /// Sample rate and channel mismatch checks, bit depth normalisation. `probes` is not empty.
 pub fn check_inputs(probes: &[Probe]) -> Result<InputInfo, Fail> {
-    let rates: Vec<i64> = probes.iter().map(|p| p.sample_rate).collect();
-    let channels: Vec<i64> = probes.iter().map(|p| p.channels).collect();
+    // an Atmos master has no say in the rate and channels of the others
+    let real: Vec<&Probe> = probes.iter().filter(|p| p.master.is_none()).collect();
+    let basis: Vec<&Probe> = if real.is_empty() {
+        probes.iter().collect()
+    } else {
+        real
+    };
+    let rates: Vec<i64> = basis.iter().map(|p| p.sample_rate).collect();
+    let channels: Vec<i64> = basis.iter().map(|p| p.channels).collect();
     if !all_equal(&rates) {
         return Err(Fail::with(
             ErrorKind::SampleMismatch,
@@ -375,13 +465,54 @@ pub fn normalize_bit_depth(depth: i64) -> u32 {
 /// `files` and `probes` belong together.
 pub fn check_atmos_inputs(files: &[String], probes: &[Probe]) -> Result<(), Fail> {
     let pairs = || files.iter().zip(probes);
-    if let Some((file, _)) = pairs().find(|(_, probe)| !probe.is_truehd) {
+    if let Some((file, _)) = pairs().find(|(_, probe)| !probe.is_truehd && probe.master.is_none()) {
         return Err(Fail::with(ErrorKind::AtmosInput, escape(file)));
     }
     match pairs().find(|(_, probe)| !probe.is_atmos) {
         Some((file, _)) => Err(Fail::with(ErrorKind::AtmosNoAtmos, escape(file))),
         None => Ok(()),
     }
+}
+
+/// Whether the source of AC4 IMS is Atmos: a master, or TrueHD with an Atmos
+/// presentation (decoded by truehdd). Any other source is 5.1 / 7.1 audio.
+pub fn ims_atmos_source(probe: &Probe) -> bool {
+    probe.master.is_some() || (probe.is_truehd && probe.is_atmos)
+}
+
+/// AC4 IMS takes Atmos or channel-based inputs, not both in one run (the
+/// layout of the run depends on it).
+pub fn check_ims_inputs(probes: &[Probe]) -> Result<(), Fail> {
+    let atmos = probes.iter().filter(|p| ims_atmos_source(p)).count();
+    if atmos == 0 || atmos == probes.len() {
+        Ok(())
+    } else {
+        Err(Fail::new(ErrorKind::Ac4ImsMixed))
+    }
+}
+
+/// Atmos masters (ADM BWF, DAMF) go to the formats whose encoder reads them.
+/// DD and DDP render a 5.1 / 2.0 / 1.0 from them, which can't be combined
+/// with other inputs (their layout follows the source). `-mo` takes any master.
+pub fn check_master_inputs(
+    format: Format,
+    probes: &[Probe],
+    measure_only: bool,
+) -> Result<(), Fail> {
+    if measure_only {
+        return Ok(());
+    }
+    if !probes.iter().any(|p| p.master.is_some()) {
+        return Ok(());
+    }
+    if !format.takes_master() {
+        return Err(Fail::with(ErrorKind::MasterFormat, format.name()));
+    }
+    let masters = probes.iter().filter(|p| p.master.is_some()).count();
+    if matches!(format, Format::Dd | Format::Ddp) && masters != probes.len() {
+        return Err(Fail::new(ErrorKind::MasterMixed));
+    }
+    Ok(())
 }
 
 /// The AC4 `-dn` flow measures the wav with `dee_measure_loudness`, which
@@ -506,12 +637,16 @@ pub fn resolve_layout(
     if format == Format::Ac4 && channels == 1 {
         return Err(Fail::new(ErrorKind::Ac4InputChannels));
     }
+    // AC4 IMS needs the 5.1 of the source (5.0 gets a silent LFE, 7.x is downmixed)
+    if format == Format::Ac4Ims && channels <= 2 {
+        return Err(Fail::new(ErrorKind::Ac4ImsInput));
+    }
     if format == Format::Thd && channels == 1 {
         return Err(Fail::new(ErrorKind::ThdMonoInput));
     }
     let slots = wav_channels(channels);
     let downmix = match (format, downmix) {
-        (Format::Dd | Format::Ac4, None) if slots == 8 => Some(6),
+        (Format::Dd | Format::Ac4 | Format::Ac4Ims, None) if slots == 8 => Some(6),
         (_, downmix) => downmix,
     };
     let outchannels = match format {
@@ -519,8 +654,9 @@ pub fn resolve_layout(
         Format::Aac => 2,
         _ => downmix.unwrap_or(slots),
     };
-    // DEE downmixes by itself, except for TrueHD (ffmpeg does, see `audio_plan`)
-    let layout_arg = (!matches!(format, Format::Aac | Format::Thd) && outchannels != slots)
+    // DEE downmixes by itself, except for TrueHD and AC4 IMS (ffmpeg does, see `audio_plan`)
+    let layout_arg = (!matches!(format, Format::Aac | Format::Thd | Format::Ac4Ims)
+        && outchannels != slots)
         .then(|| channel_name(outchannels));
 
     // the LFE channel
@@ -567,7 +703,13 @@ pub struct Notice {
 }
 
 /// The notices to show, in order.
-pub fn notices(format: Format, outchannels: i64, measure_only: bool, dialnorm: i64) -> Vec<Notice> {
+pub fn notices(
+    format: Format,
+    outchannels: i64,
+    measure_only: bool,
+    dialnorm: i64,
+    surround_3db: bool,
+) -> Vec<Notice> {
     let mut list = Vec::new();
     if [1, 2].contains(&outchannels) && matches!(format, Format::Dd | Format::Ddp) && !measure_only
     {
@@ -586,6 +728,12 @@ pub fn notices(format: Format, outchannels: i64, measure_only: bool, dialnorm: i
         list.push(Notice {
             note: "Consider using [bold cyan]FLAC[/bold cyan] for lossless [bold yellow]stereo[/bold yellow] encoding.",
             question: "Consider using [bold cyan]FLAC[/bold cyan] for lossless [bold yellow]stereo[/bold yellow] encoding, are you sure you want to use [bold cyan]DEE[/bold cyan]?",
+        });
+    }
+    if surround_3db && format == Format::Thd && outchannels >= 6 && !measure_only {
+        list.push(Notice {
+            note: "[bold yellow]Surround 3 dB attenuation[/bold yellow] turns the surround channels down before the lossless TrueHD encode, the output won't be identical to the source.",
+            question: "[bold yellow]Surround 3 dB attenuation[/bold yellow] turns the surround channels down before the lossless TrueHD encode, the output won't be identical to the source. Continue?",
         });
     }
     if dialnorm != 0 {
@@ -631,6 +779,7 @@ fn bitrate_entry(
         (Format::Ac4, 2) => ("ac4_20", defaults.ac4_2_0),
         (Format::Ac4, 6) => ("ac4_51", defaults.ac4_5_1),
         (Format::Ac4Atmos, _) => ("ac4_atmos", defaults.ac4_atmos),
+        (Format::Ac4Ims, _) => ("ac4_ims", defaults.ac4_ims),
         (Format::Aac, _) => ("aac_20", defaults.aac_2_0),
         (Format::Thd | Format::ThdAtmos, _) => return None,
         // The layouts are resolved before, so this cannot happen.
@@ -766,6 +915,7 @@ mod tests {
             ac4_2_0: 256,
             ac4_5_1: 448,
             ac4_atmos: 448,
+            ac4_ims: 256,
             aac_2_0: 256,
         }
     }
@@ -863,11 +1013,14 @@ mod tests {
         assert_eq!(v.format, Format::DdpAtmos);
         let v = validate_args_d(&args(|a| {
             a.dialnorm = -50;
-            a.track_index = -3;
+            a.track_index = TrackIndex::audio(0);
             a.downmix = Some(0);
         }))
         .unwrap();
-        assert_eq!((v.dialnorm, v.track_index, v.downmix), (-31, 0, None));
+        assert_eq!(
+            (v.dialnorm, v.track_index, v.downmix),
+            (-31, TrackIndex::audio(0), None)
+        );
         let v = validate_args_d(&args(|a| a.dialnorm = 5)).unwrap();
         assert_eq!(v.dialnorm, 0);
 
@@ -984,20 +1137,27 @@ mod tests {
     }
 
     #[test]
-    fn no_phase_shift_is_for_dd_ddp_and_ddp_atmos() {
+    fn surround_phase_shift_is_for_dd_ddp_and_ddp_atmos() {
         for format in ["dd", "ddp", "DDP", "ddp-atmos"] {
-            let v = validate_args_d(&args(|a| {
-                a.format = format.into();
-                a.no_phase_shift = true
-            }))
-            .unwrap();
-            assert!(v.no_phase_shift, "{format}");
+            for (value, want) in [("off", false), ("ON", true), ("On", true)] {
+                let v = validate_args_d(&args(|a| {
+                    a.format = format.into();
+                    a.surround_phase_shift = Some(value.into())
+                }))
+                .unwrap();
+                assert_eq!(v.surround_phase_shift, Some(want), "{format} {value}");
+            }
         }
-        assert!(!validate_args_d(&Args::default()).unwrap().no_phase_shift);
+        assert_eq!(
+            validate_args_d(&Args::default())
+                .unwrap()
+                .surround_phase_shift,
+            None
+        );
         for format in ["thd", "thd-atmos", "ac4", "ac4-atmos", "aac"] {
             let e = validate_args_d(&args(|a| {
                 a.format = format.into();
-                a.no_phase_shift = true
+                a.surround_phase_shift = Some("off".into())
             }))
             .unwrap_err();
             assert_eq!(e.kind, ErrorKind::PhaseShiftFormat, "{format}");
@@ -1006,10 +1166,84 @@ mod tests {
         let v = validate_args_d(&args(|a| {
             a.measure_only = true;
             a.format = "thd".into();
-            a.no_phase_shift = true
+            a.surround_phase_shift = Some("off".into())
         }))
         .unwrap();
-        assert!(!v.no_phase_shift);
+        assert_eq!(v.surround_phase_shift, None);
+    }
+
+    #[test]
+    fn low_pass_filter_and_3db_are_for_dd_and_ddp() {
+        for format in ["dd", "ddp", "DD"] {
+            let v = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.low_pass_filter = Some("off".into());
+                a.surround_3db_attenuation = Some("ON".into())
+            }))
+            .unwrap();
+            assert_eq!(v.low_pass_filter, Some(false), "{format}");
+            assert_eq!(v.surround_3db_attenuation, Some(true), "{format}");
+        }
+        let v = validate_args_d(&Args::default()).unwrap();
+        assert_eq!(
+            (v.low_pass_filter, v.surround_3db_attenuation),
+            (None, None)
+        );
+        for format in ["ddp-atmos", "thd", "thd-atmos", "ac4", "ac4-atmos", "aac"] {
+            let e = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.low_pass_filter = Some("off".into())
+            }))
+            .unwrap_err();
+            assert_eq!(e.kind, ErrorKind::LowPassFilterFormat, "{format}");
+            let thd = format == "thd";
+            let v = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.surround_3db_attenuation = Some("on".into())
+            }));
+            if thd {
+                // -s3a also works for TrueHD
+                assert_eq!(v.unwrap().surround_3db_attenuation, Some(true));
+            } else {
+                assert_eq!(
+                    v.unwrap_err().kind,
+                    ErrorKind::Surround3dbFormat,
+                    "{format}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn thd_surround_3db_notice() {
+        let n = |f, ch, mo, s3a| notices(f, ch, mo, 0, s3a);
+        for ch in [6, 8] {
+            let list = n(Format::Thd, ch, false, true);
+            assert_eq!(list.len(), 1);
+            assert!(
+                list[0]
+                    .question
+                    .ends_with("won't be identical to the source. Continue?")
+            );
+            assert!(list[0].note.ends_with("won't be identical to the source."));
+        }
+        assert!(n(Format::Thd, 2, false, true).len() == 1); // the FLAC one only
+        assert!(!n(Format::Thd, 2, false, true)[0].note.contains("3 dB"));
+        assert!(n(Format::Thd, 6, false, false).is_empty());
+        assert!(n(Format::Thd, 6, true, true).is_empty());
+        assert!(n(Format::Ddp, 6, false, true).is_empty());
+    }
+
+    #[test]
+    fn on_off_values_are_validated() {
+        for set in [
+            (|a: &mut Args| a.surround_phase_shift = Some("yes".into())) as fn(&mut Args),
+            |a| a.low_pass_filter = Some("1".into()),
+            |a| a.surround_3db_attenuation = Some("".into()),
+        ] {
+            let e = validate_args_d(&args(set)).unwrap_err();
+            assert_eq!(e.kind, ErrorKind::OnOff);
+        }
     }
 
     #[test]
@@ -1052,6 +1286,7 @@ mod tests {
             raw_truehd: false,
             profile: String::new(),
             is_atmos: false,
+            master: None,
         }
     }
 
@@ -1347,7 +1582,7 @@ mod tests {
 
     #[test]
     fn notice_list() {
-        let n = |f, ch, mo, dn| notices(f, ch, mo, dn);
+        let n = |f, ch, mo, dn| notices(f, ch, mo, dn, false);
         assert!(n(Format::Ddp, 6, false, 0).is_empty());
         assert_eq!(n(Format::Dd, 2, false, 0).len(), 1);
         assert!(n(Format::Dd, 2, true, 0).is_empty());
@@ -1651,5 +1886,235 @@ mod tests {
         assert_eq!(input_delay("DELAY 5s.wav", None), "+0ms");
         assert_eq!(input_delay("x DELAY 1ms.a DELAY -2ms.wav", None), "-2ms");
         assert_eq!(input_delay("a/b.mkv", Some("+1s")), "+1s");
+    }
+
+    // ---- AC4 IMS and Atmos masters ----
+
+    fn ims_args(edit: impl FnOnce(&mut Args)) -> Args {
+        args(|a| {
+            a.format = "ac4-ims".into();
+            edit(a);
+        })
+    }
+
+    #[test]
+    fn ac4_ims_format_names() {
+        for name in ["ac4-ims", "ac4_ims"] {
+            assert_eq!(Format::parse(name), Some(Format::Ac4Ims));
+        }
+        assert_eq!(Format::Ac4Ims.name(), "ac4-ims");
+        assert_eq!(Format::Ac4Ims.dee_tool(), "dee_ac4ims_encoder");
+        assert_eq!(Format::Ac4Ims.extension(6, false), "ac4");
+        assert!(!Format::Ac4Ims.is_atmos());
+        assert!(!Format::Ac4Ims.has_dialnorm());
+        // the format list accepts it case-insensitively
+        let v = validate_args_d(&ims_args(|a| a.format = "AC4-IMS".into())).unwrap();
+        assert_eq!(v.format, Format::Ac4Ims);
+    }
+
+    #[test]
+    fn ac4_ims_defaults_and_modes() {
+        let v = validate_args_d(&ims_args(|_| {})).unwrap();
+        assert_eq!((v.drc.as_str(), v.ims_mode), ("none", Ac4ImsMode::General));
+        let v = validate_args_d(&ims_args(|a| a.drc = Some("speech".into()))).unwrap();
+        assert_eq!(v.drc, "speech");
+        let v = validate_args_d(&ims_args(|a| a.ac4_ims_mode = Some("Music".into()))).unwrap();
+        assert_eq!(
+            (v.drc.as_str(), v.ims_mode),
+            ("music_light", Ac4ImsMode::Music)
+        );
+        let v = validate_args_d(&ims_args(|a| {
+            a.ac4_ims_mode = Some("MUSIC".into());
+            a.drc = Some("music_light".into());
+        }))
+        .unwrap();
+        assert_eq!(v.drc, "music_light");
+        let e = validate_args_d(&ims_args(|a| {
+            a.ac4_ims_mode = Some("music".into());
+            a.drc = Some("none".into());
+        }))
+        .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Ac4ImsMusicDrc);
+        let e = validate_args_d(&ims_args(|a| a.ac4_ims_mode = Some("x".into()))).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Ac4ImsMode);
+        // other formats ignore the mode (a note is shown), also with a music mode
+        let v = validate_args_d(&args(|a| {
+            a.format = "ddp".into();
+            a.ac4_ims_mode = Some("music".into());
+        }))
+        .unwrap();
+        assert_eq!(v.drc, "none");
+    }
+
+    #[test]
+    fn ac4_ims_mode_comes_from_the_config() {
+        let music = DefaultModes {
+            ac4_ims: Ac4ImsMode::Music,
+            ..DefaultModes::default()
+        };
+        let v = validate_args(&ims_args(|_| {}), &music).unwrap();
+        assert_eq!(
+            (v.drc.as_str(), v.ims_mode),
+            ("music_light", Ac4ImsMode::Music)
+        );
+        let v = validate_args(
+            &ims_args(|a| a.ac4_ims_mode = Some("general".into())),
+            &music,
+        )
+        .unwrap();
+        assert_eq!(v.ims_mode, Ac4ImsMode::General);
+        let e =
+            validate_args(&ims_args(|a| a.drc = Some("film_light".into())), &music).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Ac4ImsMusicDrc);
+        let v = validate_args_d(&ims_args(|_| {})).unwrap();
+        assert_eq!(v.ims_mode, Ac4ImsMode::General);
+    }
+
+    #[test]
+    fn ac4_ims_rejects_downmix_lfe_and_dialnorm() {
+        let kind = |edit: fn(&mut Args)| validate_args_d(&ims_args(edit)).unwrap_err().kind;
+        assert_eq!(kind(|a| a.downmix = Some(2)), ErrorKind::Ac4ImsDownmix);
+        assert_eq!(kind(|a| a.disable_lfe = true), ErrorKind::Ac4ImsLfe);
+        assert_eq!(kind(|a| a.dialnorm = -27), ErrorKind::DialnormFormat);
+        let kind = |edit: fn(&mut Args)| validate_args_d(&ims_args(edit)).unwrap_err().kind;
+        assert_eq!(
+            kind(|a| a.surround_phase_shift = Some("off".into())),
+            ErrorKind::PhaseShiftFormat
+        );
+        // -mo ignores them like the other options
+        let v = validate_args_d(&args(|a| {
+            a.format = "ac4-ims".into();
+            a.measure_only = true;
+            a.downmix = Some(2);
+        }))
+        .unwrap();
+        assert_eq!(v.format, Format::Ddp);
+    }
+
+    #[test]
+    fn ac4_ims_layout() {
+        let l = |channels, lfe| resolve_layout(Format::Ac4Ims, None, channels, lfe);
+        let layout = l(6, false).unwrap();
+        assert_eq!(
+            (layout.outchannels, layout.layout_arg, layout.lfe),
+            (6, None, Lfe::Normal)
+        );
+        // 7.1 is downmixed by ffmpeg, DEE gets no `-c`
+        let layout = l(8, false).unwrap();
+        assert_eq!((layout.outchannels, layout.layout_arg), (6, None));
+        // 5.0 gets a silent LFE, 7.0 a downmix with it
+        let layout = l(5, false).unwrap();
+        assert_eq!((layout.outchannels, layout.lfe), (6, Lfe::Silent));
+        let layout = l(7, false).unwrap();
+        assert_eq!((layout.outchannels, layout.lfe), (6, Lfe::Silent));
+        for channels in [1, 2] {
+            assert_eq!(l(channels, false).unwrap_err().kind, ErrorKind::Ac4ImsInput);
+        }
+        assert_eq!(l(3, false).unwrap_err().kind, ErrorKind::Channels);
+    }
+
+    #[test]
+    fn ac4_ims_bitrates() {
+        assert_eq!(br(Format::Ac4Ims, 6, None), Some(256));
+        assert_eq!(br(Format::Ac4Ims, 0, None), Some(256));
+        assert_eq!(br(Format::Ac4Ims, 6, Some(64)), Some(64));
+        assert_eq!(br(Format::Ac4Ims, 6, Some(320)), Some(320));
+        // the closest value DEE takes
+        assert_eq!(br(Format::Ac4Ims, 6, Some(200)), Some(144));
+        assert_eq!(br(Format::Ac4Ims, 6, Some(1000)), Some(320));
+        assert_eq!(br(Format::Ac4Ims, 6, Some(10)), Some(64));
+        let mut d = defaults();
+        d.ac4_ims = 96;
+        assert_eq!(
+            select_bitrate(Format::Ac4Ims, 6, std_modes(), None, &d),
+            Some(96)
+        );
+    }
+
+    fn master_probe() -> Probe {
+        Probe::of_master(crate::master::Master {
+            kind: crate::master::MasterKind::Adm,
+            duration: Some(12.0),
+        })
+    }
+
+    fn truehd_probe(atmos: bool) -> Probe {
+        Probe {
+            is_truehd: true,
+            is_atmos: atmos,
+            ..probe(48000, 8, 24)
+        }
+    }
+
+    #[test]
+    fn masters_and_formats() {
+        let masters = [master_probe()];
+        for format in [
+            Format::Dd,
+            Format::Ddp,
+            Format::DdpAtmos,
+            Format::ThdAtmos,
+            Format::Ac4Atmos,
+            Format::Ac4Ims,
+        ] {
+            assert!(
+                check_master_inputs(format, &masters, false).is_ok(),
+                "{format:?}"
+            );
+        }
+        for format in [Format::Thd, Format::Ac4, Format::Aac] {
+            let e = check_master_inputs(format, &masters, false).unwrap_err();
+            assert_eq!(e.kind, ErrorKind::MasterFormat);
+            assert_eq!(e.insert.as_deref(), Some(format.name()));
+            // `-mo` measures any master
+            assert!(check_master_inputs(format, &masters, true).is_ok());
+        }
+        // no master, no check
+        assert!(check_master_inputs(Format::Aac, &[probe(48000, 2, 24)], false).is_ok());
+        // DD and DDP take a master alone
+        let mixed = [master_probe(), probe(48000, 6, 24)];
+        for format in [Format::Dd, Format::Ddp] {
+            assert_eq!(
+                check_master_inputs(format, &mixed, false).unwrap_err().kind,
+                ErrorKind::MasterMixed
+            );
+        }
+        assert!(check_master_inputs(Format::DdpAtmos, &mixed, false).is_ok());
+    }
+
+    #[test]
+    fn masters_are_atmos_inputs_and_do_not_set_the_layout() {
+        let files = ["a.wav".to_string(), "b.thd".to_string()];
+        let probes = [master_probe(), truehd_probe(true)];
+        assert!(check_atmos_inputs(&files, &probes).is_ok());
+        // TrueHD is 8 channels, a master has none to compare
+        assert_eq!(check_inputs(&probes).unwrap().channels, 8);
+        let all = check_inputs(&[master_probe(), master_probe()]).unwrap();
+        assert_eq!(
+            (all.samplerate, all.channels, all.bit_depths.len()),
+            (48000, 6, 2)
+        );
+        // a master next to a wav that is not Atmos
+        let files = ["a.wav".to_string(), "b.wav".to_string()];
+        let probes = [master_probe(), probe(48000, 2, 24)];
+        assert_eq!(
+            check_atmos_inputs(&files, &probes).unwrap_err().kind,
+            ErrorKind::AtmosInput
+        );
+    }
+
+    #[test]
+    fn ac4_ims_atmos_and_channel_inputs_do_not_mix() {
+        assert!(ims_atmos_source(&master_probe()));
+        assert!(ims_atmos_source(&truehd_probe(true)));
+        assert!(!ims_atmos_source(&truehd_probe(false)));
+        assert!(check_ims_inputs(&[master_probe(), truehd_probe(true)]).is_ok());
+        assert!(check_ims_inputs(&[probe(48000, 6, 24), truehd_probe(false)]).is_ok());
+        assert_eq!(
+            check_ims_inputs(&[master_probe(), probe(48000, 6, 24)])
+                .unwrap_err()
+                .kind,
+            ErrorKind::Ac4ImsMixed
+        );
     }
 }

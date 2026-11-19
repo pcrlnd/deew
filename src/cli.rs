@@ -4,17 +4,19 @@
 //! the usual Rust parsers cannot express, so the (small) subset of argparse
 //! behaviour that deew relies on is reimplemented here.
 
-use crate::help::{HELP, wrap_help};
+use crate::help::{help, wrap_help};
+use crate::probe::{TrackIndex, TrackParseError};
 use crate::rprintln;
 use crate::term::console_width;
 
 #[derive(Debug, Clone)]
 pub struct Args {
     pub input: Option<Vec<String>>, // None if -i/--input never given
-    pub track_index: i64,           // default 0
+    pub track_index: TrackIndex,    // default 0
     pub output: Option<String>,
     pub ddp_mode: Option<String>,
     pub ddp_atmos_mode: Option<String>,
+    pub ac4_ims_mode: Option<String>,
     pub format: String, // default "ddp" (raw, not lowercased)
     pub bitrate: Option<i64>,
     pub downmix: Option<i64>,
@@ -26,11 +28,18 @@ pub struct Args {
     pub keep_log: bool,
     pub output_to_input: bool,
     pub disable_lfe: bool,
-    pub no_phase_shift: bool,
+    /// `-sps on|off` (raw)
+    pub surround_phase_shift: Option<String>,
+    /// `-lpf on|off` (raw)
+    pub low_pass_filter: Option<String>,
+    /// `-s3a on|off` (raw)
+    pub surround_3db_attenuation: Option<String>,
     pub measure_only: bool,
     pub list_bitrates: bool,
     pub long_argument: bool,
     pub no_prompt: bool,
+    /// Hidden `--probe-json`: print the probe of the inputs as JSON (for the GUI).
+    pub probe_json: bool,
     pub print_logos: bool,
     pub changelog: bool,
     pub get_tools: bool,
@@ -42,10 +51,11 @@ impl Default for Args {
     fn default() -> Self {
         Args {
             input: None,
-            track_index: 0,
+            track_index: TrackIndex::audio(0),
             output: None,
             ddp_mode: None,
             ddp_atmos_mode: None,
+            ac4_ims_mode: None,
             format: "ddp".to_string(),
             bitrate: None,
             downmix: None,
@@ -57,11 +67,14 @@ impl Default for Args {
             keep_log: false,
             output_to_input: false,
             disable_lfe: false,
-            no_phase_shift: false,
+            surround_phase_shift: None,
+            low_pass_filter: None,
+            surround_3db_attenuation: None,
             measure_only: false,
             list_bitrates: false,
             long_argument: false,
             no_prompt: false,
+            probe_json: false,
             print_logos: false,
             changelog: false,
             get_tools: false,
@@ -74,29 +87,37 @@ impl Default for Args {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Help,
+    FullHelp,
     Version,
     /// `nargs='*'`
     Many,
     Str,
     Int,
+    /// `-ti`: `N`, `a:N` or `s:N`
+    Track,
     Flag,
 }
 
 /// (short, long, kind)
 const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-h", "--help", Kind::Help),
+    ("-fh", "--full-help", Kind::FullHelp),
     ("-v", "--version", Kind::Version),
     ("-i", "--input", Kind::Many),
-    ("-ti", "--track-index", Kind::Int),
+    ("-ti", "--track-index", Kind::Track),
     ("-o", "--output", Kind::Str),
     ("-oi", "--output-to-input", Kind::Flag),
     ("-f", "--format", Kind::Str),
     ("", "--ddp-mode", Kind::Str),
     ("", "--ddp-atmos-mode", Kind::Str),
+    ("", "--ac4-ims-mode", Kind::Str),
     ("-b", "--bitrate", Kind::Int),
     ("-dm", "--downmix", Kind::Int),
     ("-dl", "--disable-lfe", Kind::Flag),
-    ("-nps", "--no-phase-shift", Kind::Flag),
+    ("-sps", "--surround-phase-shift", Kind::Str),
+    ("-lpf", "--low-pass-filter", Kind::Str),
+    ("-s3a", "--surround-3db-attenuation", Kind::Str),
+    // hidden alias of `-sps off`
     ("-d", "--delay", Kind::Str),
     ("-r", "--drc", Kind::Str),
     ("-dn", "--dialnorm", Kind::Int),
@@ -112,6 +133,8 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-gt", "--get-tools", Kind::Flag),
     ("-c", "--config", Kind::Flag),
     ("-gc", "--generate-config", Kind::Flag),
+    // hidden: the probe of the inputs as JSON, for the GUI
+    ("", "--probe-json", Kind::Flag),
 ];
 
 type Opt = (&'static str, &'static str, Kind);
@@ -120,6 +143,7 @@ type Opt = (&'static str, &'static str, Kind);
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
     Help,
+    FullHelp,
     Version,
     Error(String),
 }
@@ -244,7 +268,6 @@ fn set_flag(args: &mut Args, long: &str) {
         "--keep-log" => args.keep_log = true,
         "--output-to-input" => args.output_to_input = true,
         "--disable-lfe" => args.disable_lfe = true,
-        "--no-phase-shift" => args.no_phase_shift = true,
         "--measure-only" => args.measure_only = true,
         "--list-bitrates" => args.list_bitrates = true,
         "--long-argument" => args.long_argument = true,
@@ -254,13 +277,13 @@ fn set_flag(args: &mut Args, long: &str) {
         "--get-tools" => args.get_tools = true,
         "--config" => args.config = true,
         "--generate-config" => args.generate_config = true,
+        "--probe-json" => args.probe_json = true,
         _ => unreachable!("not a flag: {long}"),
     }
 }
 
 fn set_int(args: &mut Args, long: &str, v: i64) {
     match long {
-        "--track-index" => args.track_index = v,
         "--bitrate" => args.bitrate = Some(v),
         "--downmix" => args.downmix = Some(v),
         "--dialnorm" => args.dialnorm = v,
@@ -274,9 +297,13 @@ fn set_str(args: &mut Args, long: &str, v: String) {
         "--format" => args.format = v,
         "--ddp-mode" => args.ddp_mode = Some(v),
         "--ddp-atmos-mode" => args.ddp_atmos_mode = Some(v),
+        "--ac4-ims-mode" => args.ac4_ims_mode = Some(v),
         "--delay" => args.delay = Some(v),
         "--drc" => args.drc = Some(v),
         "--instances" => args.instances = Some(v),
+        "--surround-phase-shift" => args.surround_phase_shift = Some(v),
+        "--low-pass-filter" => args.low_pass_filter = Some(v),
+        "--surround-3db-attenuation" => args.surround_3db_attenuation = Some(v),
         _ => unreachable!("not a string option: {long}"),
     }
 }
@@ -307,7 +334,7 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
         let name = display_name(opt);
 
         match opt.2 {
-            Kind::Help | Kind::Version | Kind::Flag => {
+            Kind::Help | Kind::FullHelp | Kind::Version | Kind::Flag => {
                 if let Some(value) = explicit {
                     return Err(Outcome::Error(format!(
                         "argument {name}: ignored explicit argument '{value}'"
@@ -315,6 +342,7 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
                 }
                 match opt.2 {
                     Kind::Help => return Err(Outcome::Help),
+                    Kind::FullHelp => return Err(Outcome::FullHelp),
                     Kind::Version => return Err(Outcome::Version),
                     _ => set_flag(&mut args, opt.1),
                 }
@@ -330,7 +358,7 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
                 }
                 args.input = Some(argv[start..i].to_vec());
             }
-            Kind::Str | Kind::Int => {
+            Kind::Str | Kind::Int | Kind::Track => {
                 let value = match explicit {
                     Some(value) => value,
                     None => {
@@ -343,7 +371,21 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
                         argv[i - 1].as_str()
                     }
                 };
-                if opt.2 == Kind::Int {
+                if opt.2 == Kind::Track {
+                    args.track_index = TrackIndex::parse(value).map_err(|why| {
+                        Outcome::Error(format!(
+                            "argument {name}: {}",
+                            match why {
+                                TrackParseError::NotAnInt =>
+                                    format!("invalid int value: '{value}'"),
+                                TrackParseError::Negative =>
+                                    format!("invalid track index: '{value}', it can't be negative"),
+                                TrackParseError::Malformed =>
+                                    format!("invalid track index: '{value}', use N, a:N or s:N"),
+                            }
+                        ))
+                    })?;
+                } else if opt.2 == Kind::Int {
                     let Some(n) = py_int(value) else {
                         return Err(Outcome::Error(format!(
                             "argument {name}: invalid int value: '{value}'"
@@ -368,17 +410,19 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
 
 /// The usage block (header, version and the usage lines).
 fn usage_markup() -> String {
-    let usage = HELP
+    let text = help(false);
+    let usage = text
         .split_once("\n\n[yellow]FLAGS")
-        .map_or(HELP, |(usage, _)| usage);
+        .map_or(text.as_str(), |(usage, _)| usage);
     wrap_help(usage, console_width())
 }
 
-/// Print the full help to stdout (the Python version prints it through rich).
-pub fn print_help() {
+/// Print the help to stdout (the Python version prints it through rich):
+/// `full` includes the advanced options.
+pub fn print_help(full: bool) {
     rprintln!(
         "[not bold white]{}[/not bold white]",
-        wrap_help(HELP, console_width())
+        wrap_help(&help(full), console_width())
     );
 }
 
@@ -392,13 +436,26 @@ pub fn usage_error(message: &str) -> ! {
     std::process::exit(2);
 }
 
+/// Parse the command line for `--probe-json`: nothing is printed, the
+/// problem (also help and version, which make no sense there) is the message.
+pub fn parse_quiet(argv: &[String]) -> Result<Args, String> {
+    try_parse(argv).map_err(|outcome| match outcome {
+        Outcome::Error(message) => message,
+        _ => "-h, -fh and -v can't be used with --probe-json".to_string(),
+    })
+}
+
 /// Parse the command line (without the program name). Prints and exits on
 /// help, version and errors.
 pub fn parse(argv: &[String]) -> Args {
     match try_parse(argv) {
         Ok(args) => args,
         Err(Outcome::Help) => {
-            print_help();
+            print_help(false);
+            std::process::exit(0);
+        }
+        Err(Outcome::FullHelp) => {
+            print_help(true);
             std::process::exit(0);
         }
         Err(Outcome::Version) => {
@@ -432,7 +489,7 @@ mod tests {
     fn defaults() {
         let a = ok(&[]);
         assert_eq!(a.input, None);
-        assert_eq!(a.track_index, 0);
+        assert_eq!(a.track_index, TrackIndex::audio(0));
         assert_eq!(a.output, None);
         assert_eq!(a.format, "ddp");
         assert_eq!(a.bitrate, None);
@@ -444,21 +501,56 @@ mod tests {
         assert!(
             !a.keeptemp && !a.keep_log && !a.measure_only && !a.output_to_input && !a.disable_lfe
         );
-        assert!(!a.no_phase_shift);
-        assert!(a.ddp_mode.is_none() && a.ddp_atmos_mode.is_none());
+        assert!(a.surround_phase_shift.is_none() && a.low_pass_filter.is_none());
+        assert!(a.surround_3db_attenuation.is_none());
+        assert!(a.ddp_mode.is_none() && a.ddp_atmos_mode.is_none() && a.ac4_ims_mode.is_none());
         assert!(!a.list_bitrates && !a.long_argument && !a.no_prompt && !a.print_logos);
         assert!(!a.changelog && !a.get_tools && !a.config && !a.generate_config);
     }
 
     #[test]
-    fn no_phase_shift_both_spellings() {
-        assert!(ok(&["-nps"]).no_phase_shift);
-        assert!(ok(&["--no-phase-shift"]).no_phase_shift);
-        assert!(ok(&["-f", "dd", "-dl", "-nps", "-np"]).no_phase_shift);
-        // -np stays a different flag
-        let a = ok(&["-np"]);
-        assert!(a.no_prompt && !a.no_phase_shift);
-        assert!(!ok(&["-nps"]).no_prompt);
+    fn surround_options() {
+        let some = |v: &str| Some(v.to_string());
+        assert_eq!(ok(&["-sps", "off"]).surround_phase_shift, some("off"));
+        assert_eq!(
+            ok(&["--surround-phase-shift", "ON"]).surround_phase_shift,
+            some("ON")
+        );
+        assert_eq!(ok(&["-lpf", "off"]).low_pass_filter, some("off"));
+        assert_eq!(ok(&["--low-pass-filter=on"]).low_pass_filter, some("on"));
+        let a = ok(&["-s3a", "on"]);
+        assert_eq!(a.surround_3db_attenuation, some("on"));
+        assert_eq!(
+            ok(&["--surround-3db-attenuation", "off"]).surround_3db_attenuation,
+            some("off")
+        );
+        // the value is required, bad values are rejected later
+        assert!(err(&["-sps"]).contains("expected one argument"));
+        assert!(err(&["-lpf", "-k"]).contains("expected one argument"));
+        assert_eq!(ok(&["-sps", "maybe"]).surround_phase_shift, some("maybe"));
+    }
+
+    #[test]
+    fn no_phase_shift_alias_is_gone() {
+        for flag in ["-nps", "--no-phase-shift"] {
+            assert!(err(&[flag]).contains("unrecognized arguments"), "{flag}");
+        }
+        // the last -sps wins
+        assert_eq!(
+            ok(&["-sps", "off", "-sps", "on"]).surround_phase_shift,
+            Some("on".to_string())
+        );
+    }
+
+    #[test]
+    fn full_help_flag() {
+        assert_eq!(p(&["-fh"]).unwrap_err(), Outcome::FullHelp);
+        assert_eq!(
+            p(&["--full-help", "-b", "abc"]).unwrap_err(),
+            Outcome::FullHelp
+        );
+        assert_eq!(p(&["-h", "-fh"]).unwrap_err(), Outcome::Help);
+        assert!(err(&["-fh=1"]).contains("ignored explicit argument"));
     }
 
     #[test]
@@ -479,7 +571,7 @@ mod tests {
             a.input,
             Some(vec!["a.mkv".to_string(), "b.mkv".to_string()])
         );
-        assert_eq!(a.track_index, 2);
+        assert_eq!(a.track_index, TrackIndex::audio(2));
         assert_eq!(a.output.as_deref(), Some("out"));
         assert_eq!(a.format, "DD");
         assert_eq!(a.bitrate, Some(640));
@@ -521,6 +613,8 @@ mod tests {
             "--ddp-mode",
             "bluray",
             "--ddp-atmos-mode=standard",
+            "--ac4-ims-mode",
+            "Music",
             "--disable-lfe",
             "--measure-only",
             "--list-bitrates",
@@ -533,7 +627,7 @@ mod tests {
             "--generate-config",
         ]);
         assert_eq!(a.input, Some(vec!["x".to_string()]));
-        assert_eq!(a.track_index, 1);
+        assert_eq!(a.track_index, TrackIndex::audio(1));
         assert_eq!(a.bitrate, Some(256));
         assert_eq!(a.delay.as_deref(), Some("-5ms"));
         assert_eq!(a.drc.as_deref(), Some("none"));
@@ -542,6 +636,7 @@ mod tests {
         assert!(a.output_to_input);
         assert_eq!(a.ddp_mode.as_deref(), Some("bluray"));
         assert_eq!(a.ddp_atmos_mode.as_deref(), Some("standard"));
+        assert_eq!(a.ac4_ims_mode.as_deref(), Some("Music"));
     }
 
     #[test]
@@ -592,7 +687,36 @@ mod tests {
         assert_eq!(ok(&["-d", "-5"]).delay.as_deref(), Some("-5"));
         assert_eq!(ok(&["-d", "-.5"]).delay.as_deref(), Some("-.5"));
         assert_eq!(ok(&["-d", "-1.5"]).delay.as_deref(), Some("-1.5"));
-        assert_eq!(ok(&["-ti", "-1"]).track_index, -1);
+    }
+
+    #[test]
+    fn track_index_forms() {
+        let ti = |v: &str| ok(&["-ti", v]).track_index;
+        assert_eq!(ti("2"), TrackIndex::audio(2));
+        assert_eq!(ti("2").to_string(), "2");
+        let a = ti("a:1");
+        assert_eq!((a.stream, a.n, a.to_string()), (false, 1, "a:1".into()));
+        let s = ti("S:3");
+        assert_eq!((s.stream, s.n, s.to_string()), (true, 3, "s:3".into()));
+        assert_eq!(ti("A:0").map_spec(), "0:a:0");
+        assert_eq!(ti("s:4").map_spec(), "0:4");
+        assert_eq!(
+            err(&["-ti", "-1"]),
+            "argument -ti/--track-index: invalid track index: '-1', it can't be negative"
+        );
+        for bad in ["a:", "s:-1", "x:1", "a:b", "s:1:2", "a: 1", "s:+1"] {
+            assert_eq!(
+                err(&["-ti", bad]),
+                format!(
+                    "argument -ti/--track-index: invalid track index: '{bad}', use N, a:N or s:N"
+                ),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            err(&["-ti", "x"]),
+            "argument -ti/--track-index: invalid int value: 'x'"
+        );
     }
 
     #[test]

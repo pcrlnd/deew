@@ -661,15 +661,19 @@ impl Ui {
             .expect("live lines")
             .remove(&bar.index)
             .and_then(|job| job.db);
-        events::done(bar.index);
+        let took = bar.started.elapsed().as_secs();
+        events::done(
+            bar.index,
+            match end {
+                End::Done => events::JobResult::Finished,
+                End::Failed(error) => events::JobResult::Failed(error),
+                End::Stopped => events::JobResult::Stopped,
+            },
+            took,
+        );
         let color = color_enabled();
         let line = match end {
-            End::Done => Some(finished_text(
-                &bar.name,
-                db,
-                bar.started.elapsed().as_secs(),
-                color,
-            )),
+            End::Done => Some(finished_text(&bar.name, db, took, color)),
             End::Failed(error) => Some(failed_text(&bar.name, error, color)),
             End::Stopped => None,
         };

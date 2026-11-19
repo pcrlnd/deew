@@ -1,3 +1,4 @@
+mod awake;
 mod cli;
 mod commands;
 mod config;
@@ -13,10 +14,12 @@ mod inputs;
 mod interrupt;
 mod live;
 mod markup;
+mod master;
 mod pipe;
 mod pipeline;
 mod plan;
 mod probe;
+mod probe_json;
 mod prompt;
 mod summary;
 mod term;
@@ -44,8 +47,12 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
     if argv.is_empty() {
-        cli::print_help();
+        cli::print_help(false);
         std::process::exit(1);
+    }
+
+    if argv.iter().any(|a| a == "--probe-json") {
+        probe_json::run(&argv, &config::Paths::resolve());
     }
 
     let args = cli::parse(&argv);
@@ -70,7 +77,7 @@ fn main() {
         config::show_config(&paths);
     }
     if args.generate_config {
-        config::generate_config(&paths, 0);
+        config::generate_config_asking(&paths, args.no_prompt);
     }
 
     let config = config::load(&paths);

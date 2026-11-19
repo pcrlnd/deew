@@ -40,6 +40,11 @@ pub struct SummaryData<'a> {
     pub latest: String,
     pub versions: Versions,
     pub channels: i64,
+    /// What the inputs are when they all are Atmos masters (`ADM BWF Atmos
+    /// master`), shown instead of their channels and bit depth.
+    pub master_source: Option<String>,
+    /// The AC4 IMS mode when it is not the default (`music`).
+    pub mode: Option<&'static str>,
     /// Sample rate in Hz of every input.
     pub sample_rates: &'a [i64],
     /// Normalised bit depth of every input.
@@ -56,6 +61,8 @@ pub struct SummaryData<'a> {
     pub output_dir: &'a str,
     pub files: usize,
     pub instances: f64,
+    /// Text of the "Piping" row, `None` leaves the row out.
+    pub piping: Option<String>,
     /// Text of the "Delay" row, see [`delay_summary`].
     pub delay: String,
     pub temp_path: &'a str,
@@ -169,17 +176,25 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
     }
     if d.sections.input_info {
         rows.push(row(&["[bold yellow]Input(s)"], false));
-        rows.push(row(&["Channels", &input_channels(d.channels)], false));
+        match &d.master_source {
+            Some(source) => rows.push(row(&["Source", &escape(source)], false)),
+            None => rows.push(row(&["Channels", &input_channels(d.channels)], false)),
+        }
         rows.push(row(
             &["Sample rate", &sample_rate_cell(d.sample_rates)],
             false,
         ));
-        rows.push(row(&["Bit depth", &bit_depth_cell(d.bit_depths)], false));
+        if d.master_source.is_none() {
+            rows.push(row(&["Bit depth", &bit_depth_cell(d.bit_depths)], false));
+        }
         rows.push(row(&["Files", &d.files.to_string()], true));
     }
     if !d.measure_only && d.sections.output_info {
         rows.push(row(&["[bold yellow]Output"], false));
         rows.push(row(&["Format", d.format.summary_name()], false));
+        if let Some(mode) = d.mode {
+            rows.push(row(&["Mode", mode], false));
+        }
         rows.push(row(&["Channels", &d.output_channels], false));
         if let Some(profile) = d.profile {
             let text = match profile {
@@ -204,6 +219,9 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
     if d.sections.other {
         rows.push(row(&["[bold yellow]Other"], false));
         rows.push(row(&["Max instances", &format_g(d.instances)], false));
+        if let Some(piping) = &d.piping {
+            rows.push(row(&["Piping", piping], false));
+        }
         rows.push(row(&["Delay", &d.delay], false));
         rows.push(Row {
             fold: true,
@@ -558,6 +576,8 @@ mod tests {
                 ffprobe: Version::CouldntParse,
             },
             channels: 6,
+            master_source: None,
+            mode: None,
             sample_rates: &[48000],
             bit_depths: &[24, 24],
             measure_only: false,
@@ -569,6 +589,7 @@ mod tests {
             output_dir: "/out/di[r]",
             files: 2,
             instances: 2.5,
+            piping: None,
             delay: "0ms".into(),
             temp_path: "/tmp/de[ew",
         }
@@ -614,6 +635,8 @@ mod tests {
                     ..Versions::default()
                 },
                 channels: p["channels"].as_i64().unwrap(),
+                master_source: None,
+                mode: None,
                 sample_rates: &[48000],
                 bit_depths: &bit_depths,
                 measure_only: p["measure_only"].as_bool().unwrap(),
@@ -625,6 +648,7 @@ mod tests {
                 output_dir: s("output"),
                 files: p["files"].as_u64().unwrap() as usize,
                 instances: p["instances"].as_f64().unwrap(),
+                piping: None,
                 delay: s("delay_text").to_string(),
                 temp_path: s("temp"),
             };
@@ -1019,6 +1043,23 @@ mod tests {
             1,
             "{text}"
         );
+    }
+
+    #[test]
+    fn piping_row_follows_max_instances() {
+        let all = sections(true);
+        let mut d = data(&all);
+        let label = |rows: &[Row], i: usize| rows[i].cells[0].clone();
+        let rows = summary_rows(&d);
+        let other = rows
+            .iter()
+            .position(|r| r.cells[0].contains("Other"))
+            .unwrap();
+        assert_eq!(label(&rows, other + 2), "Delay");
+        d.piping = Some("on (auto)".into());
+        let rows = summary_rows(&d);
+        assert_eq!(label(&rows, other + 2), "Piping");
+        assert_eq!(rows[other + 2].cells[1], "on (auto)");
     }
 
     #[test]

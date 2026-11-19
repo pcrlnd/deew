@@ -12,6 +12,10 @@ import {
   ATMOS_INPUT_WARNING,
   DDP_ATMOS_INPUT_WARNING,
   THD_NO_ATMOS_INPUT_WARNING,
+  CHANNELS_WARNING,
+  IMS_INPUT_WARNING,
+  IMS_MIXED_WARNING,
+  MASTER_MIXED_WARNING,
   atmosInputWarnings,
   relevantBitrates,
 } from "./deew-args"
@@ -23,6 +27,7 @@ const file = (patch: Partial<FileProbe> = {}): FileProbe => ({
   bitDepth: 24,
   codec: "truehd",
   atmos: false,
+  master: false,
   error: null,
   skipped: false,
   ...patch,
@@ -37,8 +42,10 @@ describe("summarizeProbe", () => {
       sampleRate: 48000,
       bitDepths: [24],
       codecs: ["truehd"],
+      masters: [],
+      onlyMasters: false,
       atmos: false,
-      inputs: [{ codec: "truehd", atmos: false }],
+      inputs: [{ codec: "truehd", atmos: false, master: false }],
       mismatches: [],
       errors: [],
       skipped: [],
@@ -184,8 +191,8 @@ describe("Atmos", () => {
     expect(mixed.atmos).toBe(false)
     expect(formatSummary(mixed)).toBe("7.1 - 48 kHz - 24-bit - 2 files")
     expect(mixed.inputs).toEqual([
-      { codec: "truehd", atmos: false },
-      { codec: "truehd", atmos: true },
+      { codec: "truehd", atmos: false, master: false },
+      { codec: "truehd", atmos: true, master: false },
     ])
   })
 
@@ -199,9 +206,7 @@ describe("Atmos", () => {
     expect(w([{ codec: "truehd", atmos: false }])).toEqual([
       THD_NO_ATMOS_INPUT_WARNING,
     ])
-    expect(w([{ codec: "eac3", atmos: false }])).toEqual([
-      ATMOS_INPUT_WARNING,
-    ])
+    expect(w([{ codec: "eac3", atmos: false }])).toEqual([ATMOS_INPUT_WARNING])
     expect(
       w([
         { codec: "eac3", atmos: true },
@@ -221,9 +226,147 @@ describe("Atmos", () => {
   it("is used by relevantBitrates for the Atmos formats only", () => {
     const inputs = [{ codec: "eac3", atmos: true }]
     const base = { channels: 6, downmix: "none" as const, inputs }
-    expect(
-      relevantBitrates({ ...base, format: "thd-atmos" }).warnings
-    ).toEqual([DDP_ATMOS_INPUT_WARNING])
+    expect(relevantBitrates({ ...base, format: "thd-atmos" }).warnings).toEqual(
+      [DDP_ATMOS_INPUT_WARNING]
+    )
     expect(relevantBitrates({ ...base, format: "ddp" }).warnings).toEqual([])
+  })
+})
+
+describe("Atmos masters", () => {
+  const master = (patch: Partial<FileProbe> = {}) =>
+    file({
+      path: "m.wav",
+      channels: 6,
+      codec: "ADM BWF Atmos master",
+      atmos: true,
+      master: true,
+      ...patch,
+    })
+
+  it("count as 5.1 only when every input is a master", () => {
+    const s = summarizeProbe([
+      master(),
+      master({ path: "n.atmos", codec: "DAMF Atmos master" }),
+    ])
+    expect(s.onlyMasters).toBe(true)
+    expect(s.channels).toBe(6)
+    expect(s.masters).toEqual(["ADM BWF Atmos master", "DAMF Atmos master"])
+    expect(s.codecs).toEqual([])
+    expect(formatSummary(s)).toBe(
+      "ADM BWF Atmos master + DAMF Atmos master - 2 files"
+    )
+  })
+
+  it("have no say in the channels of the other inputs", () => {
+    const s = summarizeProbe([master(), file({ channels: 8, codec: "ac3" })])
+    expect(s.onlyMasters).toBe(false)
+    expect(s.channels).toBe(8)
+    expect(s.mismatches).toEqual([])
+    expect(s.codecs).toEqual(["ac3"])
+    expect(s.inputs).toContainEqual({
+      codec: "ADM BWF Atmos master",
+      atmos: true,
+      master: true,
+    })
+    expect(formatSummary(s)).toBe(
+      "7.1 - 48 kHz - 24-bit - 2 files - with ADM BWF Atmos master"
+    )
+  })
+
+  it("are no problem for the Atmos formats", () => {
+    const inputs = [
+      { codec: "ADM BWF Atmos master", atmos: true, master: true },
+    ]
+    expect(atmosInputWarnings(inputs, undefined)).toEqual([])
+    const base = { channels: 6, downmix: "none" as const, inputs }
+    for (const format of [
+      "ddp-atmos",
+      "thd-atmos",
+      "ac4-atmos",
+      "ac4-ims",
+    ] as const) {
+      expect(relevantBitrates({ ...base, format }).warnings).toEqual([])
+    }
+  })
+
+  it("can't go to TrueHD, AC4 and AAC (unless only measured)", () => {
+    const inputs = [{ codec: "DAMF Atmos master", atmos: true, master: true }]
+    const base = { channels: 6, downmix: "none" as const, inputs }
+    for (const format of ["thd", "ac4", "aac"] as const) {
+      const w = relevantBitrates({ ...base, format }).warnings
+      expect(w).toHaveLength(1)
+      expect(w[0]).toContain(
+        "Atmos masters (ADM BWF, DAMF) can't be encoded to"
+      )
+      expect(
+        relevantBitrates({ ...base, format, measureOnly: true }).warnings
+      ).toEqual([])
+    }
+  })
+
+  it("can't be mixed with other inputs for DD and DDP", () => {
+    const inputs = [
+      { codec: "ADM BWF Atmos master", atmos: true, master: true },
+      { codec: "ac3", atmos: false, master: false },
+    ]
+    const base = { channels: 6, downmix: "none" as const, inputs }
+    expect(relevantBitrates({ ...base, format: "ddp" }).warnings).toEqual([
+      MASTER_MIXED_WARNING,
+    ])
+    expect(relevantBitrates({ ...base, format: "dd" }).warnings).toEqual([
+      MASTER_MIXED_WARNING,
+    ])
+    expect(
+      relevantBitrates({ ...base, inputs: [inputs[0]], format: "ddp" }).warnings
+    ).toEqual([])
+  })
+})
+
+describe("AC-4 IMS inputs", () => {
+  const base = { format: "ac4-ims" as const, downmix: "none" as const }
+  const pcm = { codec: "pcm_s24le", atmos: false, master: false }
+  const thdAtmos = { codec: "truehd", atmos: true, master: false }
+  const thd = { codec: "truehd", atmos: false, master: false }
+
+  it("takes 5.0, 5.1, 7.0, 7.1 and Atmos", () => {
+    for (const channels of [5, 6, 7, 8]) {
+      expect(
+        relevantBitrates({ ...base, channels, inputs: [pcm] }).warnings
+      ).toEqual([])
+    }
+    expect(
+      relevantBitrates({ ...base, channels: 8, inputs: [thdAtmos] }).warnings
+    ).toEqual([])
+  })
+
+  it("rejects stereo and mono unless Atmos", () => {
+    for (const channels of [1, 2]) {
+      expect(
+        relevantBitrates({ ...base, channels, inputs: [pcm] }).warnings
+      ).toEqual([IMS_INPUT_WARNING])
+    }
+    expect(
+      relevantBitrates({ ...base, channels: 3, inputs: [pcm] }).warnings
+    ).toEqual([CHANNELS_WARNING])
+    // a plain TrueHD 7.1 is channel-based
+    expect(
+      relevantBitrates({ ...base, channels: 8, inputs: [thd] }).warnings
+    ).toEqual([])
+  })
+
+  it("can't mix Atmos and channel-based inputs", () => {
+    expect(
+      relevantBitrates({ ...base, channels: null, inputs: [thdAtmos, pcm] })
+        .warnings
+    ).toEqual([IMS_MIXED_WARNING])
+    const master = { codec: "ADM BWF Atmos master", atmos: true, master: true }
+    expect(
+      relevantBitrates({ ...base, channels: 6, inputs: [master, thd] }).warnings
+    ).toEqual([IMS_MIXED_WARNING])
+    expect(
+      relevantBitrates({ ...base, channels: 8, inputs: [master, thdAtmos] })
+        .warnings
+    ).toEqual([])
   })
 })

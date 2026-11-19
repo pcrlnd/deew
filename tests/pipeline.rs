@@ -253,11 +253,12 @@ rm -f "$tmp" "$tmp.err"
 exit $status
 "#;
 
-const DEE_TOOLS: [&str; 7] = [
+const DEE_TOOLS: [&str; 8] = [
     "dee_ddp_encoder",
     "dee_ddpjoc_encoder",
     "dee_ac4_encoder",
     "dee_ac4ajoc_encoder",
+    "dee_ac4ims_encoder",
     "dee_aac_encoder",
     "dee_dthd_encoder",
     "dee_measure_loudness",
@@ -735,7 +736,7 @@ fn no_phase_shift_reaches_every_dd_and_ddp_encode() {
     // without the flag nothing is added
     ok(&env.deew(&["-i", "fv.wav", "-f", "dd"]));
     assert_eq!(e(&env), "dd:drc_profile=none");
-    for flag in ["-nps", "--no-phase-shift"] {
+    for flag in ["--surround-phase-shift=off", "--surround-phase-shift=OFF"] {
         // native: DD and DDP, stereo and 5.1, also with -dm and -dl
         ok(&env.deew(&["-i", "st.wav", "-f", "dd", flag]));
         assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
@@ -828,14 +829,150 @@ fn no_phase_shift_only_works_for_dd_ddp_and_ddp_atmos() {
     let env = env_or_skip!();
     env.media("fv.wav", "5.1", 48000, "pcm_s24le");
     for format in ["thd", "ac4", "aac", "thd-atmos", "ac4-atmos"] {
-        let out = env.deew(&["-i", "fv.wav", "-f", format, "-nps"]);
+        let out = env.deew(&["-i", "fv.wav", "-f", format, "-sps", "off"]);
         assert_error(
             &out,
-            "-nps/--no-phase-shift only works for DD, DDP and DDP Atmos.",
+            "-sps/--surround-phase-shift only works for DD, DDP and DDP Atmos.",
         );
     }
     // -mo ignores the format rules
-    ok(&env.deew(&["-i", "fv.wav", "-mo", "-f", "thd", "-nps"]));
+    ok(&env.deew(&["-i", "fv.wav", "-mo", "-f", "thd", "-sps", "off"]));
+}
+
+#[test]
+fn sps_overrides_the_config_both_ways() {
+    let env = env_or_skip!();
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    let e = |env: &Env| opt(&env.run("dee_ddp_encoder"), "-e").to_string();
+    let text = fs::read_to_string(env.config()).unwrap();
+    fs::write(
+        env.config(),
+        format!("surround_phase_shift = false\n{text}"),
+    )
+    .unwrap();
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd"]));
+    assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd", "-sps", "on"]));
+    assert_eq!(e(&env), "dd:drc_profile=none");
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd", "-sps", "off"]));
+    assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
+    let out = env.deew(&["-i", "fv.wav", "-sps", "maybe"]);
+    assert_error(&out, "-sps, -lpf and -s3a can only be on or off.");
+}
+
+#[test]
+fn lpf_and_s3a_reach_dd_and_ddp_encodes() {
+    let env = env_or_skip!();
+    env.media("st.wav", "stereo", 48000, "pcm_s16le");
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    env.media("sur.wav", "7.1", 48000, "pcm_s24le");
+    let e = |env: &Env| opt(&env.run("dee_ddp_encoder"), "-e").to_string();
+    let lpf = ":lfe_filter=0";
+    let s3a = ":surround_3dB_attenuation=1";
+    // defaults and explicit defaults add nothing
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd", "-lpf", "on", "-s3a", "off"]));
+    assert_eq!(e(&env), "dd:drc_profile=none");
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd", "-lpf", "off", "-s3a", "on"]));
+    assert_eq!(e(&env), format!("dd:drc_profile=none{lpf}{s3a}"));
+    ok(&env.deew(&["-i", "fv.wav", "--low-pass-filter", "OFF"]));
+    assert_eq!(e(&env), format!("ddp:drc_profile=none{lpf}"));
+    ok(&env.deew(&[
+        "-i",
+        "fv.wav",
+        "--surround-3db-attenuation=on",
+        "-dl",
+        "-lpf",
+        "off",
+    ]));
+    assert_eq!(e(&env), format!("ddp:drc_profile=none:lfe_on=0{s3a}"));
+    // stereo: neither
+    ok(&env.deew(&["-i", "st.wav", "-lpf", "off", "-s3a", "on"]));
+    assert_eq!(e(&env), "ddp:drc_profile=none");
+    // dee_shim layout
+    ok(&env.deew(&["-i", "sur.wav", "-lpf", "off", "-s3a", "on"]));
+    let shim = env.dshim_run().unwrap();
+    let rest = &shim[shim.iter().position(|a| a == "--").unwrap() + 1..];
+    assert_eq!(opt(rest, "-e"), format!("ddp:drc_profile=none{lpf}{s3a}"));
+    // the config
+    let text = fs::read_to_string(env.config()).unwrap();
+    fs::write(
+        env.config(),
+        format!("low_pass_filter = false\nsurround_3db_attenuation = true\n{text}"),
+    )
+    .unwrap();
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd"]));
+    assert_eq!(e(&env), format!("dd:drc_profile=none{lpf}{s3a}"));
+    ok(&env.deew(&["-i", "fv.wav", "-f", "dd", "-lpf", "on", "-s3a", "off"]));
+    assert_eq!(e(&env), "dd:drc_profile=none");
+    // other formats ignore the config
+    ok(&env.deew(&["-i", "fv.wav", "-f", "ac4"]));
+    ok(&env.deew(&["-i", "fv.wav", "-f", "aac"]));
+}
+
+#[test]
+fn lpf_and_s3a_only_work_for_dd_and_ddp() {
+    let env = env_or_skip!();
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    for format in ["ddp-atmos", "thd", "ac4", "aac", "thd-atmos", "ac4-atmos"] {
+        let out = env.deew(&["-i", "fv.wav", "-f", format, "-lpf", "off"]);
+        assert_error(&out, "-lpf/--low-pass-filter only works for DD and DDP.");
+        if format == "thd" {
+            continue; // -s3a works for TrueHD
+        }
+        let out = env.deew(&["-i", "fv.wav", "-f", format, "-s3a", "on"]);
+        assert_error(
+            &out,
+            "-s3a/--surround-3db-attenuation only works for DD, DDP and TrueHD.",
+        );
+    }
+    ok(&env.deew(&[
+        "-i", "fv.wav", "-mo", "-f", "thd", "-lpf", "off", "-s3a", "on",
+    ]));
+}
+
+#[test]
+fn thd_surround_3db_asks_first() {
+    let env = env_or_skip!();
+    env.media("s51.wav", "5.1", 48000, "pcm_s24le");
+    let question = "won't be identical to the source. Continue?";
+    // answering no aborts
+    let out = env.deew_stdin(&["-i", "s51.wav", "-f", "thd", "-s3a", "on"], "n\n");
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stdout(&out).contains(question), "{}", stdout(&out));
+    assert!(!env.out().join("s51.thd").exists());
+    // yes encodes, the option is in the presentation (through dee_shim: DRC none)
+    let out = env.deew_stdin(&["-i", "s51.wav", "-f", "thd", "-s3a", "on"], "y\n");
+    ok(&out);
+    assert!(stdout(&out).contains(question));
+    assert_eq!(
+        opt(&env.run("dee_dthd_encoder"), "--presentation"),
+        "6ch:drc_profile=film_light:surround_3dB_attenuation=1"
+    );
+    assert!(env.out().join("s51.thd").exists());
+    // -np: a note, no question, native with a DRC profile
+    let out = env.deew(&[
+        "-i", "s51.wav", "-f", "thd", "-s3a", "on", "-np", "-r", "speech",
+    ]);
+    ok(&out);
+    let text = stdout(&out);
+    assert!(
+        text.contains("the output won't be identical to the source."),
+        "{text}"
+    );
+    assert!(!text.contains(question), "{text}");
+    assert_eq!(
+        opt(&env.run("dee_dthd_encoder"), "--presentation"),
+        "6ch:drc_profile=speech:surround_3dB_attenuation=1"
+    );
+    // stereo: skipped without a question
+    env.media("st.wav", "stereo", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "st.wav", "-f", "thd", "-s3a", "on", "-np"]);
+    ok(&out);
+    assert!(!stdout(&out).contains("won't be identical"));
+    assert_eq!(
+        opt(&env.run("dee_dthd_encoder"), "--presentation"),
+        "2ch:drc_profile=film_light"
+    );
 }
 
 #[test]
@@ -2499,7 +2636,7 @@ fn argument_errors() {
     env.media("a.wav", "5.1", 48000, "pcm_s24le");
     assert_error(
         &env.deew(&["-i", "a.wav", "-f", "mp3"]),
-        "-f/--format can only be dd, ddp, ddp-atmos, thd, thd-atmos, ac4, ac4-atmos or aac.",
+        "-f/--format can only be dd, ddp, ddp-atmos, thd, thd-atmos, ac4, ac4-atmos, ac4-ims or aac.",
     );
     assert_error(
         &env.deew(&["-i", "a.wav", "-dm", "3"]),
@@ -2643,10 +2780,12 @@ fn events_file_describes_an_encode() {
     let encode = percents("encode");
     assert_eq!(encode[0], 0.0, "{encode:?}");
     assert!(encode.contains(&100.0), "{encode:?}");
-    assert_eq!(
-        all.last().unwrap(),
-        &serde_json::json!({"type": "done", "job": 0})
-    );
+    let last = all.last().unwrap();
+    assert_eq!(last["type"], "done");
+    assert_eq!(last["job"], 0);
+    assert_eq!(last["result"], "finished");
+    assert!(last["took"].is_u64(), "{last}");
+    assert!(last.get("error").is_none());
     // the result line reaches the terminal log
     assert!(
         stdout(&out).contains("finished: in.wav (-23 dB) - took "),
@@ -3766,4 +3905,698 @@ fn interrupt_stops_ffmpeg_and_dee_of_a_piped_job() {
     assert!(temp_files(&env).is_empty(), "{:?}", temp_files(&env));
     assert!(!alive(&name), "ffmpeg is still running");
     assert!(!alive(env.dee().to_str().unwrap()), "DEE is still running");
+}
+
+// ---------------------------------------------------------------------------
+// AC4 IMS and Atmos masters (ADM BWF, DAMF)
+
+impl Env {
+    /// A minimal ADM BWF: the headers are all deew looks at. `axml` comes
+    /// after the data like in real files.
+    fn adm(&self, name: &str) -> PathBuf {
+        fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut v = id.to_vec();
+            v.extend((body.len() as u32).to_le_bytes());
+            v.extend(body);
+            if body.len() % 2 == 1 {
+                v.push(0);
+            }
+            v
+        }
+        let mut fmt = Vec::new();
+        fmt.extend(1u16.to_le_bytes());
+        fmt.extend(2u16.to_le_bytes());
+        fmt.extend(48000u32.to_le_bytes());
+        fmt.extend((48000u32 * 6).to_le_bytes());
+        fmt.extend(6u16.to_le_bytes());
+        fmt.extend(24u16.to_le_bytes());
+        let mut body = b"WAVE".to_vec();
+        for c in [
+            chunk(b"fmt ", &fmt),
+            chunk(b"chna", &[0; 4]),
+            chunk(b"data", &[0; 6000]),
+            chunk(b"axml", b"<ebuCoreMain/>"),
+        ] {
+            body.extend(c);
+        }
+        let mut file = b"RIFF".to_vec();
+        file.extend((body.len() as u32).to_le_bytes());
+        file.extend(body);
+        let path = self.work().join(name);
+        fs::write(&path, file).unwrap();
+        path
+    }
+
+    /// A DAMF set (`.atmos`, `.atmos.metadata`, `.atmos.audio`) in `dir`.
+    fn damf(&self, dir: &Path, name: &str, parts: bool) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        let path = dir.join(format!("{name}.atmos"));
+        fs::write(
+            &path,
+            format!(
+                "version: 0.5.1\npresentations:\n  - type: home\n    metadata: {name}.atmos.metadata\n    audio: {name}.atmos.audio\n"
+            ),
+        )
+        .unwrap();
+        if parts {
+            fs::write(dir.join(format!("{name}.atmos.metadata")), "m").unwrap();
+            fs::write(dir.join(format!("{name}.atmos.audio")), "a").unwrap();
+        }
+        path
+    }
+}
+
+#[test]
+fn ac4_ims_from_51() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "in.wav", "-f", "ac4-ims", "-d", "+100ms"]);
+    ok(&out);
+    let text = stdout(&out);
+    assert_eq!(summary_row(&text, "Format"), "AC4 IMS");
+    assert_eq!(last_summary_row(&text, "Channels"), "immersive stereo");
+    assert_eq!(last_summary_row(&text, "Bitrate"), "256 kbps");
+    assert!(!text.contains("│ Mode"), "{text}");
+    let args = env.run("dee_ac4ims_encoder");
+    assert_eq!(opt(&args, "--input-format"), "wav");
+    assert_eq!(
+        opt(&args, "-i"),
+        env.temp().join("in.wav").to_str().unwrap()
+    );
+    assert_eq!(opt(&args, "--data-rate"), "256");
+    assert_eq!(opt(&args, "-e"), "drc_profile=none");
+    assert_eq!(opt(&args, "--loudness-management"), "measure_only");
+    assert_eq!(opt(&args, "--add-silence"), "0.057333:0");
+    for unknown in ["--temp-dir", "--output-manifest", "-c"] {
+        assert!(!has(&args, unknown), "{unknown}");
+    }
+    assert!(env.out().join("in.ac4").exists());
+    assert!(temp_is_empty(&env));
+    // no dee_shim, no truehdd
+    assert!(env.dshim_run().is_none() && env.truehdd_run().is_none());
+    // bitrate and DRC, the underscore spelling and the case
+    let out = env.deew(&["-i", "in.wav", "-f", "AC4_IMS", "-b", "96", "-r", "speech"]);
+    ok(&out);
+    let args = env.run("dee_ac4ims_encoder");
+    assert_eq!(opt(&args, "--data-rate"), "96");
+    assert_eq!(opt(&args, "-e"), "drc_profile=speech");
+}
+
+#[test]
+fn ac4_ims_other_channel_counts_and_rates() {
+    let env = env_or_skip!();
+    // 7.1 is downmixed to the 5.1 DEE takes, 5.0 gets a silent LFE
+    for (layout, rate) in [("7.1", 48000), ("5.0", 48000), ("5.1", 44100)] {
+        let name = format!("c{layout}_{rate}.wav");
+        env.media(&name, layout, rate, "pcm_s24le");
+        let out = env.deew(&["-i", &name, "-f", "ac4-ims", "-la"]);
+        ok(&out);
+        let text = stdout(&out);
+        assert!(text.contains("ffmpeg"), "{layout}: {text}");
+        if layout == "7.1" {
+            assert!(text.contains("pan=5.1"), "{text}");
+        }
+        let args = env.run("dee_ac4ims_encoder");
+        assert_eq!(opt(&args, "--input-format"), "wav", "{layout}");
+        assert!(!has(&args, "-c"), "{layout}");
+        assert!(temp_is_empty(&env), "{layout}");
+    }
+    // the file DEE got is 5.1 at 48 kHz: look at what ffmpeg made, with -k
+    env.media("seven.wav", "7.1", 44100, "pcm_s24le");
+    ok(&env.deew(&["-i", "seven.wav", "-f", "ac4-ims", "-k"]));
+    let kept = fs::read_dir(env.temp())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "wav"))
+        .expect("kept wav");
+    assert_eq!(ffprobe_field(&kept, "channels"), "6");
+    assert_eq!(ffprobe_field(&kept, "sample_rate"), "48000");
+}
+
+#[test]
+fn ac4_ims_music_mode() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    for mode in ["music", "Music"] {
+        let out = env.deew(&["-i", "in.wav", "-f", "ac4-ims", "--ac4-ims-mode", mode]);
+        ok(&out);
+        assert_eq!(summary_row(&stdout(&out), "Mode"), "music");
+        let args = env.run("dee_ac4ims_encoder");
+        assert_eq!(opt(&args, "-e"), "mode=music:drc_profile=music_light");
+        assert_eq!(
+            opt(&args, "--loudness-management"),
+            "measure_only:dialogue_intelligence=0"
+        );
+    }
+    // the same profile is no conflict
+    ok(&env.deew(&[
+        "-i",
+        "in.wav",
+        "-f",
+        "ac4-ims",
+        "--ac4-ims-mode",
+        "music",
+        "-r",
+        "music_light",
+    ]));
+    assert_error(
+        &env.deew(&[
+            "-i",
+            "in.wav",
+            "-f",
+            "ac4-ims",
+            "--ac4-ims-mode",
+            "music",
+            "-r",
+            "speech",
+        ]),
+        "--ac4-ims-mode music (or ac4_ims = 'music' in the config) needs the DRC profile music_light (DEE's music mode takes no other), leave out -r or use -r music_light.",
+    );
+    assert_error(
+        &env.deew(&["-i", "in.wav", "-f", "ac4-ims", "--ac4-ims-mode", "x"]),
+        "--ac4-ims-mode can only be general or music.",
+    );
+    // general is the default
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4-ims", "--ac4-ims-mode", "GENERAL"]));
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "-e"),
+        "drc_profile=none"
+    );
+    // other formats ignore it with a note
+    let out = env.deew(&["-i", "in.wav", "--ac4-ims-mode", "music"]);
+    ok(&out);
+    assert!(
+        stdout(&out).contains("--ac4-ims-mode only applies to AC4 IMS output, it is ignored."),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn ac4_ims_input_and_option_errors() {
+    let env = env_or_skip!();
+    env.media("st.wav", "stereo", 48000, "pcm_s24le");
+    env.media("mono.wav", "mono", 48000, "pcm_s24le");
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    for name in ["st.wav", "mono.wav"] {
+        assert_error(
+            &env.deew(&["-i", name, "-f", "ac4-ims"]),
+            "ac4-ims needs a 5.1 (or 5.0, 7.0, 7.1) or an Atmos input, stereo and mono can't be encoded to immersive stereo.",
+        );
+    }
+    assert_error(
+        &env.deew(&["-i", "in.wav", "-f", "ac4-ims", "-dm", "2"]),
+        "-dm/--downmix doesn't work for ac4-ims, it always encodes immersive stereo (a 7.1 input is downmixed to 5.1 first).",
+    );
+    assert_error(
+        &env.deew(&["-i", "in.wav", "-f", "ac4-ims", "-dl"]),
+        "-dl/--disable-lfe doesn't work for ac4-ims, it needs the LFE channel of a 5.1 source.",
+    );
+    assert_error(
+        &env.deew(&["-i", "in.wav", "-f", "ac4-ims", "-dn", "-27"]),
+        "custom dialnorm is only supported for DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos and AC4 encoding.",
+    );
+    assert!(env.last_run("dee_ac4ims_encoder").is_none());
+}
+
+#[test]
+fn ac4_ims_from_truehd_atmos() {
+    let env = env_or_skip!();
+    env.truehd("atmos.thd");
+    let out = env.deew(&["-i", "atmos.thd", "-f", "ac4-ims", "-d", "+100ms"]);
+    ok(&out);
+    let text = stdout(&out);
+    assert_eq!(last_summary_row(&text, "Channels"), "immersive stereo");
+    let truehdd = env.truehdd_run().unwrap();
+    assert_eq!(
+        opt(&truehdd, "--output-path"),
+        env.temp().join("atmos").to_str().unwrap()
+    );
+    let args = env.run("dee_ac4ims_encoder");
+    assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+    assert_eq!(
+        opt(&args, "-i"),
+        env.temp().join("atmos.atmos").to_str().unwrap()
+    );
+    assert_eq!(opt(&args, "--add-silence"), "0.057333:0");
+    assert!(!has(&args, "--temp-dir"));
+    assert!(env.out().join("atmos.ac4").exists());
+    assert!(temp_is_empty(&env));
+    assert!(env.dshim_run().is_none());
+    // music mode and the long command
+    let out = env.deew(&[
+        "-i",
+        "atmos.thd",
+        "-f",
+        "ac4-ims",
+        "--ac4-ims-mode",
+        "music",
+        "-la",
+    ]);
+    ok(&out);
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "-e"),
+        "mode=music:drc_profile=music_light"
+    );
+    assert!(stdout(&out).contains("truehdd"), "{}", stdout(&out));
+    // a TrueHD without Atmos is an ordinary 7.1 source
+    env.truehd("plain.thd");
+    let out = env.deew_env(
+        &["-i", "plain.thd", "-f", "ac4-ims"],
+        &[("FAKE_NO_PROFILE", "1")],
+    );
+    ok(&out);
+    assert_eq!(opt(&env.run("dee_ac4ims_encoder"), "--input-format"), "wav");
+    // channel-based and Atmos inputs don't mix
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    assert_error(
+        &env.deew(&["-i", "atmos.thd", "in.wav", "-f", "ac4-ims"]),
+        "ac4-ims can't encode Atmos inputs (TrueHD Atmos, ADM BWF, DAMF) and channel-based inputs in the same run.",
+    );
+}
+
+#[test]
+fn ac4_ims_bitrate_default_from_the_config() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    // an old config without the key: 256
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4-ims"]));
+    assert_eq!(opt(&env.run("dee_ac4ims_encoder"), "--data-rate"), "256");
+    let text = fs::read_to_string(env.config()).unwrap();
+    fs::write(
+        env.config(),
+        text.replace("ac4_atmos = 448\n", "ac4_atmos = 448\nac4_ims = 128\n"),
+    )
+    .unwrap();
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4-ims"]));
+    assert_eq!(opt(&env.run("dee_ac4ims_encoder"), "--data-rate"), "128");
+}
+
+#[test]
+fn ac4_ims_mode_default_from_the_config() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let text = fs::read_to_string(env.config()).unwrap();
+    // no [default_modes] section or no key: general
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4-ims"]));
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "-e"),
+        "drc_profile=none"
+    );
+    fs::write(
+        env.config(),
+        format!("{text}[default_modes]\nddp = 'bluray'\n"),
+    )
+    .unwrap();
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4-ims"]));
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "-e"),
+        "drc_profile=none"
+    );
+    fs::write(
+        env.config(),
+        format!("{text}[default_modes]\nac4_ims = 'music'\n"),
+    )
+    .unwrap();
+    let out = env.deew(&["-i", "in.wav", "-f", "ac4-ims"]);
+    ok(&out);
+    assert_eq!(summary_row(&stdout(&out), "Mode"), "music");
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "-e"),
+        "mode=music:drc_profile=music_light"
+    );
+    // the flag overrides the config
+    ok(&env.deew(&["-i", "in.wav", "-f", "ac4-ims", "--ac4-ims-mode", "general"]));
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "-e"),
+        "drc_profile=none"
+    );
+    // the DRC check applies to the config's music too
+    assert_error(
+        &env.deew(&["-i", "in.wav", "-f", "ac4-ims", "-r", "speech"]),
+        "--ac4-ims-mode music (or ac4_ims = 'music' in the config) needs the DRC profile music_light (DEE's music mode takes no other), leave out -r or use -r music_light.",
+    );
+}
+
+#[test]
+fn adm_bwf_master_goes_straight_to_dee() {
+    let env = env_or_skip!();
+    let adm = env.adm("film.wav");
+    let adm = adm.to_str().unwrap();
+    // ddp-atmos: the shim and encoder of the TrueHD Atmos path, no truehdd or ffmpeg
+    let out = env.deew(&["-i", adm, "-f", "ddp-atmos", "-la"]);
+    ok(&out);
+    let text = stdout(&out);
+    assert_eq!(summary_row(&text, "Source"), "ADM BWF Atmos master");
+    assert!(!text.contains("│ Bit depth"), "{text}");
+    assert!(
+        !text.contains("ffmpeg -") && !text.contains("truehdd decode"),
+        "{text}"
+    );
+    assert!(env.truehdd_run().is_none());
+    let shim = env.dshim_run().unwrap();
+    assert_eq!(opt(&shim, "--oamd-as-is"), "on");
+    let rest: Vec<String> = shim[shim.iter().position(|a| a == "--").unwrap() + 1..].to_vec();
+    assert_eq!(opt(&rest, "--input-format"), "atmos_mezz");
+    assert_eq!(opt(&rest, "-i"), adm);
+    assert!(env.out().join("film.ec3").exists());
+    // the master is never removed
+    assert!(Path::new(adm).exists());
+    assert!(temp_is_empty(&env));
+    // the others
+    for (format, tool) in [
+        ("thd-atmos", "dee_dthd_encoder"),
+        ("ac4-atmos", "dee_ac4ajoc_encoder"),
+        ("ac4-ims", "dee_ac4ims_encoder"),
+    ] {
+        ok(&env.deew(&["-i", adm, "-f", format, "-d", "+100ms"]));
+        let args = env.run(tool);
+        assert_eq!(opt(&args, "-i"), adm, "{format}");
+        if format != "ac4-atmos" {
+            assert_eq!(opt(&args, "--input-format"), "atmos_mezz", "{format}");
+        }
+        assert!(
+            has(&args, "--start") || has(&args, "--add-silence"),
+            "{format}: {args:?}"
+        );
+        assert!(Path::new(adm).exists() && temp_is_empty(&env), "{format}");
+    }
+    assert!(env.truehdd_run().is_none());
+}
+
+#[test]
+fn damf_master_and_its_parts() {
+    let env = env_or_skip!();
+    let dir = env.work().join("set");
+    let atmos = env.damf(&dir, "mix", true);
+    let atmos = atmos.to_str().unwrap();
+    let out = env.deew(&["-i", atmos, "-f", "ac4-ims", "-ti", "5"]);
+    ok(&out);
+    assert_eq!(summary_row(&stdout(&out), "Source"), "DAMF Atmos master");
+    let args = env.run("dee_ac4ims_encoder");
+    assert_eq!(opt(&args, "-i"), atmos);
+    assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+    assert!(env.out().join("mix.ac4").exists());
+    for part in ["mix.atmos", "mix.atmos.metadata", "mix.atmos.audio"] {
+        assert!(dir.join(part).exists(), "{part}");
+    }
+    // a folder takes the set once, the parts are no inputs
+    let out = env.deew(&["-i", dir.to_str().unwrap(), "-f", "ac4-atmos"]);
+    ok(&out);
+    assert_eq!(summary_row(&stdout(&out), "Files"), "1");
+    // the extension is case-insensitive
+    let upper = dir.join("LOUD.ATMOS");
+    fs::write(&upper, "version: 0.5.1\n").unwrap();
+    fs::write(dir.join("LOUD.ATMOS.metadata"), "m").unwrap();
+    fs::write(dir.join("LOUD.ATMOS.audio"), "a").unwrap();
+    ok(&env.deew(&["-i", upper.to_str().unwrap(), "-f", "ac4-atmos"]));
+    // a missing part is an error before anything runs
+    let broken = env.damf(&env.work().join("broken"), "b", false);
+    let out = env.deew(&["-i", broken.to_str().unwrap(), "-f", "ac4-atmos"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    let text = stdout(&out);
+    assert!(text.contains("DAMF Atmos master is incomplete"), "{text}");
+    assert!(
+        text.contains("b.atmos.metadata") && text.contains("b.atmos.audio"),
+        "{text}"
+    );
+}
+
+#[test]
+fn masters_measure_and_render_for_dd_and_ddp() {
+    let env = env_or_skip!();
+    let adm = env.adm("film.wav");
+    let adm = adm.to_str().unwrap();
+    // -mo: the measurement of the master itself
+    let out = env.deew(&["-i", adm, "-mo"]);
+    ok(&out);
+    let args = env.run("dee_measure_loudness");
+    assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+    assert_eq!(opt(&args, "-i"), adm);
+    assert!(
+        stdout(&out).contains("finished: film.wav (-23 dB, dialogue-gated"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(env.truehdd_run().is_none() && temp_is_empty(&env));
+    // dd and ddp are rendered by DEE: 5.1, or `-dm`
+    let out = env.deew(&["-i", adm, "-f", "ddp"]);
+    ok(&out);
+    assert_eq!(last_summary_row(&stdout(&out), "Channels"), "5.1");
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+    assert_eq!(opt(&args, "-i"), adm);
+    assert!(!has(&args, "-c"));
+    ok(&env.deew(&["-i", adm, "-f", "dd", "-dm", "2"]));
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(opt(&args, "-c"), "stereo");
+    assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+    assert!(Path::new(adm).exists() && temp_is_empty(&env));
+    // the rest has no master input
+    for format in ["thd", "ac4", "aac"] {
+        assert_error(
+            &env.deew(&["-i", adm, "-f", format]),
+            &format!(
+                "Atmos masters (ADM BWF, DAMF) can't be encoded to {format}, use ddp-atmos, thd-atmos, ac4-atmos or ac4-ims (or dd/ddp for a 5.1 render)."
+            ),
+        );
+    }
+    // dd/ddp take a master alone
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    assert_error(
+        &env.deew(&["-i", adm, "in.wav", "-f", "ddp"]),
+        "Atmos masters (ADM BWF, DAMF) can't be encoded to dd/ddp together with other inputs.",
+    );
+}
+
+#[test]
+fn plain_wav_and_caf_are_no_masters() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    env.media("in.caf", "5.1", 48000, "pcm_s24le");
+    for name in ["in.wav", "in.caf"] {
+        let out = env.deew(&["-i", name, "-f", "ddp"]);
+        ok(&out);
+        let text = stdout(&out);
+        assert_eq!(summary_row(&text, "Channels"), "5.1", "{name}");
+        let args = env.run("dee_ddp_encoder");
+        assert_eq!(opt(&args, "--input-format"), "wav", "{name}");
+        assert!(temp_is_empty(&env), "{name}");
+    }
+    // a wav that is no ADM is no input of the Atmos formats
+    let out = env.deew(&["-i", "in.wav", "-f", "ac4-atmos"]);
+    assert_eq!(out.status.code(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// `--probe-json` (hidden, for the GUI)
+
+impl Env {
+    /// Run `deew --probe-json <args>`: the JSON of stdout (nothing else may
+    /// be there) and the exit code.
+    fn probe_json(&self, args: &[&str], envs: &[(&str, &str)]) -> (serde_json::Value, Option<i32>) {
+        let mut all = vec!["--probe-json"];
+        all.extend_from_slice(args);
+        let out = self.deew_with(&all, envs);
+        let text = stdout(&out);
+        let value: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text:?}"));
+        assert!(
+            text.ends_with("}\n") && text.matches('\n').count() == 1,
+            "{text:?}"
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (value, out.status.code())
+    }
+}
+
+#[test]
+fn probe_json_of_files_and_tracks() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    env.mka("two.mka", true);
+    let config = fs::read(env.config()).unwrap();
+    let (json, code) = env.probe_json(&["-i", "in.wav", "two.mka"], &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["error"], serde_json::Value::Null);
+    assert_eq!(json["ffprobe"], env.path("bin/ffprobe").to_str().unwrap());
+    let files = json["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["path"], "in.wav");
+    assert_eq!(files[0]["channels"], 6);
+    assert_eq!(files[0]["sampleRate"], 48000);
+    assert_eq!(files[0]["bitDepth"], 24);
+    assert_eq!(files[0]["codec"], "pcm_s24le");
+    assert_eq!(files[0]["atmos"], false);
+    assert_eq!(files[0]["master"], false);
+    assert_eq!(files[0]["error"], serde_json::Value::Null);
+    assert_eq!(files[0]["skipped"], false);
+    // the first audio track of the mka is AC-3
+    assert_eq!(files[1]["codec"], "ac3");
+    assert_eq!(files[1]["channels"], 6);
+    // -ti: the second audio track is the TrueHD one with the Atmos profile
+    let (json, code) = env.probe_json(&["-ti", "1", "-i", "two.mka"], &[]);
+    assert_eq!(code, Some(0));
+    let file = &json["files"][0];
+    assert_eq!(
+        (file["codec"].as_str(), file["atmos"].as_bool()),
+        (Some("truehd"), Some(true))
+    );
+    assert!(file["channels"].as_i64().is_some_and(|c| c > 0));
+    // `s:N`: the stream index of the container
+    let (json, _) = env.probe_json(&["-ti", "s:1", "-i", "two.mka"], &[]);
+    assert_eq!(json["files"][0]["codec"], "truehd");
+    // a track that isn't there is an error of that file, not a skip
+    let (json, code) = env.probe_json(&["-ti", "5", "-i", "two.mka"], &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        json["files"][0]["error"],
+        "no audio track 5 (-ti), it has 2 (0-1)"
+    );
+    assert_eq!(json["files"][0]["skipped"], false);
+    assert_eq!(json["files"][0]["channels"], serde_json::Value::Null);
+    let (json, _) = env.probe_json(&["-ti", "s:9", "-i", "two.mka"], &[]);
+    assert!(
+        json["files"][0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("no stream 9")
+    );
+    // other flags are ignored
+    let (json, code) = env.probe_json(&["-np", "-f", "ac4", "-b", "999", "-i", "in.wav"], &[]);
+    assert_eq!(
+        (code, json["files"][0]["channels"].as_i64()),
+        (Some(0), Some(6))
+    );
+    // nothing is created or changed
+    assert_eq!(fs::read(env.config()).unwrap(), config);
+    assert!(!env.temp().exists());
+}
+
+#[test]
+fn probe_json_folder_skips_and_errors() {
+    let env = env_or_skip!();
+    let dir = env.work().join("dir");
+    fs::create_dir_all(&dir).unwrap();
+    fs::copy(
+        env.media("a.wav", "stereo", 48000, "pcm_s16le"),
+        dir.join("a.wav"),
+    )
+    .unwrap();
+    fs::write(dir.join("notes.txt"), "not audio").unwrap();
+    let (json, code) = env.probe_json(&["-i", "dir"], &[]);
+    assert_eq!(code, Some(0));
+    let files = json["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(
+        files[0]["path"],
+        format!("dir{}a.wav", std::path::MAIN_SEPARATOR)
+    );
+    assert_eq!(files[0]["channels"], 2);
+    assert_eq!(files[0]["bitDepth"], 16);
+    assert_eq!(files[0]["skipped"], false);
+    assert_eq!(files[1]["skipped"], true);
+    assert!(files[1]["error"].as_str().unwrap().starts_with("ffprobe: "));
+    // the same file given directly is an error, not a skip
+    let (json, code) = env.probe_json(&["-i", "dir/notes.txt"], &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(json["files"][0]["skipped"], false);
+    assert!(
+        json["files"][0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("ffprobe: ")
+    );
+    // a pattern, and the same file twice
+    let (json, _) = env.probe_json(&["-i", "dir/*.wav", "dir/a.wav"], &[]);
+    assert_eq!(json["files"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn probe_json_fatal_problems() {
+    let env = env_or_skip!();
+    let fatal = |args: &[&str], envs: &[(&str, &str)]| {
+        let (json, code) = env.probe_json(args, envs);
+        assert_eq!(code, Some(1), "{json}");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["files"], serde_json::json!([]));
+        json["error"].as_str().unwrap().to_string()
+    };
+    assert_eq!(
+        fatal(&["-i", "nope.wav"], &[]),
+        "path nope.wav does not exist."
+    );
+    assert_eq!(fatal(&["-i", "*.nope"], &[]), "no files match '*.nope'");
+    assert_eq!(
+        fatal(&[], &[]),
+        "the following arguments are required: -i/--input"
+    );
+    fs::create_dir_all(env.work().join("empty-dir")).unwrap();
+    assert_eq!(fatal(&["-i", "empty-dir"], &[]), "no input files found.");
+    assert_eq!(
+        fatal(&["-ti", "x", "-i", "a.wav"], &[]),
+        "argument -ti/--track-index: invalid int value: 'x'"
+    );
+    // no ffprobe next to deew or in the PATH
+    fs::remove_file(env.path("bin/ffprobe")).unwrap();
+    let error = fatal(&["-i", "a.wav"], &[("PATH", "/nonexistent")]);
+    assert!(error.contains("ffprobe"), "{error}");
+}
+
+#[test]
+fn probe_json_needs_no_config_and_makes_none() {
+    let env = env_or_skip!();
+    env.media("in.wav", "stereo", 48000, "pcm_s16le");
+    fs::remove_file(env.config()).unwrap();
+    let (json, code) = env.probe_json(&["-i", "in.wav"], &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(json["files"][0]["channels"], 2);
+    assert!(!env.config().exists());
+    assert!(!env.temp().exists());
+}
+
+#[test]
+fn probe_json_of_atmos_masters() {
+    let env = env_or_skip!();
+    env.adm("film.wav");
+    let dir = env.work().join("set");
+    env.damf(&dir, "mix", true);
+    env.damf(&env.work().join("broken"), "b", false);
+    let (json, code) = env.probe_json(&["-ti", "s:3", "-i", "film.wav", "set"], &[]);
+    assert_eq!(code, Some(0));
+    let files = json["files"].as_array().unwrap();
+    // the parts of the DAMF are no inputs
+    assert_eq!(files.len(), 2);
+    for (file, label) in [
+        (&files[0], "ADM BWF Atmos master"),
+        (&files[1], "DAMF Atmos master"),
+    ] {
+        assert_eq!(file["codec"], label);
+        assert_eq!(file["master"], true);
+        assert_eq!(file["atmos"], true);
+        assert_eq!(file["channels"], 6);
+        assert_eq!(file["sampleRate"], 48000);
+        assert_eq!(file["bitDepth"], 24);
+        assert_eq!(file["error"], serde_json::Value::Null);
+    }
+    let (json, code) = env.probe_json(&["-i", "broken/b.atmos"], &[]);
+    assert_eq!(code, Some(0));
+    let file = &json["files"][0];
+    assert_eq!(file["skipped"], false);
+    assert_eq!(file["master"], false);
+    let error = file["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("the DAMF Atmos master is incomplete, it needs "),
+        "{error}"
+    );
+    assert!(
+        error.contains("b.atmos.metadata") && error.contains("b.atmos.audio"),
+        "{error}"
+    );
 }

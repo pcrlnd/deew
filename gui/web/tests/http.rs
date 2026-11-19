@@ -330,6 +330,24 @@ fn state_with_config(auth_on: bool, config: &std::path::Path) -> Arc<AppState> {
 }
 
 #[tokio::test]
+async fn settings_report_the_dd_filter_defaults_of_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "surround_phase_shift = false\nlow_pass_filter = 'x'\nsurround_3db_attenuation = true\n",
+    )
+    .unwrap();
+    let app = router(state_with_config(false, &config));
+    let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let json = body_json(r).await;
+    assert_eq!(json["surroundPhaseShift"], false);
+    assert_eq!(json["lowPassFilter"], true);
+    assert_eq!(json["surround3dbAttenuation"], true);
+}
+
+#[tokio::test]
 async fn settings_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
@@ -343,7 +361,7 @@ async fn settings_round_trip() {
         .unwrap_or_default();
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "cli", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming"})
+        serde_json::json!({"progress": "cli", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false})
     );
 
     // an extra defaultOutput is ignored, a missing output means empty
@@ -356,7 +374,7 @@ async fn settings_round_trip() {
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "native", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming"})
+        serde_json::json!({"progress": "native", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false})
     );
 
     let body =
@@ -370,7 +388,7 @@ async fn settings_round_trip() {
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "cli", "output": "C:\\Users\\pc\\Music", "toInput": true, "scaling": 100, "useSystemFont": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming"})
+        serde_json::json!({"progress": "cli", "output": "C:\\Users\\pc\\Music", "toInput": true, "scaling": 100, "useSystemFont": false, "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false})
     );
 }
 
@@ -737,4 +755,237 @@ async fn reconnect_replays_compacted_events_before_output() {
             break;
         }
     }
+}
+
+// ------------------------------------------------------------ info socket
+
+#[tokio::test]
+async fn info_socket_needs_login_and_same_origin() {
+    let upgrade = |origin: Option<&str>| {
+        let mut req = Request::builder()
+            .uri("/api/info")
+            .header(header::HOST, "localhost:8765")
+            .header(header::UPGRADE, "websocket")
+            .header(header::CONNECTION, "Upgrade")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+        if let Some(origin) = origin {
+            req = req.header(header::ORIGIN, origin);
+        }
+        req.body(Body::empty()).unwrap()
+    };
+    // not logged in
+    let app = router(state(true));
+    let r = send(&app, upgrade(None)).await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    // logged in, but from another origin
+    let cookie = login_cookie(None).await;
+    let app = router(state(false));
+    let mut req = upgrade(Some("http://evil.com"));
+    req.headers_mut()
+        .insert(header::COOKIE, cookie.parse().unwrap());
+    assert_eq!(send(&app, req).await.status(), StatusCode::FORBIDDEN);
+    // a bad Host is refused too
+    let mut req = upgrade(None);
+    req.headers_mut()
+        .insert(header::HOST, "evil.com".parse().unwrap());
+    assert_eq!(send(&app, req).await.status(), StatusCode::FORBIDDEN);
+}
+
+#[cfg(unix)]
+fn info_script(dir: &std::path::Path) -> std::path::PathBuf {
+    // Flags print and exit, except -gt which hangs; anything else is an encode.
+    script(
+        dir,
+        "fake-deew",
+        "case \"$1\" in\n  -gt) echo downloading; sleep 30;;\n  -*) echo \"info $*\";;\n  *) echo up; sleep 30;;\nesac\n",
+    )
+}
+
+#[cfg(unix)]
+async fn info_start(ws: &mut Ws, flag: &str) {
+    send_text(
+        ws,
+        serde_json::json!({"type": "start", "flag": flag, "cols": 80, "rows": 24}),
+    )
+    .await;
+}
+
+#[cfg(unix)]
+async fn info_error(ws: &mut Ws) -> String {
+    loop {
+        if let Frame::Text(v) = next_frame(ws).await {
+            assert_eq!(v["type"], "error", "{v}");
+            return v["message"].as_str().unwrap().to_string();
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn info_output_until_exit(ws: &mut Ws) -> (String, serde_json::Value) {
+    let mut output = Vec::new();
+    loop {
+        match next_frame(ws).await {
+            Frame::Binary(b) => output.extend(b),
+            Frame::Text(v) => return (String::from_utf8_lossy(&output).to_string(), v),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn info_runs_only_to_the_asking_socket_while_encoding() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run_url, state) = serve(info_script(dir.path())).await;
+    let info_url = run_url.replace("/api/run", "/api/info");
+
+    // an encode runs on the run socket
+    let (mut enc, _) = tokio_tungstenite::connect_async(&run_url).await.unwrap();
+    next_frame(&mut enc).await;
+    send_text(
+        &mut enc,
+        serde_json::json!({"type": "start", "args": ["x"]}),
+    )
+    .await;
+    loop {
+        if let Frame::Binary(_) = next_frame(&mut enc).await {
+            break;
+        }
+    }
+    let (mut other, _) = tokio_tungstenite::connect_async(&info_url).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(&info_url).await.unwrap();
+    info_start(&mut ws, "-v").await;
+    let (output, exit) = info_output_until_exit(&mut ws).await;
+    assert!(output.contains("info -v"), "{output:?}");
+    assert_eq!(exit, serde_json::json!({"type": "exit", "code": 0}));
+    assert!(state.job.is_running(), "the encode is untouched");
+
+    // the same socket can run the next one; the other socket got nothing
+    info_start(&mut ws, "-fh").await;
+    let (output, exit) = info_output_until_exit(&mut ws).await;
+    assert!(output.contains("info -fh"), "{output:?}");
+    assert_eq!(exit["type"], "exit");
+    send_text(&mut other, serde_json::json!({"type": "bogus"})).await;
+    assert!(info_error(&mut other).await.contains("invalid message"));
+
+    // -gt and -gc are refused during an encode, harmless flags are not
+    for flag in ["-gt", "-gc"] {
+        info_start(&mut ws, flag).await;
+        assert!(info_error(&mut ws).await.contains("encode"), "{flag}");
+    }
+    assert!(!state.gate.info_running());
+
+    send_text(&mut enc, serde_json::json!({"type": "stop"})).await;
+    loop {
+        if let Frame::Text(v) = next_frame(&mut enc).await
+            && v["type"] == "exit"
+        {
+            break;
+        }
+    }
+    // the slots are free again
+    assert!(!state.gate.encode_running());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn info_accepts_only_the_allowlist() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run_url, state) = serve(info_script(dir.path())).await;
+    let info_url = run_url.replace("/api/run", "/api/info");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&info_url).await.unwrap();
+    for flag in ["-i", "x", "-o", "-v -h", "--get-tools", ""] {
+        info_start(&mut ws, flag).await;
+        assert!(
+            info_error(&mut ws).await.contains("not a utility"),
+            "{flag:?}"
+        );
+    }
+    // extra fields (e.g. args) are ignored, not passed on
+    send_text(
+        &mut ws,
+        serde_json::json!({"type": "start", "flag": "-v", "args": ["-i", "a"]}),
+    )
+    .await;
+    let (output, _) = info_output_until_exit(&mut ws).await;
+    assert!(
+        output.contains("info -v") && !output.contains("-i"),
+        "{output:?}"
+    );
+    assert!(!state.gate.info_running());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn encode_is_refused_while_downloading_and_closing_the_socket_stops_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run_url, state) = serve(info_script(dir.path())).await;
+    let info_url = run_url.replace("/api/run", "/api/info");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&info_url).await.unwrap();
+    info_start(&mut ws, "-gt").await;
+    loop {
+        if let Frame::Binary(_) = next_frame(&mut ws).await {
+            break;
+        }
+    }
+    // one utility at a time
+    info_start(&mut ws, "-v").await;
+    assert!(info_error(&mut ws).await.contains("already running"));
+
+    let (mut enc, _) = tokio_tungstenite::connect_async(&run_url).await.unwrap();
+    next_frame(&mut enc).await;
+    send_text(
+        &mut enc,
+        serde_json::json!({"type": "start", "args": ["x"]}),
+    )
+    .await;
+    loop {
+        if let Frame::Text(v) = next_frame(&mut enc).await {
+            assert_eq!(v["type"], "error", "{v}");
+            assert!(v["message"].as_str().unwrap().contains("-gt"));
+            break;
+        }
+    }
+    assert!(!state.job.is_running());
+
+    // stop ends it with an exit message
+    send_text(&mut ws, serde_json::json!({"type": "stop"})).await;
+    let (_, exit) = info_output_until_exit(&mut ws).await;
+    assert_eq!(exit["type"], "exit");
+    assert!(!state.gate.info_running());
+
+    // closing the socket ends a running command
+    info_start(&mut ws, "-gt").await;
+    loop {
+        if let Frame::Binary(_) = next_frame(&mut ws).await {
+            break;
+        }
+    }
+    drop(ws);
+    for _ in 0..100 {
+        if !state.gate.info_running() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!state.gate.info_running());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn info_input_without_a_session_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run_url, _state) = serve(info_script(dir.path())).await;
+    let info_url = run_url.replace("/api/run", "/api/info");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&info_url).await.unwrap();
+    send_text(
+        &mut ws,
+        serde_json::json!({"type": "input", "data": "\u{1b}[2;1R"}),
+    )
+    .await;
+    // the socket stays usable: a command still runs afterwards
+    info_start(&mut ws, "-v").await;
+    let (output, exit) = info_output_until_exit(&mut ws).await;
+    assert!(output.contains("info -v"), "{output:?}");
+    assert_eq!(exit["type"], "exit");
 }

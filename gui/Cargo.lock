@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "deew-gui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "deew-gui-core",
@@ -883,12 +883,11 @@ dependencies = [
  "tempfile",
  "toml 1.2.1+spec-1.1.0",
  "toml_edit 0.25.19+spec-1.1.0",
- "which",
 ]
 
 [[package]]
 name = "deew-web"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "argon2",
  "axum",
@@ -5163,15 +5162,6 @@ dependencies = [
  "thiserror 2.0.21",
  "windows",
  "windows-core",
-]
-
-[[package]]
-name = "which"
-version = "8.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
-dependencies = [
- "libc",
 ]
 
 [[package]]

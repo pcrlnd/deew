@@ -23,8 +23,9 @@
 
 # Description
 - drives the command line tools of Dolby Encoding Engine 6.7 and creates the intermediate files in the background, giving you a proper tool
-- encodes DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos, AC4, AC4 Atmos and AAC (always 2.0, mono inputs are rejected)
+- encodes DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos, AC4, AC4 Atmos, AC4 IMS (immersive stereo) and AAC (always 2.0, mono inputs are rejected)
 - re-encodes TrueHD Atmos to DDP Atmos / TrueHD Atmos / AC4 Atmos from the Atmos master (raw `.thd` or a container like mkv/mka/m2ts, use `-ti` to select the track; decoded with truehdd, DDP Atmos and TrueHD Atmos use dee_shim to stop DEE smoothing the object positions a second time)
+- reads Dolby Atmos masters directly: ADM BWF (`.wav`/`.bwf` with `chna` and `axml` chunks) and DAMF (`.atmos` with its `.atmos.audio` and `.atmos.metadata`) go straight into DEE for `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims` (no truehdd, no ffmpeg), and `-mo` measures them; `dd`/`ddp` get a 5.1 (or `-dm 2`/`1`) render of the master from DEE
 - runs multiple encodes in parallel for batch encoding (see config)
 - works on Windows, Linux and macOS
 - automatic sample rate conversion using ffmpeg's soxr resampler in case of an unsupported sample rate
@@ -42,26 +43,9 @@ The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects 
 - ffmpeg
 - ffprobe
 - [Dolby Encoding Engine 6.7](https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670)
-- [truehdd](https://github.com/truehdd/truehdd) (only for the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`)
+- [truehdd](https://github.com/truehdd/truehdd) (only for TrueHD Atmos sources of the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; Atmos masters don't need it)
 - [dee_shim](https://github.com/truehdd/dee-shim) (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP and 7.0 DDP)
   - `ddp-atmos` and `thd-atmos` use it so DEE doesn't smooth the object positions of the TrueHD decode a second time, TrueHD with DRC `none` (the default) uses it because the TrueHD encoder has no `none` DRC preset; 96 kHz TrueHD (any DRC) is encoded through it with `--apodise off` so it stays lossless (DEE's own encoder applies its apodising filter to 96 kHz input, which changes every sample, so dee_shim is required for it)
-
-# DDP profiles
-`--ddp-mode` selects the profile of 7.1 DDP and `--ddp-atmos-mode` the profile of `ddp-atmos`, the defaults are in the config's `[default_modes]` section:
-- 7.1 DDP (`--ddp-mode`):
-  - standard (default, needs dee_shim): E-AC-3 independent and dependent substreams, 384-1792 kbps, `.ec3` output
-  - bluray (native, no dee_shim needed): AC-3 core and E-AC-3 dependent substream, 768-1664 kbps, `.eb3` output
-- DDP Atmos (`--ddp-atmos-mode`):
-  - streaming (default): 5.1 with Atmos in one E-AC-3 substream, 384-1024 kbps, `.ec3` output
-  - standard: 7.1 with Atmos, E-AC-3 independent and dependent substreams, 768-2048 kbps, `.ec3` output
-  - bluray: 7.1 with Atmos, AC-3 core and E-AC-3 dependent substream, 1152-1664 kbps, `.eb3` output
-- in `-h` and `-lb` the values that use dee_shim are blue (`blue: uses dee_shim`)
-
-# Surround phase shift
-DEE's DD and DDP encoders apply a 90° phase shift to the surround channels by default. `-nps`/`--no-phase-shift` turns it off for one run (`surround_90deg_phase_shift=0` in DEE's `-e` option), setting `surround_phase_shift = false` in the config turns it off for every run. It affects DD and DDP with surround channels (5.1, 5.0, 7.1, 7.0). DDP Atmos uses dee_shim's `--phase90 off` instead (all three profiles; the Atmos render is unchanged, it affects the coded 5.1/7.1 backbone). Other formats don't have it (TrueHD has no such phase shift; `-nps` with them is an error, the config value is ignored).
-
-# Piping into DEE
-For DD, DDP, AC4, AAC and `-mo`, ffmpeg's decoded audio goes straight into DEE (raw PCM through a pipe, a named pipe on Windows) instead of a temp `.wav`, so no large intermediate file is written. TrueHD and Atmos still use the temp `.wav`. AC4 with a custom dialnorm (`-dn`) is piped too: ffmpeg feeds the loudness measurement and then, again, the encode. Resampled and 32-bit audio is piped as 32-bit float. Setting `pipe = false` in the config turns this off if it causes problems.
 
 # Where deew looks for the programs
 deew looks for the programs in this order, there is nothing to set in the config:
@@ -105,31 +89,38 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 - after updating from deew 3.x or older generate a new config with `deew -gc` (the config format changed in 5.0.0)
 
 ### Usage
-- `deew -h`
+- `deew -fh` (`deew -h` shows the same without the advanced `-sps`, `-lpf` and `-s3a`)
 
 ```
-USAGE: deew [-h] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-nps] [-d DELAY] [-r DRC] [-dn DIALNORM]
-            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
-            [-gc] [-gt]
+USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
+            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE]
+            [--ac4-ims-mode MODE] [-b BITRATE] [-dm CHANNELS] [-dl]
+            [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH] [-d DELAY] [-r DRC]
+            [-dn DIALNORM] [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl]
+            [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
+  -fh, --full-help          show all options, including the advanced ones
   -v, --version             show version and the versions of the tools.
   -i, --input [INPUT ...]   audio file(s) or folder(s)
-  -ti, --track-index INDEX  default: 0
-                            select audio track index of input(s)
+                            wildcards (*, ?, **) work, quoted or not
+                            ADM BWF and DAMF (.atmos) Atmos masters work for
+                            dd/ddp and the Atmos formats
+  -ti, --track-index INDEX  examples: 1, a:1, s:3
+                            default: 0
+                            select the audio track of input(s)
+                            N or a:N: Nth audio track, s:N: stream index N
   -o, --output DIRECTORY    default: output path of the config, else the current
                             directory
                             specifies output directory
   -oi, --output-to-input    save each output next to its input file
                             overrides -o and the output path of the config
   -f, --format FORMAT       options: dd / ddp / ddp-atmos / thd / thd-atmos /
-                            ac4 / ac4-atmos / aac
+                            ac4 / ac4-atmos / ac4-ims / aac
                             default: ddp
                             ddp-atmos and thd-atmos use truehdd and dee_shim,
-                            ac4-atmos uses truehdd
+                            ac4-atmos and ac4-ims (from Atmos) use truehdd
   --ddp-mode MODE           options: standard / bluray
                             default: run -c/--config
                             profile of 7.1 DDP, 5.1 and below are not affected
@@ -142,21 +133,42 @@ FLAGS:
                             standard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
                             bluray: 7.1 with Atmos, AC-3 core + E-AC-3,
                             1152-1664 kbps
+  --ac4-ims-mode MODE       options: general / music
+                            default: run -c/--config
+                            profile of ac4-ims (stereo for headphones and TV
+                            speakers, from 5.1 or Atmos)
+                            music: no dialogue enhancement, DRC music_light
   -b, --bitrate BITRATE     options: run -lb/--list-bitrates
                             default: run -c/--config
   -dm, --downmix CHANNELS   options: 1 / 2 / 6
                             specifies downmix, only works for DD/DDP/AC4/AAC and
                             TrueHD (2 / 6)
-                            DD and AC4 will be automatically downmixed to 5.1 in
-                            case of a 7.1 source
+                            DD, AC4 and ac4-ims will be automatically downmixed
+                            to 5.1 in case of a 7.1 source
                             AAC output is always 2.0
   -dl, --disable-lfe        remove the LFE channel of 5.1 and 7.1 inputs
                             DD and DDP get a real 5.0 or 7.0, the others keep a
                             silent LFE
                             5.0 and 7.0 inputs are supported, they have no LFE
-  -nps, --no-phase-shift    turn off DEE's 90° phase shift of surround channels
+  -sps, --surround-phase-shift SWITCH
+                            options: on / off
+                            default: on
+                            DEE's 90° phase shift of the surround channels
                             only works for DD/DDP/DDP Atmos, config:
                             surround_phase_shift
+  -lpf, --low-pass-filter SWITCH
+                            options: on / off
+                            default: on
+                            DEE's 120 Hz low-pass filter on the LFE channel
+                            only works for DD/DDP, config: low_pass_filter
+  -s3a, --surround-3db-attenuation SWITCH
+                            options: on / off
+                            default: off
+                            3 dB attenuation of the surround channels
+                            only works for DD/DDP/TrueHD, config:
+                            surround_3db_attenuation
+                            TrueHD asks first: the output is no longer identical
+                            to the source
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -167,12 +179,12 @@ FLAGS:
                             default: none (music_light for AC4)
                             specifies drc profile
                             none uses dee_shim for TrueHD, not available
-                            for AC4 (AC4 Atmos has it)
+                            for AC4 (AC4 Atmos and ac4-ims have it)
   -dn, --dialnorm DIALNORM  options: between -31 and 0 (in case of 0 DEE's
                             measurement will be used)
                             default: 0
-                            applied dialnorm value, doesn't work for AAC and
-                            AC4 Atmos
+                            applied dialnorm value, doesn't work for AAC,
+                            AC4 Atmos and ac4-ims
   -in, --instances NUMBER   examples: 1, 4, 50%
                             default: 50%
                             specifies how many encodes can run at the same time
@@ -185,7 +197,8 @@ FLAGS:
                             for each output
   -mo, --measure-only       only measures the loudness of the source with DEE,
                             no encoding, -f and the encoding options are
-                            ignored, TrueHD Atmos sources are measured as Atmos
+                            ignored, TrueHD Atmos sources and Atmos masters are
+                            measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
   -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
                             input
@@ -194,7 +207,8 @@ FLAGS:
   -pl, --print-logos        show all logo variants you can set in the config
   -cl, --changelog          show changelog
   -c, --config              show config and config location
-  -gc, --generate-config    generate a new config
+  -gc, --generate-config    generate a new config, asks before overwriting an
+                            existing config (-np skips the question)
   -gt, --get-tools          download ffmpeg, ffprobe, truehdd and dee_shim next
                             to deew
 
@@ -234,6 +248,12 @@ TrueHD Atmos -> TrueHD Atmos re-encode (16 elements, uses truehdd and dee_shim)
 `deew -f ac4-atmos -b 448 -i *thd`\
 TrueHD Atmos -> AC4 Atmos encoding at 448kbps
 
+`deew -f ac4-ims -i *thd`\
+TrueHD Atmos -> AC4 immersive stereo (`--ac4-ims-mode music` for music)
+
+`deew -f ddp-atmos -i master.atmos`\
+DDP Atmos from a DAMF Atmos master (ADM BWF `.wav` works the same way)
+
 `deew -f dd -i *dts -k`\
 `deew -f ddp -i *dts`\
 encode multiple formats/bitrates while creating the temp file only once
@@ -246,12 +266,13 @@ If you like deew, you can support the people behind it on Ko-fi or with Monero.
 
 pcroland:
 - <img src="https://deew.app/ko-fi.svg" height="14"> [Ko-fi](https://ko-fi.com/pcrlnd)
-- Monero:
+- <img src="https://deew.app/monero.svg" height="14"> Monero:
   ```
   42pcroLMNqQbs87sSuNNTk8E8XHD88NhnSAx3exA3s1mHWAAyKH1oBw7dScYVRx3VJhUZT96QZNeo9Uw2qL72kwoHxVBXmL
   ```
 
 rainbaby (developer of truehdd and dee_shim):
-```
-47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U
-```
+- <img src="https://deew.app/monero.svg" height="14"> Monero:
+  ```
+  47BgNcwYCWhSHB3WMd7CPLX3Yb4Kz8TCsGJaUmX7KqG895UKvixks6yje3GSa489XR97FLQMcUaSacAHbMbF2xWz7dvyX9U
+  ```

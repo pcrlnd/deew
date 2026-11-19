@@ -9,7 +9,8 @@ export function fittingFontSize(
   minCols = 60,
   maxFont = 13
 ): number {
-  if (!(currentFont > 0) || !(proposedCols > 0)) return Math.min(currentFont, maxFont)
+  if (!(currentFont > 0) || !(proposedCols > 0))
+    return Math.min(currentFont, maxFont)
   // Width available in units of "columns at the current font".
   const ideal = (currentFont * proposedCols) / minCols
   const stepped = Math.floor(ideal * 2) / 2

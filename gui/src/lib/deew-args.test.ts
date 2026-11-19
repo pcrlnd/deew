@@ -11,9 +11,14 @@ import {
   DRC_VALUES,
   ddpAtmosModeApplies,
   ddpModeApplies,
+  PROGRAM_DEFAULT_MODES,
+  type DefaultModes,
   parseDefaultModes,
   disableLfeApplies,
-  noPhaseShiftApplies,
+  ddFilterApplies,
+  ddFilterDefaultsOf,
+  effectiveDdFilter,
+  surroundPhaseShiftApplies,
   drcChoices,
   drcChoiceDisabled,
   defaultDrc,
@@ -36,6 +41,13 @@ import {
   setFlag,
   setFormat,
   validate,
+  normalizeTrackIndex,
+  setAc4ImsMode,
+  ac4ImsModeApplies,
+  effectiveAc4ImsMode,
+  supportsDownmix,
+  lowPassFilterApplies,
+  surround3dbAttenuationApplies,
   type BitrateContext,
   type DeewOptions,
   type Downmix,
@@ -92,8 +104,11 @@ describe("buildArgs", () => {
         outputToInput: false,
         ddpMode: "default",
         ddpAtmosMode: "default",
+        ac4ImsMode: "default",
         disableLfe: false,
-        noPhaseShift: false,
+        surroundPhaseShift: null,
+        lowPassFilter: null,
+        surround3dbAttenuation: null,
         keepTemp: true,
         keepLog: true,
         measureOnly: true,
@@ -301,6 +316,7 @@ describe("formats", () => {
       "thd-atmos",
       "ac4",
       "ac4-atmos",
+      "ac4-ims",
       "aac",
     ])
     expect(FORMATS.map((f) => FORMAT_LABELS[f])).toEqual([
@@ -311,6 +327,7 @@ describe("formats", () => {
       "TrueHD Atmos",
       "AC4",
       "AC4 Atmos",
+      "AC-4 IMS",
       "AAC",
     ])
   })
@@ -457,13 +474,21 @@ describe("--ddp-mode and --ddp-atmos-mode", () => {
     expect(
       buildArgs(std, {
         ddp71: true,
-        defaultModes: { ddp: "bluray", ddpAtmos: "streaming" },
+        defaultModes: {
+          ddp: "bluray",
+          ddpAtmos: "streaming",
+          ac4Ims: "general",
+        },
       })
     ).toEqual(["--ddp-mode", "standard"])
     expect(
       buildArgs(bluray, {
         ddp71: true,
-        defaultModes: { ddp: "bluray", ddpAtmos: "streaming" },
+        defaultModes: {
+          ddp: "bluray",
+          ddpAtmos: "streaming",
+          ac4Ims: "general",
+        },
       })
     ).toEqual([])
     const atmos = (m: "streaming" | "standard" | "bluray" | "default") =>
@@ -478,7 +503,11 @@ describe("--ddp-mode and --ddp-atmos-mode", () => {
     ])
     expect(
       buildArgs(atmos("bluray"), {
-        defaultModes: { ddp: "standard", ddpAtmos: "bluray" },
+        defaultModes: {
+          ddp: "standard",
+          ddpAtmos: "bluray",
+          ac4Ims: "general",
+        },
       })
     ).toEqual(["-f", "ddp-atmos"])
     // not for other formats
@@ -506,17 +535,20 @@ describe("--ddp-mode and --ddp-atmos-mode", () => {
   })
 
   it("parseDefaultModes falls back to the program defaults", () => {
-    expect(parseDefaultModes("bluray", "standard")).toEqual({
+    expect(parseDefaultModes("bluray", "standard", "music")).toEqual({
       ddp: "bluray",
       ddpAtmos: "standard",
+      ac4Ims: "music",
     })
-    expect(parseDefaultModes("", undefined)).toEqual({
+    expect(parseDefaultModes("", undefined, undefined)).toEqual({
       ddp: "standard",
       ddpAtmos: "streaming",
+      ac4Ims: "general",
     })
-    expect(parseDefaultModes("streaming", "x")).toEqual({
+    expect(parseDefaultModes("streaming", "x", "x")).toEqual({
       ddp: "standard",
       ddpAtmos: "streaming",
+      ac4Ims: "general",
     })
   })
 
@@ -603,44 +635,128 @@ describe("-dl (disable LFE)", () => {
   })
 })
 
-describe("-nps (no surround phase shift)", () => {
-  const nps = (format: Parameters<typeof noPhaseShiftApplies>[0]) =>
-    buildArgs(opts({ noPhaseShift: true, format }))
+describe("-sps, -lpf and -s3a (config-tied toggles)", () => {
+  const flags = (
+    o: Partial<Parameters<typeof opts>[0]>,
+    ddFilterDefaults?: Parameters<typeof effectiveDdFilter>[2]
+  ) => buildArgs(opts(o), { ddFilterDefaults })
+  const off = {
+    surroundPhaseShift: false,
+    lowPassFilter: false,
+    surround3dbAttenuation: false,
+  }
+  const on = {
+    surroundPhaseShift: true,
+    lowPassFilter: true,
+    surround3dbAttenuation: true,
+  }
 
-  it("is passed for DD and DDP", () => {
-    expect(nps("ddp")).toEqual(["-nps"])
-    expect(nps("dd")).toEqual(["-f", "dd", "-nps"])
-    expect(noPhaseShiftApplies("dd")).toBe(true)
-    expect(noPhaseShiftApplies("ddp")).toBe(true)
+  it("passes nothing by default or for values equal to the config", () => {
+    expect(flags({})).toEqual([])
+    expect(flags({ surroundPhaseShift: true, lowPassFilter: true })).toEqual([])
+    expect(flags({ surround3dbAttenuation: false })).toEqual([])
   })
 
-  it("is passed for DDP Atmos", () => {
-    expect(noPhaseShiftApplies("ddp-atmos")).toBe(true)
-    expect(nps("ddp-atmos")).toContain("-nps")
+  it("passes on/off when the toggle differs from the program default", () => {
+    expect(flags({ surroundPhaseShift: false })).toEqual(["-sps", "off"])
+    expect(flags({ lowPassFilter: false })).toEqual(["-lpf", "off"])
+    expect(flags({ surround3dbAttenuation: true })).toEqual(["-s3a", "on"])
+  })
+
+  it("compares with the config, in both directions", () => {
+    const cfg = {
+      surroundPhaseShift: false,
+      lowPassFilter: false,
+      surround3dbAttenuation: true,
+    }
+    expect(flags({}, cfg)).toEqual([])
+    expect(flags({ ...on }, cfg)).toEqual(["-sps", "on", "-lpf", "on"])
+    expect(flags({ ...off }, cfg)).toEqual(["-s3a", "off"])
+    expect(flags({ ...cfg }, cfg)).toEqual([])
+  })
+
+  it("reads the effective state from the option or the config", () => {
+    const cfg = { ...off, lowPassFilter: true }
+    expect(effectiveDdFilter(opts({}), "lowPassFilter", cfg)).toBe(true)
+    expect(effectiveDdFilter(opts({}), "surroundPhaseShift", cfg)).toBe(false)
+    expect(
+      effectiveDdFilter(
+        opts({ surroundPhaseShift: true }),
+        "surroundPhaseShift",
+        cfg
+      )
+    ).toBe(true)
+    expect(effectiveDdFilter(opts({}), "surroundPhaseShift")).toBe(true)
+  })
+
+  it("is available for the formats the CLI accepts", () => {
+    expect(surroundPhaseShiftApplies("dd")).toBe(true)
+    expect(surroundPhaseShiftApplies("ddp")).toBe(true)
+    expect(surroundPhaseShiftApplies("ddp-atmos")).toBe(true)
+    for (const key of ["lowPassFilter", "surround3dbAttenuation"] as const) {
+      expect(ddFilterApplies(key, "dd")).toBe(true)
+      expect(ddFilterApplies(key, "ddp")).toBe(true)
+      expect(ddFilterApplies(key, "ddp-atmos")).toBe(false)
+    }
   })
 
   it("is not passed for other formats, so the CLI never fails on it", () => {
+    expect(buildArgs(opts({ ...off, format: "ddp-atmos" }))).toEqual([
+      "-f",
+      "ddp-atmos",
+      "-sps",
+      "off",
+    ])
     for (const format of [
       "thd",
       "thd-atmos",
       "ac4",
       "ac4-atmos",
+      "ac4-ims",
       "aac",
     ] as const) {
-      expect(nps(format)).not.toContain("-nps")
-      expect(noPhaseShiftApplies(format)).toBe(false)
+      expect(ddFilterApplies("surroundPhaseShift", format)).toBe(false)
+      const args = buildArgs(
+        opts({ ...off, surround3dbAttenuation: true, format })
+      )
+      // -s3a also works for TrueHD
+      for (const flag of format === "thd"
+        ? ["-sps", "-lpf"]
+        : ["-sps", "-lpf", "-s3a"]) {
+        expect(args).not.toContain(flag)
+      }
     }
   })
 
-  it("is off by default and comes after -dl and before -k", () => {
-    expect(buildArgs(opts({}))).toEqual([])
+  it("uses -sps, never -nps, and sits after -dl and before -k", () => {
+    const args = buildArgs(
+      opts({ surroundPhaseShift: false, disableLfe: true, keepTemp: true }),
+      { channels: 6 }
+    )
+    expect(args).toEqual(["-dl", "-sps", "off", "-k"])
+    expect(args).not.toContain("-nps")
     expect(
-      buildArgs(
-        opts({ noPhaseShift: true, disableLfe: true, keepTemp: true }),
-        { channels: 6 }
-      )
-    ).toEqual(["-dl", "-nps", "-k"])
-    expect(validate(opts({ noPhaseShift: true, format: "thd" }))).toEqual([])
+      validate(opts({ surroundPhaseShift: false, format: "thd" }))
+    ).toEqual([])
+  })
+
+  it("takes only booleans from the settings answer", () => {
+    expect(ddFilterDefaultsOf({})).toEqual({
+      surroundPhaseShift: true,
+      lowPassFilter: true,
+      surround3dbAttenuation: false,
+    })
+    expect(
+      ddFilterDefaultsOf({
+        surroundPhaseShift: false,
+        lowPassFilter: "no",
+        surround3dbAttenuation: true,
+      })
+    ).toEqual({
+      surroundPhaseShift: false,
+      lowPassFilter: true,
+      surround3dbAttenuation: true,
+    })
   })
 })
 
@@ -808,6 +924,7 @@ describe("info commands", () => {
   it("are single flags without input", () => {
     expect(INFO_COMMANDS.map((c) => c.flag)).toEqual([
       "-h",
+      "-fh",
       "-v",
       "-cl",
       "-lb",
@@ -819,7 +936,7 @@ describe("info commands", () => {
     const groups = INFO_COMMANDS.map((c) => c.group)
     expect(groups).toEqual([...groups].sort())
     for (const { flag } of INFO_COMMANDS) {
-      expect(infoArgs(flag)).toEqual([flag])
+      expect(infoArgs(flag)).toEqual(flag === "-gc" ? [flag, "-np"] : [flag])
     }
   })
 })
@@ -1290,5 +1407,200 @@ describe("tomlKey", () => {
   it("keeps underscores for the config keys", () => {
     expect(tomlKey("ddp-atmos")).toBe("ddp_atmos")
     expect(tomlKey("ac4")).toBe("ac4")
+  })
+})
+
+const musicDefault: DefaultModes = {
+  ...PROGRAM_DEFAULT_MODES,
+  ac4Ims: "music",
+}
+
+describe("AC-4 IMS", () => {
+  it("is a format with the 6 bitrates and the default key ac4_ims", () => {
+    expect(FORMATS).toContain("ac4-ims")
+    expect(FORMAT_LABELS["ac4-ims"]).toBe("AC-4 IMS")
+    expect(bitrateOptions("ac4-ims")).toEqual([64, 96, 128, 144, 256, 320])
+    const info = relevantBitrates({
+      format: "ac4-ims",
+      channels: 8,
+      downmix: "none",
+    })
+    expect(info.status).toBe("ok")
+    expect(info.defaultKey).toBe("ac4_ims")
+    expect(bitrateChoices(info, { ac4_ims: 128 })[2].label).toBe(
+      "128 kbps (default from config)"
+    )
+    expect(bitrateChoices(info, {})[4].label).toBe("256 kbps (default)")
+    expect(TEMPLATE_DEFAULT_BITRATES.ac4_ims).toBe(256)
+  })
+
+  it("sends only the music mode", () => {
+    expect(buildArgs(opts({ format: "ac4-ims" }))).toEqual(["-f", "ac4-ims"])
+    expect(
+      buildArgs(opts({ format: "ac4-ims", ac4ImsMode: "general" }))
+    ).toEqual(["-f", "ac4-ims"])
+    // music mode takes music_light, which the CLI selects itself
+    expect(
+      buildArgs(
+        setAc4ImsMode(opts({ format: "ac4-ims", bitrate: "128" }), "music")
+      )
+    ).toEqual(["-f", "ac4-ims", "--ac4-ims-mode", "music", "-b", "128"])
+    // the mode of another format is not sent
+    expect(buildArgs(opts({ format: "ddp", ac4ImsMode: "music" }))).toEqual([])
+    expect(ac4ImsModeApplies("ac4-ims")).toBe(true)
+    expect(ac4ImsModeApplies("ac4")).toBe(false)
+    expect(effectiveAc4ImsMode("default", PROGRAM_DEFAULT_MODES)).toBe(
+      "general"
+    )
+    expect(effectiveAc4ImsMode("default", musicDefault)).toBe("music")
+    expect(effectiveAc4ImsMode("general", musicDefault)).toBe("general")
+    expect(effectiveAc4ImsMode("music", PROGRAM_DEFAULT_MODES)).toBe("music")
+  })
+
+  it("follows the config's default mode", () => {
+    const ims = opts({ format: "ac4-ims", drc: "music_light" })
+    // the default choice passes nothing, the CLI reads the config
+    expect(buildArgs(ims, { defaultModes: musicDefault })).toEqual([
+      "-f",
+      "ac4-ims",
+    ])
+    expect(
+      buildArgs(
+        opts({ format: "ac4-ims", ac4ImsMode: "music", drc: "music_light" }),
+        {
+          defaultModes: musicDefault,
+        }
+      )
+    ).toEqual(["-f", "ac4-ims"])
+    // general differs from the config: it is passed, with music_light as -r
+    // (the state before it was changed) only when that is not the default
+    const general = setAc4ImsMode(ims, "general", musicDefault)
+    expect(general.drc).toBe("music_light")
+    expect(buildArgs(general, { defaultModes: musicDefault })).toEqual([
+      "-f",
+      "ac4-ims",
+      "--ac4-ims-mode",
+      "general",
+      "-r",
+      "music_light",
+    ])
+    // the config's music selects music_light, validates and limits the DRC
+    const none = opts({ format: "ac4-ims" })
+    expect(setAc4ImsMode(none, "default", musicDefault).drc).toBe("music_light")
+    expect(
+      setFormat(opts({ format: "ddp" }), "ac4-ims", musicDefault).drc
+    ).toBe("music_light")
+    expect(validate(none, musicDefault)).toEqual([
+      "AC-4 IMS music mode needs the DRC music_light.",
+    ])
+    expect(validate(none)).toEqual([])
+    expect(validate({ ...ims, drc: "music_light" }, musicDefault)).toEqual([])
+    // other formats are not affected
+    expect(
+      buildArgs(opts({ format: "ddp" }), { defaultModes: musicDefault })
+    ).toEqual([])
+  })
+
+  it("has no downmix, LFE removal and dialnorm", () => {
+    expect(supportsDownmix("ac4-ims")).toBe(false)
+    expect(supportsDownmix("ac4")).toBe(true)
+    expect(supportsDialnorm("ac4-ims")).toBe(false)
+    expect(disableLfeApplies("ac4-ims", 6, "none")).toBe(false)
+    expect(relevantDownmixes("ac4-ims", 8)).toEqual(["none"])
+    const o = setFormat(
+      opts({ format: "dd", downmix: "2", dialnorm: "-27", disableLfe: true }),
+      "ac4-ims"
+    )
+    expect(o.downmix).toBe("none")
+    expect(o.dialnorm).toBe("0")
+    expect(
+      buildArgs(
+        { ...o, downmix: "2", dialnorm: "-27", disableLfe: true },
+        { channels: 6 }
+      )
+    ).toEqual(["-f", "ac4-ims"])
+    expect(validate({ ...o, dialnorm: "-27" })).toHaveLength(1)
+  })
+
+  it("uses DRC none by default and music_light in music mode", () => {
+    expect(defaultDrc("ac4-ims")).toBe("none")
+    expect(defaultDrc("ac4-ims", "music")).toBe("music_light")
+    expect(drcChoiceDisabled("ac4-ims", "none")).toBe(false)
+    for (const d of DRC_VALUES) {
+      expect(drcChoiceDisabled("ac4-ims", d, "music")).toBe(d !== "music_light")
+    }
+    const general = opts({ format: "ac4-ims", drc: "speech" })
+    expect(buildArgs(general)).toEqual(["-f", "ac4-ims", "-r", "speech"])
+    const music = setAc4ImsMode(general, "music")
+    expect(music.drc).toBe("music_light")
+    expect(validate(music)).toEqual([])
+    expect(validate({ ...music, drc: "speech" })).toEqual([
+      "AC-4 IMS music mode needs the DRC music_light.",
+    ])
+    // leaving the music mode keeps music_light, which is allowed
+    expect(setAc4ImsMode(music, "general").drc).toBe("music_light")
+    // switching to AC-4 IMS in music mode selects music_light
+    expect(
+      setFormat(opts({ format: "ddp", ac4ImsMode: "music" }), "ac4-ims").drc
+    ).toBe("music_light")
+    expect(
+      setFormat(opts({ format: "ddp", ac4ImsMode: "music" }), "dd").drc
+    ).toBe("none")
+  })
+})
+
+describe("-s3a, -lpf", () => {
+  it("-s3a works for DD, DDP and TrueHD, -lpf for DD and DDP", () => {
+    for (const f of FORMATS) {
+      expect(surround3dbAttenuationApplies(f)).toBe(
+        f === "dd" || f === "ddp" || f === "thd"
+      )
+      expect(lowPassFilterApplies(f)).toBe(f === "dd" || f === "ddp")
+      expect(ddFilterApplies("surround3dbAttenuation", f)).toBe(
+        surround3dbAttenuationApplies(f)
+      )
+    }
+    expect(
+      buildArgs(opts({ format: "thd", surround3dbAttenuation: true }))
+    ).toEqual(["-f", "thd", "-s3a", "on"])
+    expect(buildArgs(opts({ format: "thd", lowPassFilter: false }))).toEqual([
+      "-f",
+      "thd",
+    ])
+  })
+})
+
+describe("track index", () => {
+  it("accepts N, a:N and s:N", () => {
+    expect(normalizeTrackIndex("0")).toBe("0")
+    expect(normalizeTrackIndex(" 2 ")).toBe("2")
+    expect(normalizeTrackIndex("A:1")).toBe("a:1")
+    expect(normalizeTrackIndex("S:03")).toBe("s:3")
+    for (const bad of [
+      "",
+      "-1",
+      "a:",
+      "s:x",
+      "v:1",
+      "1.5",
+      "a:-1",
+      "s:1:2",
+      "x",
+    ]) {
+      expect(normalizeTrackIndex(bad)).toBeNull()
+      expect(validate(opts({ trackIndex: bad }))).toEqual([
+        "Track index must be like 0, a:1 or s:3.",
+      ])
+    }
+  })
+
+  it("is passed as typed (normalized), the default is left out", () => {
+    expect(buildArgs(opts({ trackIndex: "2" }))).toEqual(["-ti", "2"])
+    expect(buildArgs(opts({ trackIndex: "S:3" }))).toEqual(["-ti", "s:3"])
+    expect(buildArgs(opts({ trackIndex: "a:1" }))).toEqual(["-ti", "a:1"])
+    expect(buildArgs(opts({ trackIndex: "a:0" }))).toEqual([])
+    expect(buildArgs(opts({ trackIndex: "0" }))).toEqual([])
+    // s:0 is the first stream, not the first audio track
+    expect(buildArgs(opts({ trackIndex: "s:0" }))).toEqual(["-ti", "s:0"])
   })
 })

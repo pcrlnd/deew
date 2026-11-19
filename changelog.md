@@ -1,3 +1,96 @@
+# deew 5.4.0:
+- `-sps, --surround-phase-shift on|off` replaces `-nps`: it
+  overrides the config's `surround_phase_shift` in both directions
+  (`-sps on` turns the phase shift back on)
+- new `-lpf, --low-pass-filter on|off` for DD and DDP: DEE's
+  120 Hz low-pass filter on the LFE channel,
+  on by default, config key: `low_pass_filter`
+- new `-s3a, --surround-3db-attenuation on|off` for DD, DDP and
+  TrueHD: 3 dB attenuation of the surround channels,
+  off by default, config key: `surround_3db_attenuation`;
+  TrueHD (6 and 8 channel outputs) asks first because the output is
+  no longer identical to the source
+- new `-fh`/`--full-help` shows all options, `-h` doesn't show the
+  advanced options anymore (`-sps`, `-lpf`, `-s3a`)
+- new `-f ac4-ims` (AC-4 immersive stereo, DEE's `dee_ac4ims_encoder`,
+  `.ac4`): stereo for headphones and TV speakers from a 5.1 source (7.1
+  is downmixed to 5.1 by ffmpeg, 5.0 gets a silent LFE), from a TrueHD
+  Atmos source (decoded by truehdd) or from an Atmos master; bitrates
+  64, 96, 128, 144, 256 and 320 kbps (default 256, config key
+  `ac4_ims` in `[default_bitrates]`, configs without it use 256);
+  `-dm`, `-dl` and `-dn` are errors with it
+- new `--ac4-ims-mode general|music`: `music` uses DEE's music mode
+  (no dialogue enhancement, DRC `music_light`, an other `-r` is an error);
+  the default comes from the config's `ac4_ims` in `[default_modes]`
+  (configs without it use `general`)
+- Dolby Atmos masters are read by DEE directly (#75): ADM BWF (a wave
+  file with `chna` and `axml` chunks, found by its headers) and DAMF
+  (`.atmos` with its `.atmos.audio` and `.atmos.metadata`) work as
+  inputs of `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims` without
+  truehdd and ffmpeg, `-mo` measures them, `dd`/`ddp` get a 5.1 (or `-dm
+  2`/`1`) render of the master from DEE, `thd`, `ac4` and `aac` reject
+  them; the summary shows the source as "ADM BWF Atmos master" /
+  "DAMF Atmos master"; in a folder the `.atmos.audio` and
+  `.atmos.metadata` of a DAMF are not inputs of their own, a DAMF with a
+  missing part is an error
+- `-i` takes wildcard patterns (`*`, `?`, `**`) on every platform, quoted
+  or not: cmd.exe and PowerShell don't expand them, deew does; an
+  existing path wins over a pattern, brackets are literal, hidden files
+  are skipped, a pattern without a match is an error, the same file given
+  twice is encoded once
+- `-ti` takes `N`/`a:N` (the Nth audio track) and `s:N` (the stream with
+  index N of the container, it has to be an audio stream); negative
+  values are an error now
+- deew keeps the computer from sleeping while it encodes or measures
+- `dee_ac4ims_encoder` is in the tools `-v` looks at
+- `-gc` asks before it overwrites an existing `config.toml` (`-np` skips
+  the question); creating a missing config still doesn't ask
+- `pipe = 'auto'` is the new default: on Windows deew uses the
+  temporary `.wav` when 2 or more encodes run at once (DEE's named pipe
+  made 4 parallel encodes about 3x slower), a single encode and
+  Linux/macOS keep the pipe; `pipe = true` in older configs means
+  `auto`, `pipe = 'always'` forces the pipe, `pipe = false` turns it off;
+  the summary has a new `Piping` row
+- `deew-gui`/`deew-web` 0.9.0:
+  - the GUI asks deew to probe the inputs (`deew --probe-json`, hidden)
+    instead of doing it itself, so what it shows (folders, patterns, `-ti`,
+    Atmos masters, skipped files) always matches the deew next to it; an
+    older deew is reported as too old
+  - the GUI tab shows two lines per file, the name and below it the
+    status text like the CLI's (`finished (-25 dB) - took 10:15`,
+    `failed: reason`, `stopped`), the bar and the percent, on alternating
+    row backgrounds; deew's `done` progress event carries the result, the
+    duration and the failure reason for it
+  - the CLI tab's terminal is dark grey instead of near black in the
+    light theme
+  - new Utilities tab (wrench icon, after the CLI and GUI tabs): the
+    Utilities menu runs its commands there, in their own terminal, so
+    they work while an encode is running (one utility at a time, the next
+    one clears the previous output)
+  - Download tools (`-gt`) and Generate config (`-gc`) are greyed out
+    while an encode is running, and an encode can't start while one of
+    them runs
+  - Generate config asks for confirmation first, as it overwrites
+    `config.toml` (including the `[gui]` settings, the default bitrates
+    and the `deew-web` login)
+  - new Full help (`-fh`) item in the Utilities menu
+  - "No surround phase shift" is replaced by three on/off checkboxes,
+    "Surround phase shift" (`-sps`), "LFE low-pass filter" (`-lpf`) and
+    "Surround 3 dB attenuation" (`-s3a`): they start with the config's
+    values and a flag is only passed when you change one; greyed out
+    for formats that don't have them
+  - new AC-4 IMS (`ac4-ims`) format with the "AC-4 IMS mode"
+    (`--ac4-ims-mode`) select; `-dm`, `-dl` and `-dn` are greyed out for
+    it, the music mode selects the DRC `music_light`, and stereo / mono
+    inputs and Atmos mixed with channel-based inputs are reported; the
+    select shows the config's default (`ac4_ims` in `[default_modes]`)
+    and the GUI doesn't pass the flag for it
+  - ADM BWF and DAMF Atmos masters are recognised as Atmos sources
+    (without ffprobe, with the CLI's own detection) and the GUI warns
+    about the formats that can't take them
+  - the track index accepts `N`, `a:N` and `s:N`, and the GUI probes
+    the stream that the CLI will use
+
 # deew 5.3.1:
 - `-mo` measures a TrueHD Atmos source with `dee_measure_loudness`
   (the multichannel loudness of the Atmos master) instead of stopping

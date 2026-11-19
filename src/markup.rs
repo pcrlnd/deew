@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn help_lines_end_with_reset() {
-        let help = crate::help::wrap_help(crate::help::HELP, 80);
+        let help = crate::help::wrap_help(&crate::help::help(true), 80);
         assert_lines_reset(&render(
             &format!("[not bold white]{help}[/not bold white]"),
             true,

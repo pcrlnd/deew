@@ -10,6 +10,8 @@ import {
 
 import {
   RunClient,
+  infoSocketUrl,
+  parseInfoMessage,
   parseServerMessage,
   runSocketUrl,
   stateAction,
@@ -324,5 +326,30 @@ describe("RunClient", () => {
         expect(vi.getTimerCount()).toBe(0)
       })
     })
+  })
+})
+
+describe("info socket", () => {
+  it("lives next to the run socket", () => {
+    expect(infoSocketUrl({ protocol: "http:", host: "h:1" })).toBe(
+      "ws://h:1/api/info"
+    )
+    expect(infoSocketUrl({ protocol: "https:", host: "h" })).toBe(
+      "wss://h/api/info"
+    )
+  })
+
+  it("understands only exit and error", () => {
+    expect(parseInfoMessage('{"type":"exit","code":3}')).toEqual({
+      type: "exit",
+      code: 3,
+    })
+    expect(parseInfoMessage('{"type":"error","message":"no"}')).toEqual({
+      type: "error",
+      message: "no",
+    })
+    expect(parseInfoMessage('{"type":"ping"}')).toBeNull()
+    expect(parseInfoMessage('{"type":"started","args":[]}')).toBeNull()
+    expect(parseInfoMessage("nope")).toBeNull()
   })
 })

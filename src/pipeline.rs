@@ -8,22 +8,24 @@ use crate::commands::{
     measure_with_encoder_args, pcm_input_format, pcm_rate, pipe_args, pipe_sample_count,
     print_command,
 };
-use crate::config::{Config, DdpAtmosMode, Paths};
+use crate::config::{Ac4ImsMode, Config, DdpAtmosMode, Paths, PipeMode};
 use crate::data::ErrorKind;
 use crate::deewlog::LogSpec;
 use crate::encode::{self, Job, Options, Outcome};
-use crate::error::{error_line, escape, print_exit};
+use crate::error::{error_line, escape, format_error, print_exit};
 use crate::events;
 use crate::inputs::{self, Input, Problem};
 use crate::interrupt;
 use crate::markup;
+use crate::master;
 use crate::pipe;
 use crate::plan::{
     self, Format, InputInfo, Layout, Lfe, Modes, Profile71, Validated, check_ac4_dialnorm_channels,
-    check_atmos_inputs, check_input_layouts, check_inputs, check_shim_for_ddp, compute_instances,
-    input_delay, notices, profile_71, resolve_layout, select_bitrate, validate_args,
+    check_atmos_inputs, check_ims_inputs, check_input_layouts, check_inputs, check_master_inputs,
+    check_shim_for_ddp, compute_instances, input_delay, notices, profile_71, resolve_layout,
+    select_bitrate, validate_args,
 };
-use crate::probe::{self, Probe, ProbeError};
+use crate::probe::{self, Probe, ProbeError, TrackIndex};
 use crate::summary::{self, SummaryData};
 use crate::tools::{self, Shim, Versions};
 use crate::ui::{End, Ui};
@@ -44,15 +46,49 @@ fn join(dir: &str, name: &str) -> String {
     Path::new(dir).join(name).to_string_lossy().into_owned()
 }
 
-fn collect_inputs(inputs: &[String]) -> Vec<Input> {
+/// The input files of the command line: folders and patterns expanded,
+/// duplicates left out. A path that doesn't exist and a pattern without a
+/// match are errors (the message, as markup).
+pub fn try_collect_inputs(inputs: &[String]) -> Result<Vec<Input>, String> {
     let mut list = Vec::new();
     for input in inputs {
+        if inputs::is_pattern(input) {
+            list.extend(inputs::expand_pattern(input).map_err(|message| escape(&message))?);
+            continue;
+        }
         if !Path::new(input).exists() {
-            print_exit(ErrorKind::Path, Some(input));
+            return Err(format_error(ErrorKind::Path, Some(input)));
         }
         list.extend(inputs::expand(input));
     }
-    list
+    Ok(inputs::dedup(list))
+}
+
+fn collect_inputs(inputs: &[String]) -> Vec<Input> {
+    try_collect_inputs(inputs).unwrap_or_else(|message| error_line(&message))
+}
+
+/// What the probe of one input gives: an Atmos master is detected by its
+/// headers (`-ti` doesn't apply, it goes to DEE as it is), anything else is
+/// probed with ffprobe.
+pub fn probe_one(
+    input: &Input,
+    ffprobe: &str,
+    atmos_info: Option<&str>,
+    track_index: TrackIndex,
+) -> Result<Probe, ProbeError> {
+    if input.bad_name {
+        return Err(ProbeError::BadName);
+    }
+    match master::detect(&input.path) {
+        Ok(Some(found)) => Ok(Probe::of_master(master_duration(
+            found,
+            atmos_info,
+            &input.path,
+        ))),
+        Ok(None) => probe::run(ffprobe, track_index, &input.path),
+        Err(missing) => Err(ProbeError::DamfMissing(missing)),
+    }
 }
 
 /// Probe all the inputs. Problems with them are collected first: errors
@@ -60,7 +96,8 @@ fn collect_inputs(inputs: &[String]) -> Vec<Input> {
 /// asking, unless `no_prompt`). Returns the usable files with their probes.
 fn probe_inputs(
     ffprobe: &str,
-    track_index: i64,
+    atmos_info: Option<&str>,
+    track_index: TrackIndex,
     no_prompt: bool,
     inputs: Vec<Input>,
 ) -> (Vec<String>, Vec<Probe>) {
@@ -68,12 +105,7 @@ fn probe_inputs(
     let mut probes = Vec::new();
     let mut problems = Vec::new();
     for input in inputs {
-        let result = if input.bad_name {
-            Err(ProbeError::BadName)
-        } else {
-            probe::run(ffprobe, track_index, &input.path)
-        };
-        match result {
+        match probe_one(&input, ffprobe, atmos_info, track_index) {
             Ok(probe) => {
                 files.push(input.path);
                 probes.push(probe);
@@ -109,6 +141,17 @@ fn probe_inputs(
         std::process::exit(1);
     }
     (files, probes)
+}
+
+/// A DAMF has no duration in its header, `atmos_info` (if installed) tells it.
+fn master_duration(found: master::Master, atmos_info: Option<&str>, path: &str) -> master::Master {
+    match (found.kind, atmos_info) {
+        (master::MasterKind::Damf, Some(tool)) => master::Master {
+            duration: master::damf_duration(tool, path),
+            ..found
+        },
+        _ => found,
+    }
 }
 
 /// 96 kHz TrueHD (also resampled to it): DEE's encoder would apply its
@@ -187,11 +230,8 @@ fn find_programs(
         dee: encoder,
         measure,
         measure_atmos: None,
-        truehdd: if format.is_atmos() {
-            Some(tools::require_truehdd(exe_dir, &cwd))
-        } else {
-            tools::find_truehdd(exe_dir, &cwd)
-        },
+        // required once the inputs are known: Atmos masters need no truehdd
+        truehdd: tools::find_truehdd(exe_dir, &cwd),
         shim,
     }
 }
@@ -208,9 +248,17 @@ fn measure_tool(exe_dir: &Path, channels: i64) -> String {
     tools::require_dee_tool(tool, &cwd, exe_dir)
 }
 
-/// Whether `-mo` measures this source as Atmos: TrueHD with an Atmos presentation.
+/// Whether `-mo` measures this source as Atmos: an Atmos master, or TrueHD
+/// with an Atmos presentation.
 fn atmos_source(probe: &Probe) -> bool {
-    probe.is_truehd && probe.is_atmos
+    probe.master.is_some() || (probe.is_truehd && probe.is_atmos)
+}
+
+/// Whether the input is decoded by truehdd: the Atmos formats (and the Atmos
+/// source of AC4 IMS) take TrueHD, a master needs no decode.
+fn needs_truehdd(format: Format, probe: &Probe) -> bool {
+    probe.master.is_none()
+        && (format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe)))
 }
 
 /// Whether `-mo` of this input is run by the DDP encoder.
@@ -235,6 +283,36 @@ struct Context<'a> {
     versions: &'a Versions,
     /// The notices that were shown, for the report.
     notices: &'a [String],
+    /// The run feeds DEE through the pipe where it can (decided once, see
+    /// `PipeMode`); the jobs that can't pipe ignore it.
+    pipe: bool,
+}
+
+/// Whether the job of `probe` can use the pipe at all: not TrueHD (reads wav
+/// only), the Atmos formats, an Atmos master, nor AC4 IMS.
+fn can_pipe(format: Format, measure_only: bool, probe: &Probe) -> bool {
+    let plan_format = if measure_only { Format::Ddp } else { format };
+    let format = if measure_only && atmos_source(probe) {
+        Format::DdpAtmos
+    } else {
+        format
+    };
+    let atmos = format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe));
+    !atmos && probe.master.is_none() && plan_format != Format::Thd && plan_format != Format::Ac4Ims
+}
+
+/// The "Piping" row of the summary and whether the run pipes.
+fn pipe_decision(mode: PipeMode, windows: bool, instances: f64, pipeable: usize) -> (bool, String) {
+    let parallel = (instances.ceil() as usize).min(pipeable);
+    let pipe = mode.use_pipe(windows, parallel);
+    let text = match (mode, pipe) {
+        _ if pipeable == 0 => "not used".to_string(),
+        (PipeMode::Never, _) => "off".to_string(),
+        (PipeMode::Always, _) => "on (always)".to_string(),
+        (PipeMode::Auto, true) => "on (auto)".to_string(),
+        (PipeMode::Auto, false) => format!("off (auto: {parallel} at once)"),
+    };
+    (pipe, text)
 }
 
 fn versions(programs: &Programs) -> Versions {
@@ -247,8 +325,31 @@ fn versions(programs: &Programs) -> Versions {
     )
 }
 
+/// The source row of the summary when every input is an Atmos master:
+/// `ADM BWF Atmos master`, `DAMF Atmos master` or both.
+fn master_source(probes: &[Probe]) -> Option<String> {
+    let kinds: Vec<master::MasterKind> = probes.iter().filter_map(|p| p.master).collect();
+    if kinds.is_empty() || kinds.len() != probes.len() {
+        return None;
+    }
+    let mut labels: Vec<&str> = Vec::new();
+    for kind in kinds {
+        if !labels.contains(&kind.label()) {
+            labels.push(kind.label());
+        }
+    }
+    Some(labels.join(" / "))
+}
+
 /// Print the summary table (if enabled).
-fn print_summary(ctx: &Context, files: &[String], instances: f64, versions: &Versions) {
+fn print_summary(
+    ctx: &Context,
+    files: &[String],
+    probes: &[Probe],
+    instances: f64,
+    piping: &str,
+    versions: &Versions,
+) {
     let sections = &ctx.config.summary_sections;
     if !summary::any_section(sections) {
         return;
@@ -269,11 +370,19 @@ fn print_summary(ctx: &Context, files: &[String], instances: f64, versions: &Ver
         latest,
         versions: versions.clone(),
         channels: ctx.info.channels,
+        master_source: master_source(probes),
+        mode: (ctx.validated.format == Format::Ac4Ims
+            && ctx.validated.ims_mode == Ac4ImsMode::Music)
+            .then_some("music"),
         sample_rates: &[ctx.info.samplerate],
         bit_depths: &ctx.info.bit_depths,
         measure_only: ctx.args.measure_only,
         format: ctx.validated.format,
-        output_channels: ctx.layout.output_name(),
+        output_channels: if ctx.validated.format == Format::Ac4Ims {
+            "immersive stereo".to_string()
+        } else {
+            ctx.layout.output_name()
+        },
         profile: ctx.profile,
         bitrate: ctx.bitrate,
         dialnorm: ctx.validated.dialnorm,
@@ -284,6 +393,7 @@ fn print_summary(ctx: &Context, files: &[String], instances: f64, versions: &Ver
         },
         files: files.len(),
         instances,
+        piping: Some(piping.to_string()),
         delay,
         temp_path: ctx.temp,
     };
@@ -382,22 +492,30 @@ fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpe
     } else {
         "unknown".to_string()
     };
-    let input = vec![
-        row("Path", file.to_string()),
-        row("Codec", probe.codec.clone()),
-        row(
-            "Channels",
-            if probe.channel_layout.is_empty() {
-                probe.channels.to_string()
-            } else {
-                format!("{} ({})", probe.channels, probe.channel_layout)
-            },
-        ),
-        row("Sample rate", format!("{} Hz", probe.sample_rate)),
-        row("Bit depth", bit_depth.to_string()),
-        row("Duration", duration),
-        row("Track index", ctx.validated.track_index.to_string()),
-    ];
+    let input = if probe.master.is_some() {
+        vec![
+            row("Path", file.to_string()),
+            row("Source", probe.codec.clone()),
+            row("Duration", duration),
+        ]
+    } else {
+        vec![
+            row("Path", file.to_string()),
+            row("Codec", probe.codec.clone()),
+            row(
+                "Channels",
+                if probe.channel_layout.is_empty() {
+                    probe.channels.to_string()
+                } else {
+                    format!("{} ({})", probe.channels, probe.channel_layout)
+                },
+            ),
+            row("Sample rate", format!("{} Hz", probe.sample_rate)),
+            row("Bit depth", bit_depth.to_string()),
+            row("Duration", duration),
+            row("Track index", ctx.validated.track_index.to_string()),
+        ]
+    };
     let shim_used = ctx.programs.shim.is_some()
         && (ctx.profile == Some(Profile71::Standard)
             || (format == Format::Ddp
@@ -432,10 +550,32 @@ fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpe
     }
 }
 
-/// DEE's surround phase shift is off: `-nps` or the config, DD/DDP only.
+/// DEE's surround phase shift is off: `-sps` (else the config), DD/DDP/DDP Atmos only.
 fn phase_shift_off(ctx: &Context) -> bool {
     ctx.validated.format.has_phase_shift()
-        && (ctx.validated.no_phase_shift || !ctx.config.surround_phase_shift)
+        && !ctx
+            .validated
+            .surround_phase_shift
+            .unwrap_or(ctx.config.surround_phase_shift)
+}
+
+/// DEE's LFE low-pass filter is off: `-lpf` (else the config), DD/DDP only.
+fn low_pass_filter_off(ctx: &Context) -> bool {
+    ctx.validated.format.has_dd_filters()
+        && !ctx
+            .validated
+            .low_pass_filter
+            .unwrap_or(ctx.config.low_pass_filter)
+}
+
+/// The surround 3 dB attenuation is on: `-s3a` (else the config), DD, DDP
+/// and TrueHD only.
+fn surround_3db_on(ctx: &Context) -> bool {
+    ctx.validated.format.has_surround_3db()
+        && ctx
+            .validated
+            .surround_3db_attenuation
+            .unwrap_or(ctx.config.surround_3db_attenuation)
 }
 
 /// The settings table of the report of an encode.
@@ -465,6 +605,7 @@ fn encode_settings(ctx: &Context, file: &str, shim_used: bool) -> Vec<(String, S
             "Profile",
             match (format, ctx.profile) {
                 (Format::DdpAtmos, _) => ctx.validated.atmos_mode.name().to_string(),
+                (Format::Ac4Ims, _) => ctx.validated.ims_mode.name().to_string(),
                 (_, profile) => profile.map_or("N/A".to_string(), |p| p.name().to_string()),
             },
         ),
@@ -497,6 +638,21 @@ fn encode_settings(ctx: &Context, file: &str, shim_used: bool) -> Vec<(String, S
             .map_or(rows.len(), |i| i + 1);
         rows.insert(at, row("Surround phase shift", "off".to_string()));
     }
+    let outchannels = ctx.layout.outchannels;
+    if low_pass_filter_off(ctx) && outchannels >= 6 && ctx.layout.lfe != Lfe::Removed {
+        let at = rows
+            .iter()
+            .position(|(k, _)| k == "Downmix")
+            .map_or(rows.len(), |i| i + 1);
+        rows.insert(at, row("LFE low-pass filter", "off".to_string()));
+    }
+    if surround_3db_on(ctx) && outchannels >= 6 {
+        let at = rows
+            .iter()
+            .position(|(k, _)| k == "Downmix")
+            .map_or(rows.len(), |i| i + 1);
+        rows.insert(at, row("Surround 3 dB attenuation", "on".to_string()));
+    }
     rows
 }
 
@@ -514,6 +670,18 @@ fn shim_takes_named_pipe(ctx: &Context) -> bool {
         .is_some_and(|shim| tools::shim_takes_named_pipe(&shim.run, &ctx.programs.dee))
 }
 
+/// The downmix that ffmpeg does for the encoders that can't: TrueHD (`-dm`)
+/// and AC4 IMS (7.x input to its 5.1).
+fn ffmpeg_downmix(ctx: &Context) -> Option<i64> {
+    match ctx.validated.format {
+        Format::Ac4Ims => {
+            let out = ctx.layout.outchannels;
+            (out != 0 && out != plan::wav_channels(ctx.info.channels)).then_some(out)
+        }
+        _ => ctx.validated.downmix,
+    }
+}
+
 fn build_job(
     ctx: &Context,
     index: usize,
@@ -529,10 +697,12 @@ fn build_job(
     // is decoded like for DDP Atmos (`format` is DDP then, see `validate_args`).
     let plan_format = if measure_only { Format::Ddp } else { format };
     let measure_atmos = measure_only && atmos_source(probe);
+    // an Atmos master goes to DEE as it is: no ffmpeg, no truehdd, nothing in the temp directory
+    let master = probe.master.is_some();
     let downmix = if measure_only {
         None
     } else {
-        ctx.validated.downmix
+        ffmpeg_downmix(ctx)
     };
     let silent_lfe = ctx.layout.lfe == Lfe::Silent;
     let variant = intermediate_variant(
@@ -548,8 +718,17 @@ fn build_job(
     } else {
         format
     };
-    let atmos = format.is_atmos();
-    let intermediate = if atmos { &names.atmos } else { &names.wav };
+    // the audio is the `.atmos` file of truehdd (or the master): the Atmos
+    // formats, and AC4 IMS from an Atmos source
+    let atmos = format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe));
+    let decoded = atmos && !master;
+    let intermediate: &str = if master {
+        file
+    } else if atmos {
+        &names.atmos
+    } else {
+        &names.wav
+    };
     let via_manifest = dialnorm != 0 && format.dialnorm_via_manifest();
     // ffmpeg feeds DEE directly, there is no wav: not for TrueHD (its encoder
     // reads wav only), nor for the Atmos formats. When the audio is read
@@ -562,13 +741,16 @@ fn build_job(
         && format == Format::Ddp
         && ctx.layout.outchannels == 8
         && (ctx.profile == Some(Profile71::Standard) || ctx.layout.lfe == Lfe::Removed);
-    let pcm_pipe = ctx.config.pipe
+    let pcm_pipe = ctx.pipe
         && !atmos
+        && !master
         && plan_format != Format::Thd
+        // DEE's AC4 IMS reads no raw PCM
+        && plan_format != Format::Ac4Ims
         && !(pipe::NAMED && shim_layout && !shim_takes_named_pipe(ctx));
     let pipe_path = pcm_pipe.then(|| pipe::path(index));
-    let intermediate_exists = !pcm_pipe && Path::new(intermediate).exists();
-    let plan = (!atmos).then(|| {
+    let intermediate_exists = !pcm_pipe && !master && Path::new(intermediate).exists();
+    let plan = (!atmos && !master).then(|| {
         audio_plan(
             plan_format,
             ctx.info.samplerate,
@@ -576,12 +758,8 @@ fn build_job(
             bit_depth,
             ctx.validated.track_index,
             ctx.layout.lfe == Lfe::Silent,
-            // the TrueHD encoder can't downmix, ffmpeg does
-            if measure_only {
-                None
-            } else {
-                ctx.validated.downmix
-            },
+            // the TrueHD and AC4 IMS encoders can't downmix, ffmpeg does
+            downmix,
         )
     });
     let pcm_format = pcm_pipe.then(|| {
@@ -593,12 +771,16 @@ fn build_job(
             pipe_sample_count(probe.duration, rate),
         )
     });
-    let input_format = pcm_format.as_deref().unwrap_or("wav");
+    let input_format = if atmos || master {
+        "atmos_mezz"
+    } else {
+        pcm_format.as_deref().unwrap_or("wav")
+    };
     // what DEE reads: the wav, the pipe, or the `.atmos` file
     let dee_input = pipe_path.as_deref().unwrap_or(intermediate);
     // truehdd reads raw streams only: a raw .thd goes to it directly, a track
     // of a container is copied into its stdin by ffmpeg.
-    let piped = atmos && !probe.raw_truehd;
+    let piped = decoded && !probe.raw_truehd;
     let ffmpeg_args = if piped {
         pipe_args(&ctx.programs.ffmpeg, file, ctx.validated.track_index)
     } else if pcm_pipe {
@@ -617,7 +799,7 @@ fn build_job(
             .map(|plan| ffmpeg_args(&ctx.programs.ffmpeg, plan, file, &names.wav))
             .unwrap_or_default()
     };
-    let decode_args = if atmos {
+    let decode_args = if decoded {
         let prefix = names.atmos.strip_suffix(".atmos").unwrap_or(&names.atmos);
         let truehdd = ctx.programs.truehdd.as_deref().unwrap_or_default();
         decode_args(truehdd, if piped { "-" } else { file }, prefix)
@@ -643,7 +825,7 @@ fn build_job(
     let measure_args = match (&ctx.programs.measure, measuring) {
         _ if measure_atmos => {
             let tool = ctx.programs.measure_atmos.as_deref().unwrap_or_default();
-            measure_atmos_args(tool, &names.atmos)
+            measure_atmos_args(tool, intermediate)
         }
         (Some(tool), true) if by_encoder => {
             let throwaway = join(&dee_temp, "measure.ec3");
@@ -683,14 +865,18 @@ fn build_job(
             atmos_mode: ctx.validated.atmos_mode,
             lfe_removed: ctx.layout.lfe == Lfe::Removed,
             no_phase_shift: phase_shift_off(ctx),
+            no_lfe_filter: low_pass_filter_off(ctx),
+            surround_3db: surround_3db_on(ctx),
+            ims_music: ctx.validated.ims_mode == Ac4ImsMode::Music,
             apodise_off: apodise_off(format, ctx.info.samplerate),
         })
     };
 
-    let mut temp_files = if atmos {
-        atmos_files(&names.atmos)
-    } else if pcm_pipe {
+    let mut temp_files = if master || (pcm_pipe && !atmos) {
+        // a master is the user's file, never removed
         Vec::new()
+    } else if atmos {
+        atmos_files(&names.atmos)
     } else {
         vec![names.wav.clone()]
     };
@@ -716,7 +902,7 @@ fn build_job(
         stop_when_measured: by_encoder,
         measure_only,
         intermediate_exists,
-        intermediate: intermediate.clone(),
+        intermediate: intermediate.to_string(),
         loudness_path: names.loudness,
         dialnorm,
         skip_dialnorm,
@@ -776,7 +962,7 @@ fn job_commands(
     let mut parts = Vec::new();
     if job.intermediate_exists && !short {
         parts.push(INTERMEDIATE_EXISTS_PRINT.to_string());
-    } else if job.format.is_atmos() {
+    } else if !job.decode_args.is_empty() {
         let decode = print_command(&job.decode_args, short);
         if job.ffmpeg_args.is_empty() {
             parts.push(decode);
@@ -786,6 +972,8 @@ fn job_commands(
                 print_command(&job.ffmpeg_args, short)
             ));
         }
+    } else if job.ffmpeg_args.is_empty() {
+        // an Atmos master goes straight into DEE
     } else if let Some(print) = ffmpeg_print {
         parts.push(print);
     } else {
@@ -804,7 +992,7 @@ fn print_commands(prepared: &Prepared, long: bool) {
         rprintln!("[bold color(231)]Running the following commands:[/bold color(231)]");
         let mut plans = prepared.plans.iter();
         for job in &prepared.jobs {
-            let ffmpeg = if job.format.is_atmos() {
+            let ffmpeg = if !job.decode_args.is_empty() || job.ffmpeg_args.is_empty() {
                 None
             } else {
                 plans.next().map(|plan| {
@@ -857,6 +1045,8 @@ fn run_jobs(jobs: &[Job], options: &Options, instances: f64) -> JobResults {
     let names: Vec<&str> = jobs.iter().map(|job| file_name(&job.input)).collect();
     events::jobs(&names);
     let ui = Ui::new(jobs.len());
+    // no sleep while encoding or measuring
+    let _awake = crate::awake::keep_awake();
     interrupt::jobs_started(ui.printer());
     let workers = (instances.ceil() as usize).clamp(1, jobs.len().max(1));
     let next = AtomicUsize::new(0);
@@ -921,8 +1111,10 @@ pub fn run(args: Args, config: Config, paths: Paths) {
     if inputs.is_empty() {
         error_line("no input files found.");
     }
+    let atmos_info = tools::dee_tool("atmos_info", &cwd, &paths.exe_dir);
     let (files, probes) = probe_inputs(
         &programs.ffprobe,
+        atmos_info.as_deref(),
         validated.track_index,
         args.no_prompt,
         inputs,
@@ -931,9 +1123,23 @@ pub fn run(args: Args, config: Config, paths: Paths) {
     if format.is_atmos() && !args.measure_only {
         check_atmos_inputs(&files, &probes).unwrap_or_else(|fail| fail.exit());
     }
+    check_master_inputs(format, &probes, args.measure_only).unwrap_or_else(|fail| fail.exit());
+    // an Atmos source of AC4 IMS is laid out like AC4 Atmos
+    let ims_atmos = format == Format::Ac4Ims && probes.iter().any(plan::ims_atmos_source);
+    if format == Format::Ac4Ims && !args.measure_only {
+        check_ims_inputs(&probes).unwrap_or_else(|fail| fail.exit());
+    }
+    if probes.iter().any(|p| needs_truehdd(format, p)) && programs.truehdd.is_none() {
+        programs.truehdd = Some(tools::require_truehdd(&paths.exe_dir, &cwd));
+    }
     check_input_layouts(&files, &probes).unwrap_or_else(|fail| fail.exit());
-    let layout = resolve_layout(format, validated.downmix, info.channels, args.disable_lfe)
-        .unwrap_or_else(|fail| fail.exit());
+    let layout = resolve_layout(
+        if ims_atmos { Format::Ac4Atmos } else { format },
+        validated.downmix,
+        info.channels,
+        args.disable_lfe,
+    )
+    .unwrap_or_else(|fail| fail.exit());
     check_shim_for_ddp(
         format,
         &layout,
@@ -960,7 +1166,10 @@ pub fn run(args: Args, config: Config, paths: Paths) {
             let tool = tools::require_dee_tool("dee_measure_loudness", &cwd, &paths.exe_dir);
             programs.dee = tool.clone();
             programs.measure_atmos = Some(tool);
-            programs.truehdd = Some(tools::require_truehdd(&paths.exe_dir, &cwd));
+            // only TrueHD is decoded, the masters are measured as they are
+            if probes.iter().any(|p| p.master.is_none() && atmos_source(p)) {
+                programs.truehdd = Some(tools::require_truehdd(&paths.exe_dir, &cwd));
+            }
         }
         if !probes.iter().all(atmos_source) {
             let tool = measure_tool(&paths.exe_dir, info.channels);
@@ -989,6 +1198,11 @@ pub fn run(args: Args, config: Config, paths: Paths) {
                 "--ddp-atmos-mode",
                 "DDP Atmos",
             ),
+            (
+                args.ac4_ims_mode.is_some() && format != Format::Ac4Ims,
+                "--ac4-ims-mode",
+                "AC4 IMS",
+            ),
         ];
         for (is_ignored, flag, what) in ignored {
             if is_ignored {
@@ -1005,6 +1219,10 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         layout.outchannels,
         args.measure_only,
         validated.dialnorm,
+        validated.format.has_surround_3db()
+            && validated
+                .surround_3db_attenuation
+                .unwrap_or(config.surround_3db_attenuation),
     );
     show_notices(&shown, args.no_prompt);
     let notice_texts: Vec<String> = shown.iter().map(|n| markup::strip(n.note)).collect();
@@ -1027,6 +1245,11 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         output_directory(args.output.as_deref(), &config.output.path)
     };
 
+    let pipeable = probes
+        .iter()
+        .filter(|probe| can_pipe(format, args.measure_only, probe))
+        .count();
+    let (pipe, piping) = pipe_decision(config.pipe, pipe::NAMED, instances, pipeable);
     let ctx = Context {
         args: &args,
         config: &config,
@@ -1041,9 +1264,10 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         profile,
         versions: &versions,
         notices: &notice_texts,
+        pipe,
     };
 
-    print_summary(&ctx, &files, instances, &versions);
+    print_summary(&ctx, &files, &probes, instances, &piping, &versions);
     let prepared = prepare_jobs(&ctx, &files, &probes);
     print_commands(&prepared, args.long_argument);
 
@@ -1126,6 +1350,7 @@ mod tests {
             }
             .into(),
             is_atmos: atmos,
+            master: None,
         }
     }
 
@@ -1153,7 +1378,11 @@ mod tests {
         profile: Option<Profile71>,
     ) -> Job {
         let mut config: Config = toml::from_str(crate::config::CONFIG_TEMPLATE).unwrap();
-        config.pipe = pipe;
+        config.pipe = if pipe {
+            PipeMode::Always
+        } else {
+            PipeMode::Never
+        };
         let validated = validate_args(&args, &config.default_modes).unwrap();
         let layout = resolve_layout(
             validated.format,
@@ -1188,8 +1417,31 @@ mod tests {
             profile,
             versions: &versions,
             notices: &[],
+            pipe,
         };
         build_job(&ctx, 0, file, probe, 24).0
+    }
+
+    #[test]
+    fn pipe_decision_texts() {
+        let d = |mode, windows, instances, n| pipe_decision(mode, windows, instances, n);
+        assert_eq!(
+            d(PipeMode::Auto, true, 4.0, 4),
+            (false, "off (auto: 4 at once)".into())
+        );
+        assert_eq!(d(PipeMode::Auto, true, 4.0, 1), (true, "on (auto)".into()));
+        assert_eq!(d(PipeMode::Auto, true, 1.0, 4), (true, "on (auto)".into()));
+        assert_eq!(
+            d(PipeMode::Auto, true, 2.5, 4),
+            (false, "off (auto: 3 at once)".into())
+        );
+        assert_eq!(d(PipeMode::Auto, false, 8.0, 8), (true, "on (auto)".into()));
+        assert_eq!(
+            d(PipeMode::Always, true, 8.0, 8),
+            (true, "on (always)".into())
+        );
+        assert_eq!(d(PipeMode::Never, false, 1.0, 1), (false, "off".into()));
+        assert_eq!(d(PipeMode::Auto, true, 4.0, 0).1, "not used");
     }
 
     #[test]

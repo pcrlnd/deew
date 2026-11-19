@@ -10,6 +10,7 @@ pub mod assets;
 pub mod auth;
 pub mod config;
 pub mod fsapi;
+pub mod info;
 pub mod job;
 pub mod security;
 

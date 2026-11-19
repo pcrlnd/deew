@@ -73,6 +73,23 @@ export function runSocketUrl(location: {
   return `${scheme}//${location.host}/api/run`
 }
 
+/** `ws://` or `wss://` URL of the Utilities socket (`GET /api/info`). */
+export function infoSocketUrl(location: {
+  protocol: string
+  host: string
+}): string {
+  return runSocketUrl(location).replace(/\/api\/run$/, "/api/info")
+}
+
+export type InfoMessage =
+  { type: "exit"; code: number | null } | { type: "error"; message: string }
+
+/** Parses a text frame of the Utilities socket; `null` for anything else. */
+export function parseInfoMessage(text: string): InfoMessage | null {
+  const message = parseServerMessage(text)
+  return message?.type === "exit" || message?.type === "error" ? message : null
+}
+
 /** What the UI should do with a `state` message (sent on every connect). */
 export type StateAction =
   /** A job is running that this tab did not start (reload, other tab). */

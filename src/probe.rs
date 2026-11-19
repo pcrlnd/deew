@@ -1,7 +1,111 @@
 //! ffprobe: argument list, output parsing and the process call.
 
+use crate::master::{Master, MasterKind};
 use serde_json::Value;
 use std::process::{Command, Stdio};
+
+/// Which stream `-ti` selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrackIndex {
+    /// `s:N`: the stream index N of the container, not the Nth audio track.
+    pub stream: bool,
+    pub n: usize,
+    /// Written with its `a:` / `s:` prefix (shown as given).
+    pub prefixed: bool,
+}
+
+impl Default for TrackIndex {
+    fn default() -> Self {
+        TrackIndex::audio(0)
+    }
+}
+
+impl From<i64> for TrackIndex {
+    /// The Nth audio track; a negative number is the first one.
+    fn from(n: i64) -> Self {
+        TrackIndex::audio(usize::try_from(n).unwrap_or(0))
+    }
+}
+
+impl std::fmt::Display for TrackIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.stream, self.prefixed) {
+            (true, _) => write!(f, "s:{}", self.n),
+            (false, true) => write!(f, "a:{}", self.n),
+            (false, false) => write!(f, "{}", self.n),
+        }
+    }
+}
+
+impl TrackIndex {
+    /// The Nth audio track, written without a prefix.
+    pub const fn audio(n: usize) -> Self {
+        TrackIndex {
+            stream: false,
+            n,
+            prefixed: false,
+        }
+    }
+
+    /// The `-map` value.
+    pub fn map_spec(&self) -> String {
+        if self.stream {
+            format!("0:{}", self.n)
+        } else {
+            format!("0:a:{}", self.n)
+        }
+    }
+
+    /// The input label of a filter graph.
+    pub fn filter_label(&self) -> String {
+        if self.stream {
+            format!("0:{}", self.n)
+        } else {
+            format!("a:{}", self.n)
+        }
+    }
+
+    /// Parse `N`, `a:N` or `s:N` (the prefix in any case).
+    pub fn parse(text: &str) -> Result<Self, TrackParseError> {
+        let t = text.trim();
+        let (stream, prefixed, number) = match t.split_once(':') {
+            Some((prefix, rest)) => match prefix.to_ascii_lowercase().as_str() {
+                "a" => (false, true, rest),
+                "s" => (true, true, rest),
+                _ => return Err(TrackParseError::Malformed),
+            },
+            None => (false, false, t),
+        };
+        let digits = number.strip_prefix('+').unwrap_or(number);
+        let all_digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
+        if prefixed {
+            if !all_digits(number) {
+                return Err(TrackParseError::Malformed);
+            }
+        } else if number.strip_prefix('-').is_some_and(all_digits) {
+            return Err(TrackParseError::Negative);
+        } else if !all_digits(digits) {
+            return Err(TrackParseError::NotAnInt);
+        }
+        // too big for a track: saturate, nothing has that many
+        let n = digits.parse::<usize>().unwrap_or(usize::MAX);
+        Ok(TrackIndex {
+            stream,
+            n,
+            prefixed,
+        })
+    }
+}
+
+/// Why `-ti` can't be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackParseError {
+    /// A plain value that isn't an integer.
+    NotAnInt,
+    Negative,
+    /// A prefix other than `a:` / `s:`, or no number after it.
+    Malformed,
+}
 
 /// The properties of the selected audio stream that deew needs.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +129,29 @@ pub struct Probe {
     pub profile: String,
     /// The profile mentions Atmos.
     pub is_atmos: bool,
+    /// An Atmos master (ADM BWF or DAMF) that DEE reads directly, never
+    /// probed with ffprobe.
+    pub master: Option<MasterKind>,
+}
+
+impl Probe {
+    /// What stands in for the probe of an Atmos master: DEE takes 48 kHz,
+    /// and renders a 5.1 from it for DD and DDP.
+    pub fn of_master(master: Master) -> Probe {
+        Probe {
+            sample_rate: 48000,
+            channels: 6,
+            duration: master.duration.unwrap_or(-1.0),
+            bit_depth: 24,
+            is_truehd: false,
+            channel_layout: String::new(),
+            codec: master.kind.label().to_string(),
+            raw_truehd: false,
+            profile: String::new(),
+            is_atmos: true,
+            master: Some(master.kind),
+        }
+    }
 }
 
 pub fn probe_args(ffprobe: &str, file: &str) -> Vec<String> {
@@ -56,10 +183,16 @@ pub enum ProbeError {
     NoAudio,
     /// Only `count` audio streams, fewer than the track index + 1.
     MissingTrack { index: usize, count: usize },
+    /// `-ti s:N`: the container has only `count` streams.
+    MissingStream { index: usize, count: usize },
+    /// `-ti s:N`: stream N is of another type (`video`, `subtitle`, ...).
+    NotAudioStream { index: usize, kind: String },
     /// Not JSON, or the chosen stream lacks the sample rate / channels.
     Unreadable,
     /// A file name that isn't valid UTF-8 (never probed).
     BadName,
+    /// A DAMF whose `.atmos.audio` / `.atmos.metadata` is missing (the list of paths).
+    DamfMissing(Vec<String>),
 }
 
 impl ProbeError {
@@ -75,8 +208,24 @@ impl ProbeError {
                     track_range(*count)
                 )
             }
+            Self::MissingStream { index, count } => format!(
+                "no stream {index} (-ti s:{index}), it has {count} (0-{})",
+                count.saturating_sub(1)
+            ),
+            Self::NotAudioStream { index, kind } => {
+                let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                    "an"
+                } else {
+                    "a"
+                };
+                format!("stream {index} (-ti s:{index}) is {article} {kind} stream, not audio")
+            }
             Self::Unreadable => UNREADABLE.into(),
             Self::BadName => "the file name isn't valid UTF-8".into(),
+            Self::DamfMissing(files) => format!(
+                "the DAMF Atmos master is incomplete, it needs {}",
+                files.join(", ")
+            ),
         }
     }
 
@@ -115,7 +264,8 @@ fn as_f64(v: &Value) -> Option<f64> {
 
 /// Parse the JSON printed by ffprobe: the `track_index`th audio stream
 /// (0-based) of all the streams.
-pub fn parse_probe(json: &str, track_index: usize) -> Result<Probe, ProbeError> {
+pub fn parse_probe(json: &str, track: impl Into<TrackIndex>) -> Result<Probe, ProbeError> {
+    let track = track.into();
     let value: Value = serde_json::from_str(json).map_err(|_| ProbeError::Unreadable)?;
     let streams = value
         .get("streams")
@@ -128,11 +278,34 @@ pub fn parse_probe(json: &str, track_index: usize) -> Result<Probe, ProbeError> 
     if audios.is_empty() {
         return Err(ProbeError::NoAudio);
     }
-    let Some(audio) = audios.get(track_index) else {
-        return Err(ProbeError::MissingTrack {
-            index: track_index,
-            count: audios.len(),
-        });
+    let audio = if track.stream {
+        // the `index` of a stream, its position when ffprobe gives none
+        let found = streams
+            .iter()
+            .enumerate()
+            .find(|(i, s)| s.get("index").and_then(as_i64).unwrap_or(*i as i64) == track.n as i64);
+        let Some((_, stream)) = found else {
+            return Err(ProbeError::MissingStream {
+                index: track.n,
+                count: streams.len(),
+            });
+        };
+        let kind = stream.get("codec_type").and_then(Value::as_str);
+        if kind != Some("audio") {
+            return Err(ProbeError::NotAudioStream {
+                index: track.n,
+                kind: kind.unwrap_or("unknown").to_string(),
+            });
+        }
+        stream
+    } else {
+        let Some(audio) = audios.get(track.n) else {
+            return Err(ProbeError::MissingTrack {
+                index: track.n,
+                count: audios.len(),
+            });
+        };
+        *audio
     };
     let sample_rate = audio
         .get("sample_rate")
@@ -189,6 +362,7 @@ pub fn parse_probe(json: &str, track_index: usize) -> Result<Probe, ProbeError> 
         raw_truehd,
         profile,
         is_atmos,
+        master: None,
     })
 }
 
@@ -213,7 +387,7 @@ fn stderr_reason(stderr: &str, file: &str, code: Option<i32>) -> String {
 }
 
 /// Run ffprobe on `file`.
-pub fn run(ffprobe: &str, track_index: i64, file: &str) -> Result<Probe, ProbeError> {
+pub fn run(ffprobe: &str, track: TrackIndex, file: &str) -> Result<Probe, ProbeError> {
     let args = probe_args(ffprobe, file);
     let output = Command::new(&args[0])
         .args(&args[1..])
@@ -229,10 +403,7 @@ pub fn run(ffprobe: &str, track_index: i64, file: &str) -> Result<Probe, ProbeEr
             output.status.code(),
         )));
     }
-    parse_probe(
-        &String::from_utf8_lossy(&output.stdout),
-        usize::try_from(track_index).unwrap_or(0),
-    )
+    parse_probe(&String::from_utf8_lossy(&output.stdout), track)
 }
 
 #[cfg(test)]
@@ -273,7 +444,8 @@ mod tests {
                 codec: "pcm_s24le".into(),
                 raw_truehd: false,
                 profile: String::new(),
-                is_atmos: false
+                is_atmos: false,
+                master: None
             })
         );
     }
@@ -294,7 +466,8 @@ mod tests {
                 codec: String::new(),
                 raw_truehd: false,
                 profile: String::new(),
-                is_atmos: false
+                is_atmos: false,
+                master: None
             })
         );
     }
@@ -360,7 +533,7 @@ mod tests {
 
     #[test]
     fn failure_reasons() {
-        let message = |json: &str, ti: usize| parse_probe(json, ti).unwrap_err().message();
+        let message = |json: &str, ti: i64| parse_probe(json, ti).unwrap_err().message();
         let video = r#"{"streams":[{"codec_type":"video","codec_name":"ansi"}]}"#;
         assert_eq!(message(video, 0), "no audio track");
         assert_eq!(message(r#"{"streams":[]}"#, 0), "no audio track");
@@ -388,6 +561,79 @@ mod tests {
             ProbeError::BadName.message(),
             "the file name isn't valid UTF-8"
         );
+    }
+
+    /// video 0, audio 1 (6 ch), subtitle 2, audio 3 (2 ch)
+    const MIXED: &str = r#"{"streams":[
+        {"index":0,"codec_type":"video","codec_name":"h264"},
+        {"index":1,"codec_type":"audio","codec_name":"ac3","sample_rate":"48000","channels":6},
+        {"index":2,"codec_type":"subtitle","codec_name":"subrip"},
+        {"index":3,"codec_type":"audio","codec_name":"aac","sample_rate":"44100","channels":2}]}"#;
+
+    fn ti(text: &str) -> TrackIndex {
+        TrackIndex::parse(text).unwrap()
+    }
+
+    #[test]
+    fn track_index_parsing() {
+        assert_eq!(ti("0"), TrackIndex::audio(0));
+        assert_eq!(ti("+3"), TrackIndex::audio(3));
+        assert_eq!(ti("a:2").to_string(), "a:2");
+        assert_eq!(ti("A:2").map_spec(), "0:a:2");
+        assert_eq!(ti("S:7").to_string(), "s:7");
+        assert_eq!(ti("s:7").map_spec(), "0:7");
+        assert_eq!(ti("s:7").filter_label(), "0:7");
+        assert_eq!(ti("5").filter_label(), "a:5");
+        assert_eq!(TrackIndex::parse("-2"), Err(TrackParseError::Negative));
+        assert_eq!(TrackIndex::parse("x"), Err(TrackParseError::NotAnInt));
+        assert_eq!(TrackIndex::parse("1.5"), Err(TrackParseError::NotAnInt));
+        for bad in ["a:", "s:", "s:-1", "a:x", "v:1", ":1", "s:1:2", "s: 1"] {
+            assert_eq!(
+                TrackIndex::parse(bad),
+                Err(TrackParseError::Malformed),
+                "{bad}"
+            );
+        }
+        assert_eq!(TrackIndex::from(-4), TrackIndex::audio(0));
+    }
+
+    #[test]
+    fn audio_track_and_stream_selection() {
+        // the Nth audio track, with or without the prefix
+        assert_eq!(parse_probe(MIXED, ti("1")).unwrap().channels, 2);
+        assert_eq!(parse_probe(MIXED, ti("a:0")).unwrap().channels, 6);
+        assert_eq!(parse_probe(MIXED, ti("a:1")).unwrap().codec, "aac");
+        // the stream index of the container
+        assert_eq!(parse_probe(MIXED, ti("s:1")).unwrap().channels, 6);
+        assert_eq!(parse_probe(MIXED, ti("s:3")).unwrap().channels, 2);
+        assert_eq!(
+            parse_probe(MIXED, ti("a:2")).unwrap_err().message(),
+            "no audio track 2 (-ti), it has 2 (0-1)"
+        );
+    }
+
+    #[test]
+    fn stream_selection_errors() {
+        let message = |text: &str| parse_probe(MIXED, ti(text)).unwrap_err().message();
+        assert_eq!(
+            message("s:0"),
+            "stream 0 (-ti s:0) is a video stream, not audio"
+        );
+        assert_eq!(
+            message("s:2"),
+            "stream 2 (-ti s:2) is a subtitle stream, not audio"
+        );
+        assert_eq!(message("s:9"), "no stream 9 (-ti s:9), it has 4 (0-3)");
+        // a file without audio is "no audio track" whatever the selection
+        let video = r#"{"streams":[{"index":0,"codec_type":"video"}]}"#;
+        assert_eq!(
+            parse_probe(video, ti("s:0")).unwrap_err(),
+            ProbeError::NoAudio
+        );
+        assert!(!parse_probe(MIXED, ti("s:0")).unwrap_err().skippable());
+        // no `index` in the output: the position counts
+        let bare = r#"{"streams":[{"codec_type":"video"},{"codec_type":"audio","sample_rate":"48000","channels":2}]}"#;
+        assert_eq!(parse_probe(bare, ti("s:1")).unwrap().channels, 2);
     }
 
     #[test]

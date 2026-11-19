@@ -4,6 +4,7 @@
 use crate::config::DdpAtmosMode;
 use crate::error::escape;
 use crate::plan::Format;
+use crate::probe::TrackIndex;
 use crate::tools::Shim;
 use crate::util::shell_quote;
 
@@ -72,6 +73,12 @@ pub fn downmix_chain(channels: i64, out: i64, silent_lfe: bool) -> Option<String
     })
 }
 
+/// The encoders that can't downmix: ffmpeg does it (TrueHD to 5.1 / 2.0, AC4
+/// IMS from 7.x to its 5.1 input).
+pub fn ffmpeg_downmixes(format: Format) -> bool {
+    matches!(format, Format::Thd | Format::Ac4Ims)
+}
+
 /// How an input is converted to the intermediate wav. Inputs share their
 /// sample rate and channels, so only the bit depth can differ between plans.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +96,9 @@ pub struct AudioPlan {
 /// Target sample rate if the input has to be resampled.
 fn resample_rate(format: Format, samplerate: i64) -> Option<&'static str> {
     match format {
-        Format::Dd | Format::Ddp | Format::Ac4 | Format::Aac if samplerate != 48000 => {
+        Format::Dd | Format::Ddp | Format::Ac4 | Format::Ac4Ims | Format::Aac
+            if samplerate != 48000 =>
+        {
             Some("48000")
         }
         Format::Thd if samplerate != 48000 && samplerate != 96000 => {
@@ -115,7 +124,7 @@ pub fn intermediate_variant(
     if resample_rate(format, samplerate) != resample_rate(Format::Ddp, samplerate) {
         parts.push("thd".to_string());
     }
-    let downmix = downmix.filter(|_| format == Format::Thd);
+    let downmix = downmix.filter(|_| ffmpeg_downmixes(format));
     if let Some(d) = downmix {
         parts.push(format!("dm{d}"));
     }
@@ -130,13 +139,14 @@ pub fn audio_plan(
     samplerate: i64,
     channels: i64,
     bit_depth: u32,
-    track_index: i64,
+    track_index: impl Into<TrackIndex>,
     silent_lfe: bool,
     downmix: Option<i64>,
 ) -> AudioPlan {
-    let ti = track_index;
-    // Only TrueHD downmixes here, the other encoders do it themselves.
-    let pan = match downmix.filter(|_| format == Format::Thd) {
+    let track_index = track_index.into();
+    let ti = track_index.filter_label();
+    // Only TrueHD and AC4 IMS downmix here, the other encoders do it themselves.
+    let pan = match downmix.filter(|_| ffmpeg_downmixes(format)) {
         Some(out) => downmix_chain(channels, out, silent_lfe),
         None => channel_pan(channels, silent_lfe),
     };
@@ -149,7 +159,7 @@ pub fn audio_plan(
             (
                 [
                     "-filter_complex",
-                    &format!("[a:{ti}]{swap}aresample=resampler=soxr"),
+                    &format!("[{ti}]{swap}aresample=resampler=soxr"),
                     "-ar",
                     rate,
                     "-precision",
@@ -168,7 +178,7 @@ pub fn audio_plan(
 -cutoff [bold color(231)]1[/bold color(231)] \
 -dither_scale [bold color(231)]0[/bold color(231)] ",
                     escape(&shell_quote(&format!(
-                        "[a:{ti}]{swap}aresample=resampler=soxr"
+                        "[{ti}]{swap}aresample=resampler=soxr"
                     )))
                 ),
             )
@@ -178,10 +188,10 @@ pub fn audio_plan(
 
     let (swap_args, swap_print) = if let (Some(pan), true) = (&pan, resample_args.is_empty()) {
         (
-            vec!["-filter_complex".to_string(), format!("[a:{ti}]{pan}")],
+            vec!["-filter_complex".to_string(), format!("[{ti}]{pan}")],
             format!(
                 "-filter_complex [bold color(231)]{}[/bold color(231)] ",
-                escape(&shell_quote(&format!("[a:{ti}]{pan}")))
+                escape(&shell_quote(&format!("[{ti}]{pan}")))
             ),
         )
     } else {
@@ -190,10 +200,18 @@ pub fn audio_plan(
 
     let (map_args, map_print) = if resample_args.is_empty() && swap_args.is_empty() {
         (
-            vec!["-map".to_string(), format!("0:a:{ti}")],
-            format!(
-                "-map [bold color(231)]0:a[/bold color(231)][bold color(231)]:{ti}[/bold color(231)] "
-            ),
+            vec!["-map".to_string(), track_index.map_spec()],
+            if track_index.stream {
+                format!(
+                    "-map [bold color(231)]{}[/bold color(231)] ",
+                    track_index.map_spec()
+                )
+            } else {
+                format!(
+                    "-map [bold color(231)]0:a[/bold color(231)][bold color(231)]:{}[/bold color(231)] ",
+                    track_index.n
+                )
+            },
         )
     } else {
         (Vec::new(), String::new())
@@ -291,7 +309,7 @@ pub fn pcm_input_format(
 /// ffmpeg: copies the selected TrueHD track (of a container or a raw stream)
 /// to stdout, as a raw stream for the stdin of truehdd. ffmpeg prints
 /// timestamp warnings even with `-v error`, only its exit code counts.
-pub fn pipe_args(ffmpeg: &str, input: &str, track_index: i64) -> Vec<String> {
+pub fn pipe_args(ffmpeg: &str, input: &str, track_index: impl Into<TrackIndex>) -> Vec<String> {
     [
         ffmpeg,
         "-v",
@@ -300,7 +318,7 @@ pub fn pipe_args(ffmpeg: &str, input: &str, track_index: i64) -> Vec<String> {
         "-i",
         input,
         "-map",
-        &format!("0:a:{track_index}"),
+        &track_index.into().map_spec(),
         "-c",
         "copy",
         "-f",
@@ -420,6 +438,14 @@ pub struct EncodeParams<'a> {
     /// DD/DDP: turn off DEE's 90 degree phase shift of the surround channels
     /// (`-e` option); DDP Atmos: dee_shim's `--phase90 off`.
     pub no_phase_shift: bool,
+    /// DD/DDP: turn off DEE's LFE low-pass filter (`lfe_filter=0`); only
+    /// used when the output has an LFE channel.
+    pub no_lfe_filter: bool,
+    /// DD/DDP/TrueHD: turn on DEE's 3 dB attenuation of the surround channels
+    /// (`surround_3dB_attenuation=1`); only used with surround channels.
+    pub surround_3db: bool,
+    /// AC4 IMS in music mode (`mode=music`, no dialogue intelligence).
+    pub ims_music: bool,
     /// TrueHD at 96 kHz: dee_shim's `--apodise off`, DEE's own encoder
     /// filters every sample of 96 kHz input (not lossless).
     pub apodise_off: bool,
@@ -427,6 +453,28 @@ pub struct EncodeParams<'a> {
 
 /// The `-e` option that turns the phase shift off (the default is on).
 const NO_PHASE_SHIFT: &str = ":surround_90deg_phase_shift=0";
+/// The `-e` option that turns the LFE low-pass filter off (the default is on).
+const NO_LFE_FILTER: &str = ":lfe_filter=0";
+/// The `-e` option that turns the surround 3 dB attenuation on (the default is off).
+const SURROUND_3DB: &str = ":surround_3dB_attenuation=1";
+
+/// The non-default sub-options of `-e` for DD and DDP: phase shift, LFE
+/// low-pass filter (only with an LFE channel), surround 3 dB attenuation
+/// (only with surround channels).
+fn ddp_options(p: &EncodeParams) -> String {
+    let surround = p.outchannels >= 6;
+    let mut out = String::new();
+    if p.no_phase_shift {
+        out.push_str(NO_PHASE_SHIFT);
+    }
+    if p.no_lfe_filter && surround && !p.lfe_removed {
+        out.push_str(NO_LFE_FILTER);
+    }
+    if p.surround_3db && surround {
+        out.push_str(SURROUND_3DB);
+    }
+    out
+}
 
 fn thd_presentation(outchannels: i64) -> &'static str {
     match outchannels {
@@ -437,13 +485,8 @@ fn thd_presentation(outchannels: i64) -> &'static str {
 }
 
 /// The `-e` argument of `dee_ddp_encoder`.
-fn ddp_encoder(
-    format: Format,
-    outchannels: i64,
-    drc: &str,
-    lfe_removed: bool,
-    no_phase_shift: bool,
-) -> String {
+fn ddp_encoder(p: &EncodeParams) -> String {
+    let (format, outchannels, drc, lfe_removed) = (p.format, p.outchannels, p.drc, p.lfe_removed);
     let mode = match (format, outchannels) {
         (Format::Dd, _) => "dd",
         (_, 8) => "bluray",
@@ -455,8 +498,7 @@ fn ddp_encoder(
     } else {
         ""
     };
-    let phase = if no_phase_shift { NO_PHASE_SHIFT } else { "" };
-    format!("{mode}:drc_profile={drc}{lfe}{phase}")
+    format!("{mode}:drc_profile={drc}{lfe}{}", ddp_options(p))
 }
 
 /// The command that encodes with DEE (the first item is the program).
@@ -535,6 +577,25 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             args.extend(strings(&["--level", "3", "--data-rate", &bitrate]));
             args.extend(strings(&["-e", &format!("drc_profile={}", p.drc)]));
         }
+        Format::Ac4Ims => {
+            // wav (5.1) or the `.atmos` master; no manifest and no temp dir
+            args.push(p.tool.to_string());
+            args.extend(strings(&common));
+            args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
+            args.extend(strings(&["-o", p.output]));
+            args.extend(strings(&["--data-rate", &bitrate]));
+            // DEE's music mode only takes music_light and no dialogue intelligence
+            let (encoder, management) = if p.ims_music {
+                (
+                    "mode=music:drc_profile=music_light".to_string(),
+                    "measure_only:dialogue_intelligence=0",
+                )
+            } else {
+                (format!("drc_profile={}", p.drc), "measure_only")
+            };
+            args.extend(strings(&["-e", &encoder]));
+            args.extend(strings(&["--loudness-management", management]));
+        }
         Format::Thd => {
             // The TrueHD encoder has no `none` preset, dee_shim adds it (and
             // its --drc wins over the profile of the presentation). dee_shim
@@ -562,8 +623,14 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             } else {
                 p.drc
             };
+            // only the 6ch and 8ch presentations have the attenuation
+            let s3a = if p.surround_3db && p.outchannels >= 6 {
+                SURROUND_3DB
+            } else {
+                ""
+            };
             args.push(format!(
-                "{}:drc_profile={drc}",
+                "{}:drc_profile={drc}{s3a}",
                 thd_presentation(p.outchannels)
             ));
             args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
@@ -597,10 +664,9 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             // DRC is DEE's own sub-option; the shim keeps it and sets the
             // mode of the layout (`ddp` for /eac3, `bluray` for 7.0).
             let mode = if layout == "7.0" { "bluray" } else { "ddp" };
-            let phase = if p.no_phase_shift { NO_PHASE_SHIFT } else { "" };
             args.extend(strings(&[
                 "-e",
-                &format!("{mode}:drc_profile={}{phase}", p.drc),
+                &format!("{mode}:drc_profile={}{}", p.drc, ddp_options(p)),
             ]));
             args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
             args.extend(strings(&["-o", p.output]));
@@ -630,18 +696,7 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                     args.extend(strings(&["-e", "aaclc", "--data-rate", &bitrate]));
                 }
                 _ => {
-                    args.extend(strings(&[
-                        "-e",
-                        &ddp_encoder(
-                            p.format,
-                            p.outchannels,
-                            p.drc,
-                            p.lfe_removed,
-                            p.no_phase_shift,
-                        ),
-                        "--data-rate",
-                        &bitrate,
-                    ]));
+                    args.extend(strings(&["-e", &ddp_encoder(p), "--data-rate", &bitrate]));
                 }
             }
             if let Some(layout) = p.layout_arg {
@@ -667,8 +722,11 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
         ]));
     }
     args.extend(p.delay.iter().cloned());
-    // The DDP and AC4 Atmos encoders don't know the option.
-    if !matches!(p.format, Format::DdpAtmos | Format::Ac4Atmos) {
+    // The DDP Atmos, AC4 Atmos and AC4 IMS encoders don't know the option.
+    if !matches!(
+        p.format,
+        Format::DdpAtmos | Format::Ac4Atmos | Format::Ac4Ims
+    ) {
         args.extend(strings(&["--temp-dir", p.temp]));
     }
     args
@@ -1196,6 +1254,9 @@ mod tests {
             atmos_mode: DdpAtmosMode::Streaming,
             lfe_removed: false,
             no_phase_shift: false,
+            no_lfe_filter: false,
+            surround_3db: false,
+            ims_music: false,
             apodise_off: false,
         }
     }
@@ -1465,6 +1526,93 @@ mod tests {
     }
 
     #[test]
+    fn lfe_filter_and_3db_commands() {
+        let shim = Shim {
+            run: "/shim/dee_shim".into(),
+        };
+        let e = |p: &EncodeParams| opt_value(&encode_args(p), "-e");
+        let lpf = ":lfe_filter=0";
+        let s3a = ":surround_3dB_attenuation=1";
+        let phase = ":surround_90deg_phase_shift=0";
+        // defaults stay unchanged
+        assert_eq!(e(&params(Format::Dd)), "dd:drc_profile=music_light");
+        for format in [Format::Dd, Format::Ddp] {
+            let mode = if format == Format::Dd { "dd" } else { "ddp" };
+            let mut p = params(format);
+            p.no_lfe_filter = true;
+            assert_eq!(e(&p), format!("{mode}:drc_profile=music_light{lpf}"));
+            p.surround_3db = true;
+            assert_eq!(e(&p), format!("{mode}:drc_profile=music_light{lpf}{s3a}"));
+            p.no_phase_shift = true;
+            assert_eq!(
+                e(&p),
+                format!("{mode}:drc_profile=music_light{phase}{lpf}{s3a}")
+            );
+            // 5.0 (-dl): no LFE, no filter option, the attenuation stays
+            p.lfe_removed = true;
+            assert_eq!(
+                e(&p),
+                format!("{mode}:drc_profile=music_light:lfe_on=0{phase}{s3a}")
+            );
+            // mono and stereo: neither
+            for outchannels in [1, 2] {
+                let mut p = params(format);
+                p.outchannels = outchannels;
+                p.no_lfe_filter = true;
+                p.surround_3db = true;
+                assert_eq!(e(&p), format!("{mode}:drc_profile=music_light"));
+            }
+            let mut p = params(format);
+            p.surround_3db = true;
+            assert_eq!(e(&p), format!("{mode}:drc_profile=music_light{s3a}"));
+        }
+        // 7.1 Blu-ray native, and the dee_shim layouts
+        for (bluray, lfe_removed, layout, mode, lfe) in [
+            (true, false, None, "bluray", true),
+            (false, false, Some("7.1/eac3"), "ddp", true),
+            (false, true, Some("7.0/eac3"), "ddp", false),
+            (true, true, Some("7.0"), "bluray", false),
+        ] {
+            let mut p = params(Format::Ddp);
+            p.outchannels = 8;
+            p.bluray = bluray;
+            p.lfe_removed = lfe_removed;
+            p.shim = Some(&shim);
+            p.no_lfe_filter = true;
+            p.surround_3db = true;
+            let args = encode_args(&p);
+            assert_eq!(
+                args[0],
+                if layout.is_some() {
+                    "/shim/dee_shim"
+                } else {
+                    "/dee/tool"
+                }
+            );
+            let filter = if lfe { lpf } else { "" };
+            assert_eq!(
+                opt_value(&args, "-e"),
+                format!("{mode}:drc_profile=music_light{filter}{s3a}")
+            );
+        }
+        // DDP Atmos and the other formats never get them
+        for format in [Format::DdpAtmos, Format::Ac4, Format::Aac, Format::Thd] {
+            let mut p = params(format);
+            p.no_lfe_filter = true;
+            // TrueHD has its own attenuation (see thd_surround_3db_attenuation)
+            p.surround_3db = format != Format::Thd;
+            p.shim = Some(&shim);
+            let args = encode_args(&p);
+            assert!(
+                !args
+                    .iter()
+                    .any(|a| a.contains("lfe_filter") || a.contains("3dB")),
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
     fn seven_one_ddp_profiles() {
         let shim = Shim {
             run: "/shim/dee_shim".into(),
@@ -1633,6 +1781,94 @@ mod tests {
         p.drc = "speech";
         assert_eq!(encode_args(&p)[0], "/dee/tool");
         assert!(encode_args(&p).contains(&"6ch:drc_profile=speech".to_string()));
+    }
+
+    #[test]
+    fn stream_index_selects_by_container_stream() {
+        let s3 = TrackIndex::parse("s:3").unwrap();
+        // plain copy: -map 0:3 instead of 0:a:N
+        let plan = audio_plan(Format::Ddp, 48000, 6, 24, s3, false, None);
+        assert_eq!(plan.map_args, v(&["-map", "0:3"]));
+        assert_eq!(
+            plan.map_print,
+            "-map [bold color(231)]0:3[/bold color(231)] "
+        );
+        assert!(
+            ffmpeg_args("ffmpeg", &plan, "in.mkv", "o.wav")
+                .windows(2)
+                .any(|w| w == ["-map", "0:3"])
+        );
+        // channel swap and resampling: the filter reads 0:3
+        let swap = audio_plan(Format::Ddp, 48000, 8, 24, s3, false, None);
+        assert_eq!(swap.swap_args[1], format!("[0:3]{SWAP}"));
+        assert!(swap.map_args.is_empty());
+        let rs = audio_plan(Format::Ddp, 44100, 8, 24, s3, false, None);
+        assert_eq!(
+            rs.resample_args[1],
+            format!("[0:3]{SWAP},aresample=resampler=soxr")
+        );
+        // the audio forms are unchanged
+        let a1 = TrackIndex::parse("a:1").unwrap();
+        let plan = audio_plan(Format::Ddp, 48000, 6, 24, a1, false, None);
+        assert_eq!(plan.map_args, v(&["-map", "0:a:1"]));
+        assert_eq!(
+            plan.map_print,
+            "-map [bold color(231)]0:a[/bold color(231)][bold color(231)]:1[/bold color(231)] "
+        );
+        // TrueHD for truehdd
+        assert_eq!(
+            pipe_args("ffmpeg", "in.mkv", s3),
+            v(&[
+                "ffmpeg", "-v", "error", "-nostdin", "-i", "in.mkv", "-map", "0:3", "-c", "copy",
+                "-f", "truehd", "-"
+            ])
+        );
+        assert_eq!(pipe_args("ffmpeg", "in.mkv", a1)[7], "0:a:1");
+    }
+
+    #[test]
+    fn thd_surround_3db_attenuation() {
+        let shim = Shim {
+            run: "/shim/dee_shim".into(),
+        };
+        let presentation = |args: &[String]| opt_value(args, "--presentation");
+        for (out, native, shimmed) in [
+            (
+                6,
+                "6ch:drc_profile=speech:surround_3dB_attenuation=1",
+                "6ch:drc_profile=film_light:surround_3dB_attenuation=1",
+            ),
+            (
+                8,
+                "8ch:drc_profile=speech:surround_3dB_attenuation=1",
+                "8ch:drc_profile=film_light:surround_3dB_attenuation=1",
+            ),
+        ] {
+            let mut p = params(Format::Thd);
+            p.outchannels = out;
+            p.surround_3db = true;
+            p.drc = "speech";
+            let args = encode_args(&p);
+            assert_eq!(args[0], "/dee/tool");
+            assert_eq!(presentation(&args), native);
+            // dee_shim (DRC none): the sub-option stays in the presentation
+            p.drc = "none";
+            p.shim = Some(&shim);
+            let args = encode_args(&p);
+            assert_eq!(args[0], "/shim/dee_shim");
+            assert_eq!(presentation(&args), shimmed);
+            // off: unchanged
+            p.surround_3db = false;
+            assert!(!presentation(&encode_args(&p)).contains("3dB"));
+        }
+        // stereo is skipped
+        let mut p = params(Format::Thd);
+        p.outchannels = 2;
+        p.surround_3db = true;
+        assert_eq!(
+            presentation(&encode_args(&p)),
+            "2ch:drc_profile=music_light"
+        );
     }
 
     #[test]
@@ -2240,5 +2476,86 @@ mod tests {
         assert!(long.contains(&format!("{input} -o /out/a.ext")), "{long}");
         let short = strip(&print_command(&args, true));
         assert!(short.contains(&format!("{input} -o [output]")), "{short}");
+    }
+
+    #[test]
+    fn ac4_ims_commands() {
+        let mut p = params(Format::Ac4Ims);
+        p.bitrate = 256;
+        p.drc = "none";
+        assert_eq!(
+            encode_args(&p),
+            v(&[
+                "/dee/tool",
+                "--progress",
+                "1",
+                "--overwrite",
+                "1",
+                "--input-format",
+                "wav",
+                "-i",
+                "/t/a.wav",
+                "-o",
+                "/out/a.ext",
+                "--data-rate",
+                "256",
+                "-e",
+                "drc_profile=none",
+                "--loudness-management",
+                "measure_only",
+            ])
+        );
+        // music mode: the profile and dialogue intelligence are fixed
+        p.ims_music = true;
+        p.drc = "music_light";
+        let args = encode_args(&p);
+        assert_eq!(opt_value(&args, "-e"), "mode=music:drc_profile=music_light");
+        assert_eq!(
+            opt_value(&args, "--loudness-management"),
+            "measure_only:dialogue_intelligence=0"
+        );
+        // an Atmos source, with a delay: no temp dir, no manifest
+        p.input = "/t/a.atmos";
+        p.input_format = "atmos_mezz";
+        let delay = v(&["--add-silence", "1:0"]);
+        p.delay = &delay;
+        let args = encode_args(&p);
+        assert_eq!(opt_value(&args, "--input-format"), "atmos_mezz");
+        assert_eq!(opt_value(&args, "-i"), "/t/a.atmos");
+        assert_eq!(&args[args.len() - 2..], ["--add-silence", "1:0"]);
+        for unknown in ["--temp-dir", "--output-manifest", "-c"] {
+            assert!(!args.contains(&unknown.to_string()), "{unknown}");
+        }
+    }
+
+    #[test]
+    fn ac4_ims_downmixes_in_ffmpeg() {
+        // 7.1 to the 5.1 DEE takes; the rate is made 48 kHz like for the other DEE formats
+        let plan = audio_plan(Format::Ac4Ims, 48000, 8, 24, 0, false, Some(6));
+        assert!(plan.swap_args[1].contains("pan=5.1|c0=c0|c1=c1|c2=c2|c3=c3|"));
+        let plan = audio_plan(Format::Ac4Ims, 44100, 8, 24, 0, false, Some(6));
+        assert_eq!(plan.bit_depth, 32);
+        assert!(plan.resample_args.contains(&"48000".to_string()));
+        assert!(plan.resample_args[1].contains("pan=5.1"));
+        // 5.0 gets a silent LFE slot
+        let plan = audio_plan(Format::Ac4Ims, 48000, 5, 24, 0, true, None);
+        assert!(plan.swap_args[1].contains("c3=0*c0"));
+        assert_eq!(
+            intermediate_variant(Format::Ac4Ims, 48000, 8, false, Some(6)),
+            "dm6"
+        );
+        assert_eq!(
+            intermediate_variant(Format::Ac4Ims, 48000, 6, false, None),
+            ""
+        );
+        assert_eq!(
+            intermediate_variant(Format::Ac4Ims, 44100, 6, false, None),
+            ""
+        );
+        // DD's 7.1 is still left to DEE
+        assert_eq!(
+            intermediate_variant(Format::Dd, 48000, 8, false, Some(6)),
+            ""
+        );
     }
 }

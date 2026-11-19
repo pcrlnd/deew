@@ -1648,7 +1648,7 @@ fn commands<'a>(job: &'a Job, dee: &'a [String]) -> Vec<&'a [String]> {
 fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Result<(), String> {
     let on = job.log.is_some();
     if !job.intermediate_exists && job.pipe.is_none() {
-        if job.format.is_atmos() {
+        if !job.decode_args.is_empty() {
             let mut commands = vec![&job.decode_args[..]];
             if !job.ffmpeg_args.is_empty() {
                 commands.insert(0, &job.ffmpeg_args[..]);
@@ -1656,7 +1656,7 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             staged(stages, "decode", &commands, on, |log| {
                 run_decode(job, bar, ui, log)
             })?;
-        } else {
+        } else if !job.ffmpeg_args.is_empty() {
             staged(stages, "ffmpeg", &[&job.ffmpeg_args], on, |log| {
                 run_ffmpeg(job, bar, log)
             })?;

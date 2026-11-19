@@ -12,12 +12,19 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { INFO_COMMANDS, type InfoFlag } from "@/lib/deew-args"
 import { HELP } from "@/lib/help-text"
+import { utilityBlock } from "@/lib/utilities"
 
+/**
+ * The trigger of the Utilities tab. `encoding`: an encode runs, so -gt and -gc
+ * are greyed out; `utilityRunning`: one utility runs at a time.
+ */
 export function UtilitiesMenu({
-  disabled,
+  encoding,
+  utilityRunning,
   onRun,
 }: {
-  disabled: boolean
+  encoding: boolean
+  utilityRunning: boolean
   onRun: (flag: InfoFlag) => void
 }) {
   return (
@@ -28,7 +35,6 @@ export function UtilitiesMenu({
             variant="ghost"
             size="xs"
             className="h-5 px-1.5 text-[0.7rem]"
-            disabled={disabled}
           />
         }
       >
@@ -36,24 +42,28 @@ export function UtilitiesMenu({
         Utilities
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-52">
-        {INFO_COMMANDS.map(({ flag, label, group }, i) => (
-          <Fragment key={flag}>
-            {i > 0 && INFO_COMMANDS[i - 1].group !== group && (
-              <DropdownMenuSeparator />
-            )}
-            <DropdownMenuGroup>
-              <DropdownMenuItem
-                title={HELP.info[flag]}
-                onClick={() => onRun(flag)}
-              >
-                {label}
-                <code className="ml-auto font-mono text-xs text-muted-foreground">
-                  {flag}
-                </code>
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </Fragment>
-        ))}
+        {INFO_COMMANDS.map(({ flag, label, group }, i) => {
+          const block = utilityBlock(flag, { encoding, utilityRunning })
+          return (
+            <Fragment key={flag}>
+              {i > 0 && INFO_COMMANDS[i - 1].group !== group && (
+                <DropdownMenuSeparator />
+              )}
+              {/* The tooltip is on the group: a disabled item gets no pointer events. */}
+              <DropdownMenuGroup title={block ?? HELP.info[flag]}>
+                <DropdownMenuItem
+                  disabled={block !== null}
+                  onClick={() => onRun(flag)}
+                >
+                  {label}
+                  <code className="ml-auto font-mono text-xs text-muted-foreground">
+                    {flag}
+                  </code>
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </Fragment>
+          )
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )

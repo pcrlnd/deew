@@ -11,6 +11,7 @@ export const FORMATS = [
   "thd-atmos",
   "ac4",
   "ac4-atmos",
+  "ac4-ims",
   "aac",
 ] as const
 export type Format = (typeof FORMATS)[number]
@@ -32,6 +33,7 @@ export const FORMAT_LABELS: Readonly<Record<Format, string>> = {
   "thd-atmos": "TrueHD Atmos",
   ac4: "AC4",
   "ac4-atmos": "AC4 Atmos",
+  "ac4-ims": "AC-4 IMS",
   aac: "AAC",
 }
 
@@ -42,9 +44,14 @@ export function isAtmos(format: Format): boolean {
   )
 }
 
-/** Whether `-dn` works: everything but AAC and AC4 Atmos. */
+/** Whether `-dn` works: everything but AAC, AC4 Atmos and AC-4 IMS. */
 export function supportsDialnorm(format: Format): boolean {
-  return format !== "aac" && format !== "ac4-atmos"
+  return format !== "aac" && format !== "ac4-atmos" && format !== "ac4-ims"
+}
+
+/** Whether `-dm` works: not for AC-4 IMS (always immersive stereo). */
+export function supportsDownmix(format: Format): boolean {
+  return format !== "ac4-ims"
 }
 
 /** Whether `-r` has an effect (AAC has no DRC). */
@@ -57,9 +64,17 @@ export function supportsDrcNone(format: Format): boolean {
   return format !== "ac4"
 }
 
-/** The DRC the CLI uses when `-r` is not given: music_light for AC4, else none. */
-export function defaultDrc(format: Format): Drc {
-  return format === "ac4" ? "music_light" : "none"
+/**
+ * The DRC the CLI uses when `-r` is not given: music_light for AC4 and for
+ * AC-4 IMS in music mode, else none.
+ */
+export function defaultDrc(
+  format: Format,
+  imsMode: Ac4ImsMode = "general"
+): Drc {
+  return format === "ac4" || (format === "ac4-ims" && imsMode === "music")
+    ? "music_light"
+    : "none"
 }
 
 /** The DRC values listed for `format` (all of them; see `drcChoiceDisabled`). */
@@ -67,8 +82,16 @@ export function drcChoices(): Drc[] {
   return [...DRC_VALUES]
 }
 
-/** Whether a DRC value is listed but not selectable for `format` (none for AC4). */
-export function drcChoiceDisabled(format: Format, d: Drc): boolean {
+/**
+ * Whether a DRC value is listed but not selectable for `format`: none for AC4,
+ * everything but music_light for AC-4 IMS in music mode.
+ */
+export function drcChoiceDisabled(
+  format: Format,
+  d: Drc,
+  imsMode: Ac4ImsMode = "general"
+): boolean {
+  if (format === "ac4-ims" && imsMode === "music") return d !== "music_light"
   return d === "none" && !supportsDrcNone(format)
 }
 
@@ -107,23 +130,28 @@ export type DdpAtmosModeChoice = typeof DEFAULT_MODE | DdpAtmosMode
 export interface DefaultModes {
   ddp: DdpMode
   ddpAtmos: DdpAtmosMode
+  ac4Ims: Ac4ImsMode
 }
 
 export const PROGRAM_DEFAULT_MODES: Readonly<DefaultModes> = {
   ddp: "standard",
   ddpAtmos: "streaming",
+  ac4Ims: "general",
 }
 
 /** Modes from the settings answer; anything unknown is the program default. */
 export function parseDefaultModes(
   ddp: unknown,
-  ddpAtmos: unknown
+  ddpAtmos: unknown,
+  ac4Ims: unknown
 ): DefaultModes {
   return {
     ddp: DDP_MODES.find((m) => m === ddp) ?? PROGRAM_DEFAULT_MODES.ddp,
     ddpAtmos:
       DDP_ATMOS_MODES.find((m) => m === ddpAtmos) ??
       PROGRAM_DEFAULT_MODES.ddpAtmos,
+    ac4Ims:
+      AC4_IMS_MODES.find((m) => m === ac4Ims) ?? PROGRAM_DEFAULT_MODES.ac4Ims,
   }
 }
 
@@ -142,9 +170,29 @@ export function effectiveDdpAtmosMode(
   return choice === DEFAULT_MODE ? defaults.ddpAtmos : choice
 }
 
+/** `--ac4-ims-mode` values (AC-4 IMS). */
+export const AC4_IMS_MODES = ["general", "music"] as const
+export type Ac4ImsMode = (typeof AC4_IMS_MODES)[number]
+
+/** The mode select: the default is the config's (nothing is passed). */
+export type Ac4ImsModeChoice = typeof DEFAULT_MODE | Ac4ImsMode
+
+/** The mode a choice stands for. */
+export function effectiveAc4ImsMode(
+  choice: Ac4ImsModeChoice,
+  defaults: DefaultModes
+): Ac4ImsMode {
+  return choice === DEFAULT_MODE ? defaults.ac4Ims : choice
+}
+
+/** Whether the "AC-4 IMS mode" select is enabled. */
+export function ac4ImsModeApplies(format: Format): boolean {
+  return format === "ac4-ims"
+}
+
 export interface DeewOptions {
   inputs: string[]
-  /** Integer text, so that the field can be edited freely. */
+  /** `N`, `a:N` (the Nth audio track) or `s:N` (container stream N). */
   trackIndex: string
   output: string
   format: Format
@@ -162,10 +210,20 @@ export interface DeewOptions {
   ddpMode: DdpModeChoice
   /** `--ddp-atmos-mode`: profile of DDP Atmos. */
   ddpAtmosMode: DdpAtmosModeChoice
+  /** `--ac4-ims-mode`: profile of AC-4 IMS (general is the default). */
+  ac4ImsMode: Ac4ImsModeChoice
   /** `-dl`: remove the LFE channel. */
   disableLfe: boolean
-  /** `-nps`: turn off DEE's 90° surround phase shift (DD, DDP and DDP Atmos only). */
-  noPhaseShift: boolean
+  /**
+   * `-sps`: DEE's 90° surround phase shift (DD, DDP and DDP Atmos). `null`
+   * follows the config's `surround_phase_shift`; the flag is only passed when
+   * the value differs from the config (see `effectiveDdFilter`).
+   */
+  surroundPhaseShift: boolean | null
+  /** `-lpf`: 120 Hz LFE low-pass filter (DD and DDP); `null` follows the config. */
+  lowPassFilter: boolean | null
+  /** `-s3a`: 3 dB attenuation of the surrounds (DD, DDP and TrueHD); `null` follows the config. */
+  surround3dbAttenuation: boolean | null
   keepTemp: boolean
   keepLog: boolean
   measureOnly: boolean
@@ -187,8 +245,11 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
   outputToInput: false,
   ddpMode: DEFAULT_MODE,
   ddpAtmosMode: DEFAULT_MODE,
+  ac4ImsMode: DEFAULT_MODE,
   disableLfe: false,
-  noPhaseShift: false,
+  surroundPhaseShift: null,
+  lowPassFilter: null,
+  surround3dbAttenuation: null,
   keepTemp: false,
   keepLog: false,
   measureOnly: false,
@@ -196,9 +257,45 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
   noPrompt: false,
 }
 
+/** The on/off options that are tied to the config's value. */
+export type DdFilterOption =
+  "surroundPhaseShift" | "lowPassFilter" | "surround3dbAttenuation"
+
+/** The config's `surround_phase_shift`, `low_pass_filter`, `surround_3db_attenuation`. */
+export type DdFilterDefaults = Record<DdFilterOption, boolean>
+
+export const PROGRAM_DD_FILTER_DEFAULTS: Readonly<DdFilterDefaults> = {
+  surroundPhaseShift: true,
+  lowPassFilter: true,
+  surround3dbAttenuation: false,
+}
+
+/** The config's values from the settings answer; anything but a boolean gives the program default. */
+export function ddFilterDefaultsOf(
+  settings: Partial<Record<DdFilterOption, unknown>>
+): DdFilterDefaults {
+  const pick = (key: DdFilterOption) =>
+    typeof settings[key] === "boolean"
+      ? settings[key]
+      : PROGRAM_DD_FILTER_DEFAULTS[key]
+  return {
+    surroundPhaseShift: pick("surroundPhaseShift"),
+    lowPassFilter: pick("lowPassFilter"),
+    surround3dbAttenuation: pick("surround3dbAttenuation"),
+  }
+}
+
+/** The state of a toggle: its own value, else the config's. */
+export function effectiveDdFilter(
+  o: DeewOptions,
+  key: DdFilterOption,
+  defaults: DdFilterDefaults = PROGRAM_DD_FILTER_DEFAULTS
+): boolean {
+  return o[key] ?? defaults[key]
+}
+
 export type BooleanOption =
   | "disableLfe"
-  | "noPhaseShift"
   | "keepTemp"
   | "keepLog"
   | "measureOnly"
@@ -211,6 +308,7 @@ export type BooleanOption =
  */
 export const INFO_COMMANDS = [
   { flag: "-h", label: "Help", group: 0 },
+  { flag: "-fh", label: "Full help", group: 0 },
   { flag: "-v", label: "Version", group: 0 },
   { flag: "-cl", label: "Changelog", group: 0 },
   { flag: "-lb", label: "List bitrates", group: 1 },
@@ -222,7 +320,8 @@ export const INFO_COMMANDS = [
 export type InfoFlag = (typeof INFO_COMMANDS)[number]["flag"]
 
 export function infoArgs(flag: InfoFlag): string[] {
-  return [flag]
+  // The dialog has asked already, so the CLI must not ask again.
+  return flag === "-gc" ? [flag, "-np"] : [flag]
 }
 
 // Bitrate tables, copied from src/data.rs (a test keeps them in sync).
@@ -257,6 +356,7 @@ export const BITRATE_TABLE: Readonly<Record<string, readonly number[]>> = {
   ac4_20: [48, 64, 96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
   ac4_51: [96, 128, 144, 192, 256, 288, 320, 384, 448, 512, 768],
   ac4_atmos: [256, 320, 448, 768],
+  ac4_ims: [64, 96, 128, 144, 256, 320],
   aac_20: [
     56, 64, 80, 96, 112, 128, 144, 160, 192, 224, 256, 288, 320, 384, 448, 512,
     576,
@@ -273,6 +373,7 @@ const FORMAT_BITRATE_KEYS: Readonly<Record<Format, readonly string[]>> = {
   ],
   ac4: ["ac4_20", "ac4_51"],
   "ac4-atmos": ["ac4_atmos"],
+  "ac4-ims": ["ac4_ims"],
   aac: ["aac_20"],
   thd: [],
   "thd-atmos": [],
@@ -306,11 +407,15 @@ export interface BitrateContext {
    * `codecs` when given.
    */
   inputs?: readonly InputKind[]
+  /** `-mo`: the format is ignored, so the Atmos master checks are too. */
+  measureOnly?: boolean
 }
 
 export interface InputKind {
   codec: string
   atmos: boolean
+  /** An Atmos master (ADM BWF / DAMF), `codec` is its label. */
+  master?: boolean
 }
 
 export interface BitrateInfo {
@@ -345,9 +450,11 @@ export const THD_NO_ATMOS_INPUT_WARNING =
 
 /** One warning per kind of unsuitable input for the Atmos formats. */
 export function atmosInputWarnings(
-  inputs: readonly InputKind[] | undefined,
+  allInputs: readonly InputKind[] | undefined,
   codecs: readonly string[] | undefined
 ): string[] {
+  // Atmos masters are Atmos sources of their own, they are never a problem.
+  const inputs = allInputs?.filter((i) => i.master !== true)
   if (inputs === undefined) {
     return codecs?.some((codec) => codec !== "truehd")
       ? [ATMOS_INPUT_WARNING]
@@ -368,6 +475,53 @@ export function atmosInputWarnings(
   return warnings
 }
 
+export const IMS_INPUT_WARNING =
+  "AC-4 IMS needs a 5.1 (or 5.0, 7.0, 7.1) or an Atmos input, stereo and mono can't be encoded to immersive stereo."
+export const IMS_MIXED_WARNING =
+  "AC-4 IMS can't encode Atmos inputs (TrueHD Atmos, ADM BWF, DAMF) and channel-based inputs in the same run."
+export const MASTER_MIXED_WARNING =
+  "Atmos masters (ADM BWF, DAMF) can't be encoded to DD/DDP together with other inputs."
+
+/** Whether the source of AC-4 IMS is Atmos: a master or TrueHD Atmos. */
+export function imsAtmosSource(i: InputKind): boolean {
+  return i.master === true || (i.codec === "truehd" && i.atmos)
+}
+
+/** The formats whose encoder reads an Atmos master (DD/DDP render a 5.1). */
+export function takesMaster(format: Format): boolean {
+  return format !== "thd" && format !== "ac4" && format !== "aac"
+}
+
+/** Problems of Atmos masters (ADM BWF, DAMF) with the format. */
+export function masterWarnings(c: BitrateContext): string[] {
+  const masters = c.inputs?.filter((i) => i.master === true).length ?? 0
+  if (masters === 0 || c.measureOnly === true) return []
+  if (!takesMaster(c.format)) {
+    return [
+      `Atmos masters (ADM BWF, DAMF) can't be encoded to ${FORMAT_LABELS[c.format]}, use DDP Atmos, TrueHD Atmos, AC4 Atmos or AC-4 IMS (or DD/DDP for a 5.1 render).`,
+    ]
+  }
+  if (
+    (c.format === "dd" || c.format === "ddp") &&
+    masters !== c.inputs?.length
+  ) {
+    return [MASTER_MIXED_WARNING]
+  }
+  return []
+}
+
+/** Problems of the inputs with AC-4 IMS (`Ac4ImsInput`, `Ac4ImsMixed`). */
+function imsInputWarnings(c: BitrateContext): string[] {
+  const atmos = c.inputs?.filter(imsAtmosSource).length ?? 0
+  const total = c.inputs?.length ?? 0
+  if (atmos > 0 && atmos < total) return [IMS_MIXED_WARNING]
+  if (atmos === 0 && c.channels !== null) {
+    if (c.channels <= 2) return [IMS_INPUT_WARNING]
+    if (![5, 6, 7, 8].includes(c.channels)) return [CHANNELS_WARNING]
+  }
+  return []
+}
+
 export const CHANNELS_WARNING =
   "Input channels can only be 1, 2, 5, 6, 7 or 8 (1.0, 2.0, 5.0, 5.1, 7.0 or 7.1)."
 
@@ -376,7 +530,26 @@ export const CHANNELS_WARNING =
  * `resolve_layout` and `select_bitrate` of src/plan.rs.
  */
 export function relevantBitrates(c: BitrateContext): BitrateInfo {
+  const info = layoutBitrates(c)
+  const extra = masterWarnings(c)
+  return extra.length === 0
+    ? info
+    : { ...info, warnings: [...extra, ...info.warnings] }
+}
+
+function layoutBitrates(c: BitrateContext): BitrateInfo {
   const warnings: string[] = []
+  if (c.format === "ac4-ims") {
+    // Always immersive stereo, from the 5.1 of the source or an Atmos input.
+    warnings.push(...imsInputWarnings(c))
+    return {
+      status: "ok",
+      bitrates: [...BITRATE_TABLE.ac4_ims],
+      warnings,
+      defaultKey: "ac4_ims",
+      shimBitrates: [],
+    }
+  }
   if (isAtmos(c.format)) {
     // Atmos inputs have no usable channel layout; the encode needs TrueHD.
     warnings.push(...atmosInputWarnings(c.inputs, c.codecs))
@@ -520,6 +693,7 @@ export const TEMPLATE_DEFAULT_BITRATES: Readonly<Record<string, number>> = {
   ac4_2_0: 256,
   ac4_5_1: 448,
   ac4_atmos: 448,
+  ac4_ims: 256,
   aac_2_0: 256,
 }
 
@@ -635,7 +809,7 @@ export function ddpAtmosModeApplies(format: Format): boolean {
 
 /**
  * Whether `-dl` is enabled: a probed 5.1 or 7.1 input, not an Atmos format,
- * not AAC (always 2.0), and no downmix to mono or stereo.
+ * not AAC (always 2.0), not AC-4 IMS (needs the LFE), and no downmix to mono or stereo.
  */
 export function disableLfeApplies(
   format: Format,
@@ -645,19 +819,55 @@ export function disableLfeApplies(
   return (
     !isAtmos(format) &&
     format !== "aac" &&
+    format !== "ac4-ims" &&
     (channels === 6 || channels === 8) &&
     downmix !== "1" &&
     downmix !== "2"
   )
 }
 
-/** Whether `-nps` is enabled: DD, DDP and DDP Atmos (via dee_shim `--phase90 off`). */
-export function noPhaseShiftApplies(format: Format): boolean {
+/** Whether `-sps` is enabled: DD, DDP and DDP Atmos (Atmos via dee_shim `--phase90`). */
+export function surroundPhaseShiftApplies(format: Format): boolean {
   return format === "dd" || format === "ddp" || format === "ddp-atmos"
 }
 
+/** Whether `-lpf` is enabled: DD and DDP only. */
+export function lowPassFilterApplies(format: Format): boolean {
+  return format === "dd" || format === "ddp"
+}
+
+/**
+ * Whether `-s3a` is enabled: DD, DDP and TrueHD (the CLI asks first for
+ * TrueHD, the output isn't identical to the source).
+ */
+export function surround3dbAttenuationApplies(format: Format): boolean {
+  return format === "dd" || format === "ddp" || format === "thd"
+}
+
+/** Whether the toggle can be used with the format. */
+export function ddFilterApplies(key: DdFilterOption, format: Format): boolean {
+  switch (key) {
+    case "surroundPhaseShift":
+      return surroundPhaseShiftApplies(format)
+    case "lowPassFilter":
+      return lowPassFilterApplies(format)
+    case "surround3dbAttenuation":
+      return surround3dbAttenuationApplies(format)
+  }
+}
+
+const DD_FILTER_FLAGS: [DdFilterOption, string][] = [
+  ["surroundPhaseShift", "-sps"],
+  ["lowPassFilter", "-lpf"],
+  ["surround3dbAttenuation", "-s3a"],
+]
+
 /** Changes the format and resets what the new format cannot do. */
-export function setFormat(o: DeewOptions, format: Format): DeewOptions {
+export function setFormat(
+  o: DeewOptions,
+  format: Format,
+  defaults: DefaultModes = PROGRAM_DEFAULT_MODES
+): DeewOptions {
   const bitrate =
     o.bitrate !== DEFAULT_BITRATE &&
     !bitrateOptions(format).includes(Number(o.bitrate))
@@ -668,8 +878,30 @@ export function setFormat(o: DeewOptions, format: Format): DeewOptions {
     format,
     bitrate,
     downmix: downmixValues(format).includes(o.downmix) ? o.downmix : "none",
-    drc: o.drc === "none" && !supportsDrcNone(format) ? "music_light" : o.drc,
+    drc:
+      (o.drc === "none" && !supportsDrcNone(format)) ||
+      drcChoiceDisabled(
+        format,
+        o.drc,
+        effectiveAc4ImsMode(o.ac4ImsMode, defaults)
+      )
+        ? "music_light"
+        : o.drc,
     dialnorm: supportsDialnorm(format) ? o.dialnorm : "0",
+  }
+}
+
+/** Sets `--ac4-ims-mode`; music mode needs the DRC music_light. */
+export function setAc4ImsMode(
+  o: DeewOptions,
+  choice: Ac4ImsModeChoice,
+  defaults: DefaultModes = PROGRAM_DEFAULT_MODES
+): DeewOptions {
+  return {
+    ...o,
+    ac4ImsMode: choice,
+    drc:
+      effectiveAc4ImsMode(choice, defaults) === "music" ? "music_light" : o.drc,
   }
 }
 
@@ -689,21 +921,48 @@ function parseInteger(text: string): number | null {
   return INT_RE.test(t) ? Number.parseInt(t, 10) : null
 }
 
+const TRACK_RE = /^(?:([as]):)?(\d+)$/
+
+/**
+ * The `-ti` text as the CLI takes it: `N` (the same as `a:N`, the Nth audio
+ * track) or `a:N` / `s:N` (container stream N). `null` if it is none of them.
+ */
+export function normalizeTrackIndex(text: string): string | null {
+  const m = TRACK_RE.exec(text.trim().toLowerCase())
+  if (m === null) return null
+  const n = Number.parseInt(m[2], 10)
+  if (!Number.isSafeInteger(n)) return null
+  return m[1] === undefined ? String(n) : `${m[1]}:${n}`
+}
+
+export const TRACK_INDEX_HINT = "0, a:1 or s:3"
+
 /** Human readable problems; Run is disabled while there are any. */
-export function validate(o: DeewOptions): string[] {
+export function validate(
+  o: DeewOptions,
+  defaults: DefaultModes = PROGRAM_DEFAULT_MODES
+): string[] {
   const problems: string[] = []
-  const ti = parseInteger(o.trackIndex)
-  if (ti === null || ti < 0) problems.push("Track index must be 0 or more.")
+  if (normalizeTrackIndex(o.trackIndex) === null) {
+    problems.push(`Track index must be like ${TRACK_INDEX_HINT}.`)
+  }
   // -mo measures the source: the format and the encoding options are ignored.
   if (o.measureOnly) return problems
   const dn = parseInteger(o.dialnorm)
   if (dn === null || dn < -31 || dn > 0) {
     problems.push("Dialnorm must be between -31 and 0.")
   } else if (dn !== 0 && !supportsDialnorm(o.format)) {
-    problems.push("Dialnorm doesn't work for AAC and AC4 Atmos.")
+    problems.push("Dialnorm doesn't work for AAC, AC4 Atmos and AC-4 IMS.")
   }
   if (o.drc === "none" && !supportsDrcNone(o.format)) {
     problems.push("DRC none is not supported for AC4.")
+  }
+  if (
+    o.format === "ac4-ims" &&
+    effectiveAc4ImsMode(o.ac4ImsMode, defaults) === "music" &&
+    o.drc !== "music_light"
+  ) {
+    problems.push("AC-4 IMS music mode needs the DRC music_light.")
   }
   return problems
 }
@@ -720,14 +979,16 @@ export function buildArgs(
     channels?: number | null
     /** The config's `[default_modes]`; a mode equal to it is not passed. */
     defaultModes?: DefaultModes
+    /** The config's on/off values; a toggle equal to it is not passed. */
+    ddFilterDefaults?: DdFilterDefaults
   } = {}
 ): string[] {
   const defaultModes = layout.defaultModes ?? PROGRAM_DEFAULT_MODES
   const args: string[] = []
   if (o.inputs.length > 0) args.push("-i", ...o.inputs)
 
-  const ti = parseInteger(o.trackIndex)
-  if (ti !== null && ti !== 0) args.push("-ti", String(ti))
+  const ti = normalizeTrackIndex(o.trackIndex)
+  if (ti !== null && ti !== "0" && ti !== "a:0") args.push("-ti", ti)
   // -oi overrides -o, so the (greyed out) directory is not passed with it.
   if (o.outputToInput) args.push("-oi")
   else if (o.output.trim() !== "") args.push("-o", o.output.trim())
@@ -747,22 +1008,44 @@ export function buildArgs(
   ) {
     args.push("--ddp-atmos-mode", o.ddpAtmosMode)
   }
+  if (
+    ac4ImsModeApplies(o.format) &&
+    o.ac4ImsMode !== DEFAULT_MODE &&
+    o.ac4ImsMode !== defaultModes.ac4Ims
+  ) {
+    args.push("--ac4-ims-mode", o.ac4ImsMode)
+  }
   if (o.bitrate !== DEFAULT_BITRATE && o.bitrate.trim() !== "") {
     args.push("-b", o.bitrate.trim())
   }
-  if (o.downmix !== "none") args.push("-dm", o.downmix)
+  if (o.downmix !== "none" && supportsDownmix(o.format)) {
+    args.push("-dm", o.downmix)
+  }
   if (o.delay.trim() !== "") args.push(`-d=${o.delay.trim()}`)
-  if (supportsDrc(o.format) && o.drc !== defaultDrc(o.format)) {
+  const imsMode = effectiveAc4ImsMode(o.ac4ImsMode, defaultModes)
+  if (supportsDrc(o.format) && o.drc !== defaultDrc(o.format, imsMode)) {
     args.push("-r", o.drc)
   }
   const dn = parseInteger(o.dialnorm)
-  if (dn !== null && dn !== 0) args.push("-dn", String(dn))
+  if (dn !== null && dn !== 0 && supportsDialnorm(o.format)) {
+    args.push("-dn", String(dn))
+  }
   if (o.instances.trim() !== "") args.push("-in", o.instances.trim())
 
   if (o.disableLfe && disableLfeApplies(o.format, layout.channels, o.downmix)) {
     args.push("-dl")
   }
-  if (o.noPhaseShift && noPhaseShiftApplies(o.format)) args.push("-nps")
+  const filterDefaults = layout.ddFilterDefaults ?? PROGRAM_DD_FILTER_DEFAULTS
+  for (const [key, flag] of DD_FILTER_FLAGS) {
+    const value = o[key]
+    if (
+      value !== null &&
+      value !== filterDefaults[key] &&
+      ddFilterApplies(key, o.format)
+    ) {
+      args.push(flag, value ? "on" : "off")
+    }
+  }
   if (o.keepTemp) args.push("-k")
   if (o.keepLog) args.push("-kl")
   if (o.measureOnly) args.push("-mo")

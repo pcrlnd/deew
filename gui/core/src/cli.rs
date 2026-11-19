@@ -104,17 +104,36 @@ pub fn save_gui_settings(settings: &GuiSettings) -> Result<(), String> {
     crate::settings::save(config_path().as_deref(), settings)
 }
 
-/// Probes the inputs (directories are expanded like the CLI does) with the
-/// ffprobe that deew uses (next to deew, else in the PATH).
+/// Probes the inputs by asking the deew CLI next to this program
+/// (`deew --probe-json`), so the answer is exactly what deew will do:
+/// folders and patterns are expanded, the ffprobe is the one deew uses.
+/// `track_index` is the `-ti` text, omitted when empty.
 pub fn probe_inputs(
     inputs: &[String],
-    track_index: u32,
+    track_index: &str,
 ) -> Result<crate::probe::ProbeResult, String> {
-    let cli_dir = sidecar_path()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf));
-    let ffprobe = crate::probe::resolve_ffprobe(cli_dir.as_deref())?;
-    Ok(crate::probe::probe_files(&ffprobe, inputs, track_index))
+    let mut command = std::process::Command::new(sidecar_path()?);
+    command.arg("--probe-json");
+    if !track_index.trim().is_empty() {
+        command.arg("-ti").arg(track_index.trim());
+    }
+    command
+        .arg("-i")
+        .args(inputs)
+        .env("NO_COLOR", "1")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // The release GUI has no console; do not flash one for deew.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("failed to run the deew CLI: {e}"))?;
+    crate::probe::parse_probe_json(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(test)]

@@ -138,6 +138,12 @@ fn help() {
 }
 
 #[test]
+fn full_help() {
+    assert_golden(&["-fh"], "help_full.txt", 0);
+    assert_golden(&["--full-help"], "help_full.txt", 0);
+}
+
+#[test]
 fn no_args_prints_help_and_exits_1() {
     assert_golden(&[], "no_args.txt", 1);
 }
@@ -252,6 +258,43 @@ mod linux {
             "{text}"
         );
         assert!(text.contains(&template()), "{text}");
+    }
+
+    #[test]
+    fn generate_config_asks_before_overwriting() {
+        let sb = Sandbox::new();
+        std::fs::write(sb.config(), "# mine\n").unwrap();
+        let out = sb.run(&["-gc"], "y\n");
+        let text = stdout(&out);
+        assert_eq!(out.status.code(), Some(0), "{text}");
+        assert!(
+            text.contains("config.toml already exists at")
+                && text.contains("overwrite it with the defaults? [y/n]: "),
+            "{text}"
+        );
+        assert_eq!(std::fs::read_to_string(sb.config()).unwrap(), template());
+    }
+
+    #[test]
+    fn generate_config_declined_keeps_the_file() {
+        let sb = Sandbox::new();
+        std::fs::write(sb.config(), "# mine\n").unwrap();
+        let out = sb.run(&["-gc"], "n\n");
+        assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+        assert!(stdout(&out).contains("overwrite it with the defaults?"));
+        assert_eq!(std::fs::read_to_string(sb.config()).unwrap(), "# mine\n");
+    }
+
+    #[test]
+    fn generate_config_no_prompt_overwrites_without_asking() {
+        let sb = Sandbox::new();
+        std::fs::write(sb.config(), "# mine\n").unwrap();
+        let out = sb.run(&["-gc", "-np"], "");
+        let text = stdout(&out);
+        assert_eq!(out.status.code(), Some(0), "{text}");
+        assert!(!text.contains("[y/n]"), "{text}");
+        assert!(text.contains("Overwriting it (-np)."), "{text}");
+        assert_eq!(std::fs::read_to_string(sb.config()).unwrap(), template());
     }
 
     #[test]
@@ -440,4 +483,15 @@ Update your config file.\n"
         assert_eq!(out.status.code(), Some(0));
         assert!(!sb.config().exists());
     }
+}
+
+#[test]
+fn probe_json_is_hidden() {
+    for flag in ["-h", "-fh"] {
+        let out = Command::new(BIN).arg(flag).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(!text.contains("probe-json"), "{flag}");
+    }
+    let out = Command::new(BIN).arg("--bogus-flag").output().unwrap();
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("probe-json"));
 }
