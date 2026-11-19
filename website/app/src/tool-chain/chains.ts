@@ -32,7 +32,7 @@ const alt = (rows: FlowItem[][]): FlowItem => ({ type: "alt", rows })
 export const chains: Chain[] = [
   {
     title: "dd · ddp ≤ 5.1 · ac4 · aac",
-    note: "DEE measures while encoding · NAME.wav instead of the pipe with pipe = false",
+    note: "DEE measures while encoding · NAME.wav instead of the pipe with pipe = false, and on Windows with pipe = 'auto' when 2 or more encodes run at once",
     flow: [
       file("IN"),
       arrow(),
@@ -123,6 +123,17 @@ export const chains: Chain[] = [
       arrow(),
       file("NAME.atmos"),
       arrow(),
+      tool("dee_measure_loudness"),
+      arrow("measured loudness →"),
+      step("loudness in the bar"),
+    ],
+  },
+  {
+    title: "-mo with an Atmos master",
+    note: "ADM BWF or DAMF · read by DEE as it is, no ffprobe, ffmpeg or truehdd",
+    flow: [
+      file("IN.wav (ADM BWF) / IN.atmos (DAMF)"),
+      arrow("atmos_mezz →"),
       tool("dee_measure_loudness"),
       arrow("measured loudness →"),
       step("loudness in the bar"),
@@ -232,6 +243,71 @@ export const chains: Chain[] = [
       file("OUT.ac4"),
     ],
   },
+  {
+    title: "dd · ddp from an Atmos master",
+    note: "5.1 render by DEE (-dm 2 / 1: stereo / mono) · the master is read as it is, no ffmpeg, no truehdd, nothing in TEMP",
+    flow: [
+      file("IN.wav (ADM BWF) / IN.atmos (DAMF)"),
+      arrow("--input-format atmos_mezz →"),
+      tool("dee_ddp_encoder"),
+      arrow(),
+      file("OUT"),
+    ],
+  },
+  {
+    title: "ddp-atmos · thd-atmos · ac4-atmos from an Atmos master",
+    note: "no truehdd, no ffmpeg · the same encoder commands as with a TrueHD Atmos source, with the master as -i",
+    flow: [
+      file("IN.wav (ADM BWF) / IN.atmos (DAMF)"),
+      arrow("atmos_mezz →"),
+      tool("dee_shim ddpjoc / dthd_encoder, or dee_ac4ajoc_encoder"),
+      arrow(),
+      file("OUT"),
+    ],
+  },
+  {
+    title: "ac4-ims from 5.1 / 7.1",
+    note: "immersive stereo from a 5.1 wav · 7.x is downmixed to 5.1 by ffmpeg, 5.0 gets a silent LFE · always a wav, never the pipe · no manifest, no --temp-dir",
+    flow: [
+      file("IN"),
+      arrow(),
+      tool("ffmpeg"),
+      arrow(),
+      file("NAME[.dm6].wav"),
+      arrow(),
+      tool("dee_ac4ims_encoder"),
+      arrow(),
+      file("OUT.ac4"),
+    ],
+  },
+  {
+    title: "ac4-ims from TrueHD Atmos",
+    note: "raw .thd or a container track · decoded by truehdd",
+    flow: [
+      alt([
+        [file("IN.thd"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+      ]),
+      tool("truehdd decode"),
+      arrow(),
+      file("NAME.atmos"),
+      arrow(),
+      tool("dee_ac4ims_encoder"),
+      arrow(),
+      file("OUT.ac4"),
+    ],
+  },
+  {
+    title: "ac4-ims from an Atmos master",
+    note: "ADM BWF or DAMF · read by DEE as it is",
+    flow: [
+      file("IN.wav (ADM BWF) / IN.atmos (DAMF)"),
+      arrow("atmos_mezz →"),
+      tool("dee_ac4ims_encoder"),
+      arrow(),
+      file("OUT.ac4"),
+    ],
+  },
 ]
 
 export type LoudnessRow = { cond: string; flow: FlowItem[]; note?: string }
@@ -273,6 +349,17 @@ export const loudnessTrees: LoudnessTree[] = [
           step("loudness in the bar"),
         ],
         note: "decoded by truehdd",
+      },
+      {
+        cond: "Atmos master",
+        flow: [
+          file("IN (ADM BWF / DAMF)"),
+          arrow(),
+          tool("dee_measure_loudness"),
+          arrow("measured loudness →"),
+          step("loudness in the bar"),
+        ],
+        note: "read as it is, no truehdd",
       },
     ],
   },

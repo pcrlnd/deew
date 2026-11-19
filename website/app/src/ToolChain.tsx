@@ -206,9 +206,11 @@ export default function ToolChain() {
               </h2>
               <p>
                 Three lanes: probing (always), the channel path (DD, DDP,
-                TrueHD, AC4, AAC) and the Atmos path (ddp-atmos, thd-atmos,
-                ac4-atmos). Both paths end in one DEE encoder, wrapped in
-                dee_shim when the format needs it.
+                TrueHD, AC4, AC4 IMS, AAC) and the Atmos path (ddp-atmos,
+                thd-atmos, ac4-atmos, and ac4-ims from an Atmos source). Both
+                paths end in one DEE encoder, wrapped in dee_shim when the
+                format needs it. An Atmos master (ADM BWF, DAMF) skips ffprobe,
+                ffmpeg and truehdd: DEE reads it as it is.
               </p>
             </div>
             <div className="diagram">
@@ -216,7 +218,7 @@ export default function ToolChain() {
                 className="dg"
                 viewBox="0 0 1120 450"
                 role="img"
-                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD and pipe = false) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
+                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD, AC4 IMS, pipe = false and, on Windows, pipe = 'auto' with 2 or more encodes at once) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
               >
                 <defs>
                   <marker
@@ -312,8 +314,11 @@ export default function ToolChain() {
                 <text className="lbl" x="344" y="196" textAnchor="middle">
                   PCM
                 </text>
+                <text className="lbl" x="700" y="188" textAnchor="middle">
+                  -i /dev/stdin
+                </text>
                 <text className="lbl" x="700" y="204" textAnchor="middle">
-                  -i /dev/stdin (Windows: named_pipe://\\.\pipe\deew-PID-JOB)
+                  (Windows: named_pipe://\\.\pipe\deew-PID-JOB)
                 </text>
                 <text className="lbl" x="700" y="228" textAnchor="middle">
                   --input-format pcm_s24le:…
@@ -694,7 +699,7 @@ export default function ToolChain() {
                     y="243"
                     textAnchor="middle"
                   >
-                    dee_ac4(ajoc)_encoder
+                    dee_ac4(ajoc|ims)_encoder
                   </text>
                   <text
                     className="t-tool t-sub"
@@ -773,12 +778,13 @@ export default function ToolChain() {
                 What deew runs for <code>-mo</code> (measure only) and{" "}
                 <code>-dn</code> (custom dialnorm), by channel count and format.
                 <code>-mo</code> measures the source and ignores <code>-f</code>
-                , <code>-dm</code>, <code>-r</code> and <code>-dn</code>.
+                , <code>-dm</code>, <code>-r</code> and <code>-dn</code>. It
+                takes any Atmos master (ADM BWF, DAMF) as it is.
               </p>
             </div>
             <LoudnessTree />
             <p className="lt-foot">
-              <code>-dn</code> has no effect for AAC and AC4 Atmos.{" "}
+              <code>-dn</code> is an error for AAC, AC4 Atmos and AC4 IMS.{" "}
               <code>-dn 0</code> keeps the default: DEE measures while it
               encodes.
             </p>
@@ -1035,26 +1041,37 @@ export default function ToolChain() {
                     <ScanSearchIcon />
                     ffprobe
                   </h3>
-                  <span className="tag">external · every input</span>
+                  <span className="tag">external · every input but Atmos masters</span>
                   <p>
                     Runs once per input before anything else. Its JSON decides
                     the layout, the bitrate table, the Atmos checks and the
-                    progress total.
+                    progress total. An Atmos master (ADM BWF: a wave file with{" "}
+                    <code>chna</code> and <code>axml</code> chunks; DAMF:{" "}
+                    <code>.atmos</code> with its <code>.atmos.audio</code> and{" "}
+                    <code>.atmos.metadata</code>) is recognised by deew from its
+                    headers and is not probed, <code>-ti</code> doesn't apply
+                    to it.
                   </p>
                 </div>
                 <div className="ports">
                   <div className="port">
                     <h4>In</h4>
                     <ul>
-                      <li>the input file</li>
+                      <li>
+                        the input file (<code>-i</code> takes files, folders and
+                        wildcard patterns, deew expands them)
+                      </li>
                     </ul>
                   </div>
                   <div className="port">
                     <h4>Out → deew</h4>
                     <ul>
                       <li>
-                        audio stream <code>TI</code>: codec, profile (Atmos?),
-                        channels, channel layout, sample rate, bit depth
+                        audio stream <code>TI</code> (<code>N</code> or{" "}
+                        <code>a:N</code>: the Nth audio track, <code>s:N</code>:
+                        the stream with index N of the container, which has to
+                        be audio): codec, profile (Atmos?), channels, channel
+                        layout, sample rate, bit depth
                       </li>
                       <li>duration (progress total, decode length check)</li>
                     </ul>
@@ -1077,13 +1094,20 @@ export default function ToolChain() {
                   <span className="tag">external · channel formats</span>
                   <p>
                     Turns track <code>TI</code> into the PCM DEE reads, in DEE's
-                    channel order. By default (<code>pipe = true</code>) the raw
-                    samples go straight into DEE (AC4 <code>-dn</code> runs ffmpeg
-                    twice, once for the measurement and once for the encode);
-                    TrueHD and <code>pipe = false</code> write an RF64 wav
-                    instead,
-                    which is skipped when it is already in TEMP from a run with{" "}
-                    <code>-k</code>.
+                    channel order. With <code>pipe = 'auto'</code> (the default)
+                    the raw samples go straight into DEE (AC4 <code>-dn</code>{" "}
+                    runs ffmpeg twice, once for the measurement and once for the
+                    encode). On Windows 'auto' pipes only when fewer than 2
+                    encodes run at once, otherwise it writes the wav; Linux and
+                    macOS always pipe. <code>pipe = 'always'</code> forces the
+                    pipe, <code>pipe = false</code> turns it off. TrueHD and AC4
+                    IMS always write an RF64 wav (their encoders don't read the
+                    pipe), which is skipped when it is already in TEMP from a
+                    run with <code>-k</code>. On Windows the dee_shim layouts (7.1
+                    standard, 7.0) also read the wav, unless the installed
+                    dee_shim passes a named pipe through unchanged. The{" "}
+                    <code>Piping</code> row of the summary shows what was
+                    decided.
                   </p>
                 </div>
                 <div className="ports">
@@ -1101,7 +1125,8 @@ export default function ToolChain() {
                       <li>
                         raw PCM on <b>stdout → DEE</b> (the pipe); on
                         Windows it is written to DEE's named pipe{" "}
-                        <code>\\.\pipe\deew-PID-JOB</code>
+                        <code>\\.\pipe\deew-PID-JOB</code> (only with fewer
+                        than 2 encodes at once)
                       </li>
                       <li>
                         or <code>TEMP/NAME[.variant].wav</code>, RF64
@@ -1120,7 +1145,7 @@ export default function ToolChain() {
                     {"\n       "}
                     <span className="c">{"-map 0:a:TI"}</span>
                     {"                                   "}
-                    <span className="m">{"# when no filter is needed"}</span>
+                    <span className="m">{"# when no filter is needed (-ti s:N: -map 0:N, [0:N])"}</span>
                     {"\n       -c pcm_s"}
                     <span className="v">{"16|24|32"}</span>
                     {"le                           "}
@@ -1219,7 +1244,8 @@ export default function ToolChain() {
                         </tr>
                         <tr>
                           <td>
-                            TrueHD <code>-dm 6</code> from 7.1
+                            TrueHD <code>-dm 6</code> from 7.1, AC4 IMS from 7.x
+                            (always 5.1)
                           </td>
                           <td className="wrapcode">
                             <code>
@@ -1249,7 +1275,7 @@ export default function ToolChain() {
                           </td>
                         </tr>
                         <tr>
-                          <td>not 48 kHz (DD, DDP, AC4, AAC)</td>
+                          <td>not 48 kHz (DD, DDP, AC4, AC4 IMS, AAC)</td>
                           <td>soxr to 48000</td>
                           <td>
                             <code>NAME.wav</code>
@@ -1311,6 +1337,8 @@ export default function ToolChain() {
                     <span className="v">{"TI"}</span>
                     {" -c copy -f truehd "}
                     <span className="v">{"-"}</span>
+                    {"   "}
+                    <span className="m">{"# -ti s:N: -map 0:N"}</span>
                   </pre>
                 </div>
               </article>
@@ -1320,7 +1348,9 @@ export default function ToolChain() {
                     <PackageOpenIcon />
                     truehdd
                   </h3>
-                  <span className="tag">external · Atmos formats</span>
+                  <span className="tag">
+                    external · Atmos formats, ac4-ims from TrueHD Atmos
+                  </span>
                   <p>
                     Decodes the Atmos presentation into a DAMF master: the
                     object audio plus its metadata. Afterwards deew checks that
@@ -1365,6 +1395,59 @@ export default function ToolChain() {
               <article className="module">
                 <div className="module-head">
                   <h3>
+                    <BoxIcon />
+                    Atmos masters
+                  </h3>
+                  <span className="tag">no tool · read by DEE</span>
+                  <p>
+                    ADM BWF and DAMF masters go to DEE as they are: no ffprobe,
+                    no ffmpeg, no truehdd and nothing in TEMP (the master is
+                    your file, deew never removes it). They are inputs of{" "}
+                    <code>ddp-atmos</code>, <code>thd-atmos</code>,{" "}
+                    <code>ac4-atmos</code> and <code>ac4-ims</code>;{" "}
+                    <code>dd</code> and <code>ddp</code> get a 5.1 render of the
+                    master from DEE (<code>-dm 2</code> / <code>1</code>:
+                    stereo / mono); <code>-mo</code> measures them.{" "}
+                    <code>thd</code>, <code>ac4</code> and <code>aac</code>{" "}
+                    reject them. The summary names the source "ADM BWF Atmos
+                    master" or "DAMF Atmos master".
+                  </p>
+                </div>
+                <div className="ports">
+                  <div className="port">
+                    <h4>In</h4>
+                    <ul>
+                      <li>
+                        ADM BWF: a wave file with <code>chna</code> and{" "}
+                        <code>axml</code> chunks, found by its headers
+                      </li>
+                      <li>
+                        DAMF: <code>.atmos</code> with{" "}
+                        <code>.atmos.audio</code> and{" "}
+                        <code>.atmos.metadata</code>; in a folder the two
+                        parts are not inputs of their own, a missing part is an
+                        error
+                      </li>
+                    </ul>
+                  </div>
+                  <div className="port">
+                    <h4>Out → DEE</h4>
+                    <ul>
+                      <li>
+                        <code>--input-format atmos_mezz -i IN</code>
+                      </li>
+                      <li>
+                        a DAMF's duration comes from <code>atmos_info</code> (a
+                        DEE tool, if it is there); without it the duration is
+                        unknown
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </article>
+              <article className="module">
+                <div className="module-head">
+                  <h3>
                     <GaugeIcon />
                     dee_measure_loudness
                   </h3>
@@ -1382,11 +1465,12 @@ export default function ToolChain() {
                       <li>
                         the PCM pipe (<code>PIPE</code>; for AC4 <code>-dn</code> ffmpeg
                         feeds it before the encode too), or{" "}
-                        <code>TEMP/NAME.wav</code> with <code>pipe = false</code>
+                        <code>TEMP/NAME.wav</code> without the pipe
                       </li>
                       <li>
                         <code>TEMP/NAME.atmos</code> of a TrueHD Atmos source with{" "}
-                        <code>-mo</code> (<code>--input-format atmos_mezz</code>)
+                        <code>-mo</code> (<code>--input-format atmos_mezz</code>),
+                        or an Atmos master itself
                       </li>
                     </ul>
                   </div>
@@ -1425,7 +1509,8 @@ export default function ToolChain() {
                     delay and temp options. DEE's <code>[===&gt;] N %</code>{" "}
                     lines drive the bar; <code>[Source loudness]</code> shows
                     the measured dB. DD, DDP, AC4, AAC and <code>-mo</code> read
-                    ffmpeg's PCM from the pipe: <code>PIPE</code> is{" "}
+                    ffmpeg's PCM from the pipe (<code>pipe = 'auto'</code>, see
+                    ffmpeg · convert): <code>PIPE</code> is{" "}
                     <code>/dev/stdin</code> (Windows:{" "}
                     <code>named_pipe://\\.\pipe\deew-PID-JOB</code>, which DEE
                     creates before ffmpeg is started) and <code>PCMFMT</code>{" "}
@@ -1433,10 +1518,13 @@ export default function ToolChain() {
                     <code>
                       pcm_s24le:sample_rate=R:channels=N:streaming=1:sample_count=C
                     </code>{" "}
-                    (<code>pcm_f32le</code> for a 32 bit plan). With{" "}
-                    <code>pipe = false</code> they read{" "}
+                    (<code>pcm_f32le</code> for a 32 bit plan). Without the pipe
+                    (<code>pipe = false</code>, or <code>'auto'</code> on Windows
+                    with 2 or more encodes at once) they read{" "}
                     <code>--input-format wav -i TEMP/NAME.wav</code> instead, as
-                    TrueHD always does. With{" "}
+                    TrueHD and AC4 IMS always do. An Atmos master is read as{" "}
+                    <code>--input-format atmos_mezz -i IN</code> by every format
+                    that takes it. With{" "}
                     <code>-dn</code> (not AC4) the loudness option is{" "}
                     <code>--loudness-management skip:dialnorm=N</code> instead
                     of <code>measure_only</code>.
@@ -1473,6 +1561,12 @@ export default function ToolChain() {
                 </div>
                 <div className="module-body">
                   <h4>DD · DDP (≤ 5.1, and 7.1 with --ddp-mode bluray)</h4>
+                  <p className="lede" style={{ fontSize: "13px" }}>
+                    From an Atmos master the same command reads{" "}
+                    <code>--input-format atmos_mezz -i IN</code>, with{" "}
+                    <code>-c 5.1</code> (<code>stereo</code> / <code>mono</code>{" "}
+                    with <code>-dm 2</code> / <code>1</code>) as DEE's render.
+                  </p>
                   <pre className="argv">
                     <span className="p">{"dee_ddp_encoder"}</span>
                     {" --progress 1 --overwrite 1 --input-format "}
@@ -1488,6 +1582,10 @@ export default function ToolChain() {
                     <span className="c">{"[:lfe_on=0]"}</span>
                     <span className="c">
                       {"[:surround_90deg_phase_shift=0]"}
+                    </span>
+                    <span className="c">{"[:lfe_filter=0]"}</span>
+                    <span className="c">
+                      {"[:surround_3dB_attenuation=1]"}
                     </span>
                     {" --data-rate "}
                     <span className="v">{"B"}</span>
@@ -1510,7 +1608,19 @@ export default function ToolChain() {
                     {"\n                "}
                     <span className="m">
                       {
-                        "# -nps (--no-phase-shift) adds :surround_90deg_phase_shift=0 to -e, DD / DDP surround (DDP Atmos: dee_shim --phase90 off)"
+                        "# -sps off (or surround_phase_shift = false in the config) adds :surround_90deg_phase_shift=0 to -e (DDP Atmos: dee_shim --phase90 off)"
+                      }
+                    </span>
+                    {"\n                "}
+                    <span className="m">
+                      {
+                        "# -lpf off (low_pass_filter = false) adds :lfe_filter=0, only with an LFE channel in the output"
+                      }
+                    </span>
+                    {"\n                "}
+                    <span className="m">
+                      {
+                        "# -s3a on (surround_3db_attenuation = true) adds :surround_3dB_attenuation=1, only with surround channels (5.1 and up)"
                       }
                     </span>
                   </pre>
@@ -1540,6 +1650,41 @@ export default function ToolChain() {
                     {" --temp-dir "}
                     <span className="v">{"TEMP/dee-PID-INDEX"}</span>
                   </pre>
+                  <h4>AC4 IMS</h4>
+                  <pre className="argv">
+                    <span className="p">{"dee_ac4ims_encoder"}</span>
+                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="v">{"wav|atmos_mezz"}</span>
+                    {" -i "}
+                    <span className="v">{"TEMP/NAME.wav|TEMP/NAME.atmos|IN"}</span>
+                    {"\n                -o "}
+                    <span className="v">{"OUT"}</span>
+                    {" --data-rate "}
+                    <span className="v">{"B"}</span>
+                    {" -e "}
+                    <span className="v">{"drc_profile=P"}</span>
+                    {"\n                --loudness-management measure_only"}
+                    {"\n                "}
+                    <span className="c">
+                      {"[--start S | --add-silence S:0]"}
+                    </span>
+                    {"          "}
+                    <span className="m">
+                      {"# no --temp-dir, no manifest, no -c"}
+                    </span>
+                    {"\n                "}
+                    <span className="m">
+                      {
+                        "# --ac4-ims-mode music (or ac4_ims = 'music' in [default_modes]): -e mode=music:drc_profile=music_light and --loudness-management measure_only:dialogue_intelligence=0"
+                      }
+                    </span>
+                    {"\n                "}
+                    <span className="m">
+                      {
+                        "# input: the 5.1 wav of ffmpeg, the .atmos of truehdd (TrueHD Atmos) or the Atmos master itself (atmos_mezz)"
+                      }
+                    </span>
+                  </pre>
                   <h4>AAC</h4>
                   <pre className="argv">
                     <span className="p">{"dee_aac_encoder"}</span>
@@ -1567,6 +1712,9 @@ export default function ToolChain() {
                     <span className="v">{"2ch|6ch|8ch"}</span>
                     {":drc_profile="}
                     <span className="v">{"P"}</span>
+                    <span className="c">
+                      {"[:surround_3dB_attenuation=1]"}
+                    </span>
                     {"\n                 --input-format wav -i "}
                     <span className="v">{"TEMP/NAME.wav"}</span>
                     {" -o "}
@@ -1650,7 +1798,7 @@ export default function ToolChain() {
                           </td>
                         </tr>
                         <tr>
-                          <td>AC4, AC4 Atmos</td>
+                          <td>AC4, AC4 Atmos, AC4 IMS</td>
                           <td>2048</td>
                           <td>
                             <code>--start 0.042667</code>
@@ -1741,7 +1889,7 @@ export default function ToolChain() {
                     {"\n         "}
                     <span className="m">
                       {
-                        "# -nps adds --phase90 off (dee_shim turns the filter off in the coded backbone)"
+                        "# -sps off adds --phase90 off (dee_shim turns the filter off in the coded backbone)"
                       }
                     </span>
                   </pre>
@@ -1827,7 +1975,7 @@ export default function ToolChain() {
                     <span className="v">{"TEMP/dee-PID-INDEX"}</span>
                     {"\n         "}
                     <span className="m">
-                      {"# -nps adds :surround_90deg_phase_shift=0 to -e"}
+                      {"# -sps off adds :surround_90deg_phase_shift=0 to -e, -lpf off :lfe_filter=0, -s3a on :surround_3dB_attenuation=1"}
                     </span>
                   </pre>
                   <div className="table-wrap">
@@ -1939,6 +2087,9 @@ export default function ToolChain() {
                     <ul>
                       <li>ffprobe JSON</li>
                       <li>
+                        the headers of ADM BWF / DAMF Atmos masters (no ffprobe)
+                      </li>
+                      <li>
                         ffmpeg stderr (<code>time=</code>), truehdd JSON lines,
                         DEE stdout (<code>N %</code>,{" "}
                         <code>measured_loudness</code>)
@@ -1974,13 +2125,26 @@ export default function ToolChain() {
                       <li>partial output on Ctrl-C</li>
                     </ul>
                   </div>
+                  <div className="port">
+                    <h4>Keeps awake</h4>
+                    <ul>
+                      <li>
+                        no sleep while it encodes or measures: Windows{" "}
+                        <code>SetThreadExecutionState</code>, Linux a{" "}
+                        <code>systemd-inhibit</code> that ends with deew, macOS{" "}
+                        <code>caffeinate</code>
+                      </li>
+                    </ul>
+                  </div>
                 </div>
               </article>
             </div>
           </section>
           <footer>
-            Built from the deew source on 2026-11-11 ({__DEEW_VERSION__}):
-            src/commands.rs, src/probe.rs, src/pipeline.rs, src/encode.rs. Tool
+            Built from the deew source on 2026-11-19 ({__DEEW_VERSION__}):
+            src/commands.rs, src/probe.rs, src/pipeline.rs, src/encode.rs,
+            src/plan.rs, src/master.rs, src/pipe.rs, src/awake.rs,
+            src/config.rs. Tool
             lookup: next to deew (DEE in the <code>dee</code> folder), then
             PATH.
           </footer>
