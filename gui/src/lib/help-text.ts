@@ -35,6 +35,14 @@ export const HELP = {
     "DEE's 120 Hz low-pass filter on the LFE channel (DD and DDP only, not DDP Atmos).\nDefault: on (config: low_pass_filter)",
   surround3dbAttenuation:
     "3 dB attenuation of the surround channels (DD, DDP and TrueHD; TrueHD asks first because the output won't be identical to the source).\nDefault: off (config: surround_3db_attenuation)",
+  warpMode:
+    "truehdd's warp mode, only used when the TrueHD Atmos source has none (DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only).\nDefault: from the source's metadata (config: truehdd_warp_mode)",
+  truehddBedConform:
+    "truehdd's bed conformance, for Atmos sources whose bed comes out as objects (DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only).\nDefault: off (config: truehdd_bed_conform)",
+  outputName:
+    "The name of the output file, only with a single input file (greyed out otherwise). deew adds the extension; a name with a folder is an error, use the output directory for that. The characters : * ? \" < > | become _.\nDefault: the input's name (see the template)",
+  outputTemplate:
+    "The name of each output file without the extension, from placeholders: {stem} (input name without extension and delay tag), {name} (with the delay tag), {format}, {codec}, {channels}, {bitrate}, {lang} and {title} (tags of the audio track), {track}. Empty values drop out with a neighbouring separator (. space _ -).\nDefault: from the config (output template), {stem}. Ignored when an output name is set.",
   keepTemp: "Keep temp files.",
   keepLog:
     "Keep TrueHD's encode log and write a .deew-log.html report next to each output.",

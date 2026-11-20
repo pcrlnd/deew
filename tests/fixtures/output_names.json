@@ -1,0 +1,721 @@
+[
+ {
+  "text": "{stem}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "{stem}",
+  "ext": "eb3",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.eb3"
+ },
+ {
+  "text": "{name}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie DELAY -5ms.ec3"
+ },
+ {
+  "text": "{stem}.{format}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ddp.ec3"
+ },
+ {
+  "text": "{stem} {codec}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie DDP.ec3"
+ },
+ {
+  "text": "{stem} {channels}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie 5.1.ec3"
+ },
+ {
+  "text": "{stem} {bitrate}k",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie 1024k.ec3"
+ },
+ {
+  "text": "{stem}.{lang}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.eng.ec3"
+ },
+ {
+  "text": "{stem} [{title}]",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie [Main].ec3"
+ },
+ {
+  "text": "{stem}_t{track}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie_t0.ec3"
+ },
+ {
+  "text": "{stem}.{lang}.ddp",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ddp.ec3"
+ },
+ {
+  "text": "{lang} - {stem}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "{stem} - {lang} - {title}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie - Main.ec3"
+ },
+ {
+  "text": "{stem} - {lang} - {title}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "{stem}.{lang}.{title}.ddp",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "",
+   "track": "0"
+  },
+  "expected": "Movie.ddp.ec3"
+ },
+ {
+  "text": "{stem}_{lang}-{title}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie_Main.ec3"
+ },
+ {
+  "text": "{stem}{lang}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "{stem} {bitrate}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "-{stem}-",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "-Movie-.ec3"
+ },
+ {
+  "text": "{lang}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "empty"
+ },
+ {
+  "text": "{stem} {lang}",
+  "values": {
+   "stem": "a:b/c\\d*e?f\"g<h>i|j",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "a_b_c_d_e_f_g_h_i_j eng.ec3"
+ },
+ {
+  "text": "{stem}",
+  "values": {
+   "stem": "a<b>",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "a<b>.ec3"
+ },
+ {
+  "text": "{stem}: {title}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie_ Main.ec3"
+ },
+ {
+  "text": "{stem}.{title}.",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "x. ",
+   "track": "0"
+  },
+  "expected": "Movie.x.ec3"
+ },
+ {
+  "text": "{stem}.ec3",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "{stem}.EC3",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.EC3"
+ },
+ {
+  "text": "{stem}.commentary",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.commentary.ec3"
+ },
+ {
+  "text": "{stem}.ac3",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "ends with .ac3"
+ },
+ {
+  "text": "{stem}.ec3",
+  "ext": "thd",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": ".thd"
+ },
+ {
+  "text": "{stem}.thd",
+  "ext": "thd",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.thd"
+ },
+ {
+  "text": "{stem}",
+  "values": {
+   "stem": "a.ac3",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "a.ac3.ec3"
+ },
+ {
+  "text": "{stem}.{format}",
+  "ext": "thd",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "thd",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.thd.thd"
+ },
+ {
+  "text": "{stem",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "unbalanced"
+ },
+ {
+  "text": "stem}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "unbalanced"
+ },
+ {
+  "text": "{unknown}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "unknown placeholder"
+ },
+ {
+  "text": "{}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "unknown placeholder"
+ },
+ {
+  "text": "a/{stem}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "path separator"
+ },
+ {
+  "text": "a\\{stem}",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "path separator"
+ },
+ {
+  "text": "Movie",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "Movie.ec3",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "Movie.EC3",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.EC3"
+ },
+ {
+  "text": "Movie.commentary",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.commentary.ec3"
+ },
+ {
+  "text": "Movie.ac3",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "error": "ends with .ac3"
+ },
+ {
+  "text": "{stem} {x}",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "{stem} {x}.ec3"
+ },
+ {
+  "text": "a:b*c",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "a_b_c.ec3"
+ },
+ {
+  "text": "Movie. ",
+  "literal": true,
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ec3"
+ },
+ {
+  "text": "Movie",
+  "literal": true,
+  "ext": "ac4",
+  "values": {
+   "stem": "Movie",
+   "name": "Movie DELAY -5ms",
+   "format": "ddp",
+   "codec": "DDP",
+   "channels": "5.1",
+   "bitrate": "1024",
+   "lang": "eng",
+   "title": "Main",
+   "track": "0"
+  },
+  "expected": "Movie.ac4"
+ }
+]

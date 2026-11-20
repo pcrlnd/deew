@@ -164,6 +164,18 @@ DD/DDP/DDP Atmos, `-lpf` for DD/DDP only and `-s3a` for DD/DDP/TrueHD (the CLI
 asks first for TrueHD, because the output won't be identical to the source, and
 the question appears in the prompt pop-up / terminal); elsewhere they are greyed out.
 
+The "Warp mode" select (`-wm`) and the "Bed conform" checkbox (`-bc`) show the
+config's values (`truehdd_warp_mode`, `truehdd_bed_conform`) in the same way; they
+are for DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only, elsewhere
+they are greyed out.
+
+The "Output name" field (`-on`) names the output of a single input file (greyed
+out with more files, after folders are expanded) and the "Output template" field
+(`-ot`) the outputs of all of them; it starts with the config's `[output]
+template` and is only passed when you change it. The name wins over the template,
+both are greyed out with Measure only. Under the fields the output names of the
+first files are shown as deew will make them, the same rules as the CLI.
+
 **AC-4 IMS** (`ac4-ims`, immersive stereo, `.ac4`) takes 5.1 / 5.0 / 7.0 / 7.1 or
 Atmos inputs (TrueHD Atmos, ADM BWF, DAMF), but not Atmos and channel-based inputs
 in one run (the GUI warns about stereo / mono inputs and about mixed inputs). Its

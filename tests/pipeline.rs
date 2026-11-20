@@ -416,6 +416,22 @@ impl Env {
         path
     }
 
+    /// A 5.1 Matroska audio file with language and title tags on its track.
+    fn tagged(&self, name: &str, lang: &str, title: &str) -> PathBuf {
+        let path = self.work().join(name);
+        let status = command("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("anullsrc=channel_layout=5.1:sample_rate=48000")
+            .args(["-t", "2", "-c:a", "pcm_s24le"])
+            .args(["-metadata:s:a:0", &format!("language={lang}")])
+            .args(["-metadata:s:a:0", &format!("title={title}")])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "ffmpeg failed to generate {name}");
+        path
+    }
+
     /// A raw TrueHD file, the input of the Atmos formats.
     fn truehd(&self, name: &str) -> PathBuf {
         self.media(name, "7.1", 48000, "truehd")
@@ -857,7 +873,7 @@ fn sps_overrides_the_config_both_ways() {
     ok(&env.deew(&["-i", "fv.wav", "-f", "dd", "-sps", "off"]));
     assert_eq!(e(&env), format!("dd:drc_profile=none{PHASE_OFF}"));
     let out = env.deew(&["-i", "fv.wav", "-sps", "maybe"]);
-    assert_error(&out, "-sps, -lpf and -s3a can only be on or off.");
+    assert_error(&out, "-sps, -lpf, -s3a and -bc can only be on or off.");
 }
 
 #[test]
@@ -1262,6 +1278,11 @@ fn thd_presentation_and_leftovers() {
     // the log and mll files DEE leaves next to the output are removed
     assert!(!env.out().join("in.thd.log.html").exists());
     assert!(!env.out().join("in.thd.mll").exists());
+    // the leftovers of a named output follow its name
+    ok(&env.deew(&["-i", "in.wav", "-f", "thd", "-r", "speech", "-on", "Named"]));
+    assert!(env.out().join("Named.thd").exists());
+    assert!(!env.out().join("Named.thd.log.html").exists());
+    assert!(!env.out().join("Named.thd.mll").exists());
 
     env.media("sur.wav", "7.1", 48000, "pcm_s24le");
     ok(&env.deew(&["-i", "sur.wav", "-f", "thd", "-r", "speech"]));
@@ -1610,6 +1631,140 @@ fn ddp_atmos_with_dee_shim() {
     assert!(env.out().join("atmos.ec3").exists());
     // all three .atmos files are gone
     assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn warp_mode_and_bed_conform_only_work_for_the_truehdd_formats() {
+    let env = env_or_skip!();
+    env.media("fv.wav", "5.1", 48000, "pcm_s24le");
+    for format in ["dd", "ddp", "thd", "ac4", "aac"] {
+        let out = env.deew(&["-i", "fv.wav", "-f", format, "-wm", "normal"]);
+        assert_error(
+            &out,
+            "-wm/--warp-mode only works for DDP Atmos, TrueHD Atmos, AC4 Atmos, AC4 IMS and -mo.",
+        );
+        let out = env.deew(&["-i", "fv.wav", "-f", format, "-bc", "on"]);
+        assert_error(
+            &out,
+            "-bc/--bed-conform only works for DDP Atmos, TrueHD Atmos, AC4 Atmos, AC4 IMS and -mo.",
+        );
+    }
+    let out = env.deew(&["-i", "fv.wav", "-f", "ddp-atmos", "-wm", "stereo"]);
+    assert_error(
+        &out,
+        "-wm/--warp-mode can only be normal, warping, prologiciix or loro.",
+    );
+    let out = env.deew(&["-i", "fv.wav", "-f", "ddp-atmos", "-bc", "maybe"]);
+    assert_error(&out, "-sps, -lpf, -s3a and -bc can only be on or off.");
+    // -mo accepts them for any format
+    ok(&env.deew(&[
+        "-i", "fv.wav", "-mo", "-f", "thd", "-wm", "loro", "-bc", "on",
+    ]));
+    // the options of an allowed run are ignored for files that don't go through truehdd
+    let out = env.deew(&["-i", "fv.wav", "-f", "ac4-ims", "-wm", "loro", "-bc", "on"]);
+    ok(&out);
+    assert!(env.truehdd_run().is_none());
+}
+
+#[test]
+fn warp_mode_and_bed_conform_reach_truehdd() {
+    let env = env_or_skip!();
+    env.truehd("atmos.thd");
+    let out = env.deew(&["-i", "atmos.thd", "-f", "ddp-atmos", "-k"]);
+    ok(&out);
+    let truehdd = env.truehdd_run().unwrap();
+    assert!(!has(&truehdd, "--warp-mode") && !has(&truehdd, "--bed-conform"));
+    assert!(env.temp().join("atmos.atmos").exists());
+    assert!(!stdout(&out).contains("warp mode"), "{}", stdout(&out));
+
+    // other options: another name, the kept decode is not reused
+    fs::remove_file(env.path("bin").join("truehdd.args")).unwrap();
+    let out = env.deew(&[
+        "-i",
+        "atmos.thd",
+        "-f",
+        "ddp-atmos",
+        "-k",
+        "-wm",
+        "LoRo",
+        "-bc",
+        "on",
+    ]);
+    ok(&out);
+    let text = stdout(&out);
+    assert_eq!(
+        summary_row(&text, "truehdd"),
+        "warp mode loro, bed conform on"
+    );
+    let truehdd = env.truehdd_run().unwrap();
+    assert_eq!(opt(&truehdd, "--warp-mode"), "loro");
+    assert!(has(&truehdd, "--bed-conform"));
+    assert_eq!(
+        opt(&truehdd, "--output-path"),
+        env.temp().join("atmos.wm-loro.bc").to_str().unwrap()
+    );
+    for ext in ["atmos", "atmos.metadata", "atmos.audio"] {
+        assert!(
+            env.temp().join(format!("atmos.wm-loro.bc.{ext}")).exists(),
+            "{ext}"
+        );
+    }
+    // the same options reuse it
+    fs::remove_file(env.path("bin").join("truehdd.args")).unwrap();
+    ok(&env.deew(&[
+        "-i",
+        "atmos.thd",
+        "-f",
+        "ddp-atmos",
+        "-k",
+        "-wm",
+        "loro",
+        "-bc",
+        "on",
+    ]));
+    assert!(env.truehdd_run().is_none());
+
+    // the config sets them, the flags override it
+    let config = fs::read_to_string(env.config()).unwrap();
+    fs::write(
+        env.config(),
+        format!("truehdd_warp_mode = 'warping'\ntruehdd_bed_conform = true\n{config}"),
+    )
+    .unwrap();
+    let out = env.deew(&["-i", "atmos.thd", "-f", "thd-atmos", "-k"]);
+    ok(&out);
+    assert_eq!(
+        summary_row(&stdout(&out), "truehdd"),
+        "warp mode warping, bed conform on"
+    );
+    let truehdd = env.truehdd_run().unwrap();
+    assert_eq!(opt(&truehdd, "--warp-mode"), "warping");
+    assert!(has(&truehdd, "--bed-conform"));
+    assert_eq!(
+        opt(&truehdd, "--output-path"),
+        env.temp().join("atmos.wm-warping.bc").to_str().unwrap()
+    );
+    fs::remove_file(env.path("bin").join("truehdd.args")).unwrap();
+    let out = env.deew(&[
+        "-i",
+        "atmos.thd",
+        "-f",
+        "ddp-atmos",
+        "-k",
+        "-wm",
+        "normal",
+        "-bc",
+        "off",
+    ]);
+    ok(&out);
+    assert_eq!(summary_row(&stdout(&out), "truehdd"), "warp mode normal");
+    let truehdd = env.truehdd_run().unwrap();
+    assert_eq!(opt(&truehdd, "--warp-mode"), "normal");
+    assert!(!has(&truehdd, "--bed-conform"));
+    assert_eq!(
+        opt(&truehdd, "--output-path"),
+        env.temp().join("atmos.wm-normal").to_str().unwrap()
+    );
 }
 
 #[test]
@@ -4416,6 +4571,17 @@ impl Env {
 }
 
 #[test]
+fn probe_json_has_the_tags_of_the_track() {
+    let env = env_or_skip!();
+    env.tagged("t.mka", "eng", "Main");
+    let (json, code) = env.probe_json(&["-i", "t.mka"], &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["files"][0]["language"], "eng");
+    assert_eq!(json["files"][0]["title"], "Main");
+}
+
+#[test]
 fn probe_json_of_files_and_tracks() {
     let env = env_or_skip!();
     env.media("in.wav", "5.1", 48000, "pcm_s24le");
@@ -4437,6 +4603,9 @@ fn probe_json_of_files_and_tracks() {
     assert_eq!(files[0]["master"], false);
     assert_eq!(files[0]["error"], serde_json::Value::Null);
     assert_eq!(files[0]["skipped"], false);
+    // no tags: null
+    assert_eq!(files[0]["language"], serde_json::Value::Null);
+    assert_eq!(files[0]["title"], serde_json::Value::Null);
     // the first audio track of the mka is AC-3
     assert_eq!(files[1]["codec"], "ac3");
     assert_eq!(files[1]["channels"], 6);
@@ -4599,4 +4768,301 @@ fn probe_json_of_atmos_masters() {
         error.contains("b.atmos.metadata") && error.contains("b.atmos.audio"),
         "{error}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Output names: -on, -ot and the config's template
+
+#[test]
+fn output_name_names_the_single_output() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    // a bare name goes to -o, the extension is added
+    let out = env.deew(&["-i", "in.wav", "-on", "Movie {x}"]);
+    ok(&out);
+    assert!(env.out().join("Movie {x}.ec3").exists());
+    assert!(!env.out().join("in.ec3").exists());
+    let text = stdout(&out);
+    assert_eq!(summary_row(&text, "File name"), "Movie {x}.ec3", "{text}");
+    let args = env.run("dee_ddp_encoder");
+    assert_eq!(
+        opt(&args, "-o"),
+        env.out().join("Movie {x}.ec3").to_str().unwrap()
+    );
+    // the extension is not doubled (case-insensitive), another part is a name
+    ok(&env.deew(&["-i", "in.wav", "-on", "Two.EC3"]));
+    assert!(env.out().join("Two.EC3").exists());
+    ok(&env.deew(&["-i", "in.wav", "-on", "Three.commentary"]));
+    assert!(env.out().join("Three.commentary.ec3").exists());
+    // illegal characters
+    ok(&env.deew(&["-i", "in.wav", "-on", "a:b*c"]));
+    assert!(env.out().join("a_b_c.ec3").exists());
+    // a bare name goes next to the input with -oi
+    ok(&env.deew_with(&["-np", "-oi", "-i", "in.wav", "-on", "Next"], &[]));
+    assert!(env.work().join("Next.ec3").exists());
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn output_name_with_a_folder_is_an_error() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let message =
+        "invalid output name: the name can't contain a path separator, use -o for the folder";
+    for name in ["a/b", "a\\b", "new/deep/Movie"] {
+        assert_error(&env.deew(&["-i", "in.wav", "-on", name]), message);
+    }
+    let absolute = env.path("elsewhere/Abs");
+    assert_error(
+        &env.deew_with(
+            &[
+                "-np",
+                "-oi",
+                "-i",
+                "in.wav",
+                "-on",
+                absolute.to_str().unwrap(),
+            ],
+            &[],
+        ),
+        message,
+    );
+    assert!(!env.work().join("a").exists());
+    assert!(!env.work().join("new").exists());
+    assert!(!env.path("elsewhere").exists());
+    assert!(!env.out().join("b.ec3").exists());
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn output_name_needs_exactly_one_input() {
+    let env = env_or_skip!();
+    env.media("a.wav", "5.1", 48000, "pcm_s24le");
+    env.media("b.wav", "5.1", 48000, "pcm_s24le");
+    let message = "-on/--output-name only works with a single input file (found 2), \
+                   use -ot/--output-template for several.";
+    assert_error(&env.deew(&["-i", "a.wav", "b.wav", "-on", "x"]), message);
+    // folders and wildcards count after they are expanded
+    assert_error(&env.deew(&["-i", ".", "-on", "x"]), message);
+    assert_error(&env.deew(&["-i", "*.wav", "-on", "x"]), message);
+    assert!(!env.out().join("x.ec3").exists());
+    ok(&env.deew(&["-i", "a*.wav", "-on", "x"]));
+    assert!(env.out().join("x.ec3").exists());
+    fs::create_dir_all(env.work().join("one")).unwrap();
+    fs::rename(env.work().join("b.wav"), env.work().join("one/b.wav")).unwrap();
+    ok(&env.deew(&["-i", "one", "-on", "y"]));
+    assert!(env.out().join("y.ec3").exists());
+}
+
+#[test]
+fn output_name_extension_rules() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "in.wav", "-f", "dd", "-on", "x.ec3"]);
+    assert_error(
+        &out,
+        "invalid output name: in.wav: the name ends with .ec3, but the extension of this output is .ac3, leave it out or end the name with .ac3",
+    );
+    ok(&env.deew(&["-i", "in.wav", "-f", "dd", "-on", "x.ac3"]));
+    assert!(env.out().join("x.ac3").exists());
+    // Blu-ray 7.1 is .eb3
+    env.media("in8.wav", "7.1", 48000, "pcm_s24le");
+    let out = env.deew(&["-i", "in8.wav", "--ddp-mode", "bluray", "-on", "x.ec3"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("extension of this output is .eb3"));
+    assert!(stdout(&out).contains("invalid output name"));
+}
+
+#[test]
+fn output_name_conflicts() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    assert_error(
+        &env.deew(&["-i", "in.wav", "-on", "x", "-ot", "{stem}"]),
+        "-on/--output-name and -ot/--output-template can't be used together.",
+    );
+    for option in ["-on", "-ot"] {
+        assert_error(
+            &env.deew(&["-i", "in.wav", "-mo", option, "x"]),
+            "-on/--output-name and -ot/--output-template don't work with -mo, it writes no output file.",
+        );
+    }
+    assert!(!env.out().join("x.ec3").exists());
+}
+
+#[test]
+fn output_template_placeholders() {
+    let env = env_or_skip!();
+    env.tagged("x DELAY -24ms.mka", "eng", "Main: cut/1");
+    env.media("plain.wav", "5.1", 48000, "pcm_s24le");
+    let out = env.deew(&[
+        "-i",
+        "x DELAY -24ms.mka",
+        "plain.wav",
+        "-ot",
+        "{stem}.{lang}.{title} {name} {format} {codec} {channels} {bitrate} {track}",
+    ]);
+    ok(&out);
+    let tagged = "x.eng.Main_ cut_1 x DELAY -24ms ddp DDP 5.1 1024 0.ec3";
+    assert!(env.out().join(tagged).exists(), "{}", stdout(&out));
+    // no tags: the values drop out with a separator
+    let plain = "plain.plain ddp DDP 5.1 1024 0.ec3";
+    assert!(env.out().join(plain).exists(), "{}", stdout(&out));
+    let text = stdout(&out);
+    assert!(text.contains("│ File name"), "{text}");
+    assert!(
+        text.contains("x.eng.Main_ cut_1 x DELAY -24ms ddp"),
+        "{text}"
+    );
+    // the report of -kl is named like the output
+    ok(&env.deew(&["-i", "plain.wav", "-ot", "{stem}.{codec}", "-kl"]));
+    assert!(env.out().join("plain.DDP.ec3").exists());
+    assert!(env.out().join("plain.DDP.deew-log.html").exists());
+}
+
+#[test]
+fn output_template_follows_the_output() {
+    let env = env_or_skip!();
+    env.media("in.wav", "7.1", 48000, "pcm_s24le");
+    ok(&env.deew(&[
+        "-i",
+        "in.wav",
+        "-f",
+        "ac4",
+        "-dm",
+        "2",
+        "-b",
+        "128",
+        "-ti",
+        "a:0",
+        "-ot",
+        "{stem}_{codec}_{channels}_{bitrate}_{track}_{format}",
+    ]));
+    assert!(env.out().join("in_AC4_2.0_128_a_0_ac4.ac4").exists());
+    env.truehd("atmos.thd");
+    ok(&env.deew(&[
+        "-i",
+        "atmos.thd",
+        "-f",
+        "ddp-atmos",
+        "-ot",
+        "{stem}.{channels}.{lang}.{codec}",
+    ]));
+    assert!(env.out().join("atmos.5.1.DDP Atmos.ec3").exists());
+    ok(&env.deew(&[
+        "-i",
+        "atmos.thd",
+        "-f",
+        "ddp-atmos",
+        "--ddp-atmos-mode",
+        "bluray",
+        "-ot",
+        "{stem}.{channels}",
+    ]));
+    assert!(env.out().join("atmos.7.1.eb3").exists());
+}
+
+#[test]
+fn output_template_errors() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    for (template, fragment) in [
+        ("{nope}", "unknown placeholder {nope}"),
+        ("{stem", "unbalanced brace"),
+        ("stem}", "unbalanced brace"),
+        (
+            "a/{stem}",
+            "can't contain a path separator, use -o for the folder",
+        ),
+        ("{stem}.ac3", "the extension of this output is .ec3"),
+    ] {
+        let out = env.deew(&["-i", "in.wav", "-ot", template]);
+        assert_eq!(out.status.code(), Some(1), "{template}");
+        let text = stdout(&out);
+        assert!(
+            text.contains("invalid output template: "),
+            "{template}: {text}"
+        );
+        assert!(text.contains(fragment), "{template}: {text}");
+    }
+    let out = env.deew(&["-i", "in.wav", "-ot", "{nope}"]);
+    assert!(stdout(&out).contains("{stem}, {name}, {format}, {codec}, {channels}"));
+    // a template that leaves nothing
+    let out = env.deew(&["-i", "in.wav", "-ot", "{lang}"]);
+    assert!(stdout(&out).contains("the output name is empty"));
+    assert!(fs::read_dir(env.out()).map_or(true, |mut d| d.next().is_none()));
+}
+
+#[test]
+fn outputs_must_not_clash() {
+    let env = env_or_skip!();
+    fs::create_dir_all(env.work().join("a")).unwrap();
+    fs::create_dir_all(env.work().join("b")).unwrap();
+    for name in ["a/x.wav", "b/X.wav"] {
+        let target = env.media("tmp.wav", "5.1", 48000, "pcm_s24le");
+        fs::rename(target, env.work().join(name)).unwrap();
+    }
+    // the same name in two folders, one out folder; compared without case
+    let out = env.deew(&["-i", "a/x.wav", "b/X.wav"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(
+        text.contains("more than one output would be written to the same file"),
+        "{text}"
+    );
+    assert!(text.contains("a/x.wav, b/X.wav"), "{text}");
+    assert!(!env.out().join("x.ec3").exists());
+    // next to the inputs there is no clash
+    ok(&env.deew_with(&["-np", "-oi", "-i", "a/x.wav", "b/X.wav"], &[]));
+    assert!(env.work().join("a/x.ec3").exists() && env.work().join("b/X.ec3").exists());
+}
+
+#[test]
+fn an_output_must_not_be_its_input() {
+    let env = env_or_skip!();
+    env.media("in.ec3", "5.1", 48000, "eac3");
+    let out = env.deew_with(&["-np", "-oi", "-i", "in.ec3"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(
+        text.contains("an output would overwrite its own input file"),
+        "{text}"
+    );
+    assert!(text.contains("in.ec3 (the output of "), "{text}");
+    // another name is fine
+    ok(&env.deew_with(&["-np", "-oi", "-i", "in.ec3", "-on", "other"], &[]));
+    assert!(env.work().join("other.ec3").exists());
+}
+
+#[test]
+fn config_template() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let cfg = env.config();
+    let base = fs::read_to_string(&cfg).unwrap();
+    // missing key: {stem}
+    ok(&env.deew(&["-i", "in.wav"]));
+    assert!(env.out().join("in.ec3").exists());
+    fs::remove_file(env.out().join("in.ec3")).unwrap();
+    fs::write(
+        &cfg,
+        format!("{base}[output]\ntemplate = '{{stem}} [{{codec}}]'\n"),
+    )
+    .unwrap();
+    ok(&env.deew(&["-i", "in.wav"]));
+    assert!(env.out().join("in [DDP].ec3").exists());
+    // -ot overrides it, -on replaces it
+    ok(&env.deew(&["-i", "in.wav", "-ot", "{stem}.{track}"]));
+    assert!(env.out().join("in.0.ec3").exists());
+    ok(&env.deew(&["-i", "in.wav", "-on", "named"]));
+    assert!(env.out().join("named.ec3").exists());
+    // -mo names nothing
+    ok(&env.deew(&["-i", "in.wav", "-mo"]));
+    // an invalid one is a config error
+    fs::write(&cfg, format!("{base}[output]\ntemplate = '{{nope}}'\n")).unwrap();
+    let out = env.deew(&["-i", "in.wav"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(text.contains("invalid config"), "{text}");
+    assert!(text.contains("unknown placeholder {nope}"), "{text}");
 }

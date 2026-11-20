@@ -12,6 +12,10 @@ export interface FileProbe {
   codec: string | null
   /** ffprobe's stream profile mentions Dolby Atmos. */
   atmos: boolean
+  /** The `language` tag of the selected track; missing or `null` without one. */
+  language?: string | null
+  /** The `title` tag of the selected track; missing or `null` without one. */
+  title?: string | null
   /** An Atmos master (ADM BWF / DAMF); `codec` is its label. */
   master: boolean
   error: string | null
@@ -42,6 +46,14 @@ export interface ProbeSummary {
   atmos: boolean
   /** The distinct (codec, Atmos) kinds of the probed files. */
   inputs: { codec: string; atmos: boolean; master: boolean }[]
+  /** The probed files that can be encoded, for their output names. */
+  entries: {
+    path: string
+    channels: number | null
+    language: string | null
+    title: string | null
+    master: boolean
+  }[]
   /** Like the CLI's mismatch errors. */
   mismatches: string[]
   errors: { path: string; error: string }[]
@@ -136,6 +148,13 @@ export function summarizeProbe(all: readonly FileProbe[]): ProbeSummary {
     ].sort(),
     atmos: ok.length > 0 && ok.every((f) => f.atmos),
     inputs: distinctInputs(ok),
+    entries: ok.map((f) => ({
+      path: f.path,
+      channels: f.channels,
+      language: f.language ?? null,
+      title: f.title ?? null,
+      master: f.master,
+    })),
     mismatches,
     errors,
     skipped,

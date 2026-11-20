@@ -196,6 +196,59 @@ impl Ac4ImsMode {
     }
 }
 
+/// truehdd's warp mode (`-wm`), used when the TrueHD Atmos source has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WarpMode {
+    Normal,
+    Warping,
+    Prologiciix,
+    Loro,
+}
+
+impl WarpMode {
+    /// Parse a value case-insensitively.
+    pub fn parse(s: &str) -> Option<WarpMode> {
+        match s.to_lowercase().as_str() {
+            "normal" => Some(WarpMode::Normal),
+            "warping" => Some(WarpMode::Warping),
+            "prologiciix" => Some(WarpMode::Prologiciix),
+            "loro" => Some(WarpMode::Loro),
+            _ => None,
+        }
+    }
+
+    /// The value of truehdd's `--warp-mode`.
+    pub fn name(self) -> &'static str {
+        match self {
+            WarpMode::Normal => "normal",
+            WarpMode::Warping => "warping",
+            WarpMode::Prologiciix => "prologiciix",
+            WarpMode::Loro => "loro",
+        }
+    }
+}
+
+/// `truehdd_warp_mode`: empty means truehdd's own default (not passed).
+fn de_warp_mode<'de, D>(d: D) -> Result<Option<WarpMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    match s.as_str() {
+        "normal" => Ok(Some(WarpMode::Normal)),
+        "warping" => Ok(Some(WarpMode::Warping)),
+        "prologiciix" => Ok(Some(WarpMode::Prologiciix)),
+        "loro" => Ok(Some(WarpMode::Loro)),
+        _ => Err(serde::de::Error::custom(format!(
+            "unknown warp mode `{s}`, expected '', 'normal', 'warping', 'prologiciix' or 'loro'"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct DefaultModes {
     #[serde(default = "default_ddp_mode")]
@@ -233,7 +286,7 @@ impl Default for DefaultModes {
 }
 
 /// `[output]`: where the outputs go.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OutputConfig {
     /// Empty: the current directory. `-o` overrides it.
     #[serde(default)]
@@ -241,6 +294,38 @@ pub struct OutputConfig {
     /// Write each output next to its input (`-oi`).
     #[serde(default)]
     pub to_input: bool,
+    /// The name template of the outputs, see `output_name`; a missing or
+    /// empty one is `{stem}`. `-ot` and `-on` override it.
+    #[serde(default = "default_template", deserialize_with = "de_template")]
+    pub template: String,
+}
+
+fn default_template() -> String {
+    crate::output_name::DEFAULT_TEMPLATE.to_string()
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        OutputConfig {
+            path: String::new(),
+            to_input: false,
+            template: default_template(),
+        }
+    }
+}
+
+/// `template`: empty is `{stem}`, an invalid template is a config error.
+fn de_template<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(default_template());
+    }
+    crate::output_name::Template::parse(&s)
+        .map(|_| s)
+        .map_err(|e| serde::de::Error::custom(format!("invalid output template: {e}")))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -269,6 +354,12 @@ pub struct Config {
     /// DD/DDP: 3 dB attenuation of the surround channels.
     #[serde(default)]
     pub surround_3db_attenuation: bool,
+    /// TrueHD Atmos sources: truehdd's warp mode, `None` (empty) leaves it to truehdd.
+    #[serde(default, deserialize_with = "de_warp_mode")]
+    pub truehdd_warp_mode: Option<WarpMode>,
+    /// TrueHD Atmos sources: truehdd's bed conformance.
+    #[serde(default)]
+    pub truehdd_bed_conform: bool,
     /// Feed ffmpeg's audio straight into DEE instead of a temp wav.
     #[serde(default)]
     pub pipe: PipeMode,
@@ -475,6 +566,7 @@ mod tests {
         assert_eq!((d.ddp_7_1_standard, d.ddp_atmos_bluray), (1536, 1536));
         assert_eq!(config.output.path, "");
         assert!(!config.output.to_input);
+        assert_eq!(config.output.template, "{stem}");
         assert_eq!(config.default_modes.ddp, DdpMode::Standard);
         assert_eq!(config.default_modes.ddp_atmos, DdpAtmosMode::Streaming);
         assert!(config.summary_sections.deew_info && config.summary_sections.other);
@@ -599,6 +691,48 @@ mod tests {
             "surround_3db_attenuation = false",
             "surround_3db_attenuation = 'x'",
         );
+        assert!(toml::from_str::<Config>(&bad).is_err());
+    }
+
+    #[test]
+    fn truehdd_options_defaults_and_errors() {
+        let config: Config = toml::from_str(CONFIG_TEMPLATE).unwrap();
+        assert_eq!(config.truehdd_warp_mode, None);
+        assert!(!config.truehdd_bed_conform);
+        assert!(CONFIG_TEMPLATE.contains("\ntruehdd_warp_mode = ''\n"));
+        assert!(CONFIG_TEMPLATE.contains("\ntruehdd_bed_conform = false\n"));
+        // not required: configs without the keys still load
+        assert!(!CONFIG_KEYS.contains(&"truehdd_warp_mode"));
+        assert!(!CONFIG_KEYS.contains(&"truehdd_bed_conform"));
+        let without = CONFIG_TEMPLATE
+            .replace("truehdd_warp_mode = ''", "")
+            .replace("truehdd_bed_conform = false", "");
+        let old: Config = toml::from_str(&without).unwrap();
+        assert_eq!(old.truehdd_warp_mode, None);
+        assert!(!old.truehdd_bed_conform);
+        for (text, want) in [
+            ("normal", WarpMode::Normal),
+            ("warping", WarpMode::Warping),
+            ("prologiciix", WarpMode::Prologiciix),
+            ("loro", WarpMode::Loro),
+        ] {
+            let set = CONFIG_TEMPLATE
+                .replace(
+                    "truehdd_warp_mode = ''",
+                    &format!("truehdd_warp_mode = '{text}'"),
+                )
+                .replace("truehdd_bed_conform = false", "truehdd_bed_conform = true");
+            let c: Config = toml::from_str(&set).unwrap();
+            assert_eq!(c.truehdd_warp_mode, Some(want));
+            assert!(c.truehdd_bed_conform);
+            assert_eq!(want.name(), text);
+        }
+        let bad = CONFIG_TEMPLATE.replace("truehdd_warp_mode = ''", "truehdd_warp_mode = 'x'");
+        assert!(toml::from_str::<Config>(&bad).is_err());
+        let bad = CONFIG_TEMPLATE.replace("truehdd_warp_mode = ''", "truehdd_warp_mode = 3");
+        assert!(toml::from_str::<Config>(&bad).is_err());
+        let bad =
+            CONFIG_TEMPLATE.replace("truehdd_bed_conform = false", "truehdd_bed_conform = 'x'");
         assert!(toml::from_str::<Config>(&bad).is_err());
     }
 

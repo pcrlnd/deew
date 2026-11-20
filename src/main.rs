@@ -15,6 +15,7 @@ mod interrupt;
 mod live;
 mod markup;
 mod master;
+mod output_name;
 mod pipe;
 mod pipeline;
 mod plan;

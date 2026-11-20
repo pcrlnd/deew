@@ -168,6 +168,18 @@ DD/DDP/TrueHD esetén érhető el (TrueHD-nél a CLI előbb rákérdez, mert a k
 nem lesz azonos a forrással; a kérdés a prompt ablakban / terminálban jelenik
 meg); máshol szürkék.
 
+A „Warp mode” választó (`-wm`) és a „Bed conform” jelölőnégyzet (`-bc`) ugyanígy a
+config értékeit mutatja (`truehdd_warp_mode`, `truehdd_bed_conform`); DDP Atmos,
+TrueHD Atmos, AC-4 Atmos, AC-4 IMS és Measure only esetén érhetők el, máshol
+szürkék.
+
+Az „Output name” mező (`-on`) egyetlen input fájl kimenetét nevezi el (több fájlnál,
+a mappák kibontása után, szürke), az „Output template” mező (`-ot`) pedig az
+összesét; a config `[output] template` értékével indul, és csak akkor kerül a
+parancsba, ha megváltoztatod. A név erősebb a sablonnál, Measure only esetén
+mindkettő szürke. A mezők alatt az első fájlok kimeneti neve látszik úgy, ahogy a
+deew elkészíti, a CLI-vel azonos szabályokkal.
+
 Az **AC-4 IMS** (`ac4-ims`, immersive stereo, `.ac4`) 5.1 / 5.0 / 7.0 / 7.1 vagy
 Atmos inputot (TrueHD Atmos, ADM BWF, DAMF) fogad, de Atmos és csatornaalapú
 inputot nem egyszerre (a GUI figyelmeztet a sztereó / mono és a vegyes

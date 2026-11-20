@@ -1,8 +1,7 @@
-deew 5.4.0
+deew 5.5.0
 
 USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE]
-            [--ac4-ims-mode MODE] [-b BITRATE] [-dm CHANNELS] [-dl] [-d DELAY]
-            [-r DRC] [-dn DIALNORM] [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la]
-            [-np] [-pl] [-cl] [-c] [-gc] [-gt]
+            [-on NAME] [-f FORMAT] [-b BITRATE] [-dm CHANNELS] [-d DELAY]
+            [-r DRC] [-dn DIALNORM] [-k] [-mo] [-lb] [-np] [-cl] [-c] [-gc]
+            [-gt]
 deew: error: argument -b/--bitrate: expected one argument

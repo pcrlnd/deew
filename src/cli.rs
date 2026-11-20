@@ -14,6 +14,10 @@ pub struct Args {
     pub input: Option<Vec<String>>, // None if -i/--input never given
     pub track_index: TrackIndex,    // default 0
     pub output: Option<String>,
+    /// `-on NAME`: the name of the single output file (raw)
+    pub output_name: Option<String>,
+    /// `-ot TEMPLATE`: the name template of the outputs (raw)
+    pub output_template: Option<String>,
     pub ddp_mode: Option<String>,
     pub ddp_atmos_mode: Option<String>,
     pub ac4_ims_mode: Option<String>,
@@ -34,6 +38,10 @@ pub struct Args {
     pub low_pass_filter: Option<String>,
     /// `-s3a on|off` (raw)
     pub surround_3db_attenuation: Option<String>,
+    /// `-wm MODE` (raw)
+    pub warp_mode: Option<String>,
+    /// `-bc on|off` (raw)
+    pub bed_conform: Option<String>,
     pub measure_only: bool,
     pub list_bitrates: bool,
     pub long_argument: bool,
@@ -53,6 +61,8 @@ impl Default for Args {
             input: None,
             track_index: TrackIndex::audio(0),
             output: None,
+            output_name: None,
+            output_template: None,
             ddp_mode: None,
             ddp_atmos_mode: None,
             ac4_ims_mode: None,
@@ -70,6 +80,8 @@ impl Default for Args {
             surround_phase_shift: None,
             low_pass_filter: None,
             surround_3db_attenuation: None,
+            warp_mode: None,
+            bed_conform: None,
             measure_only: false,
             list_bitrates: false,
             long_argument: false,
@@ -107,6 +119,8 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-ti", "--track-index", Kind::Track),
     ("-o", "--output", Kind::Str),
     ("-oi", "--output-to-input", Kind::Flag),
+    ("-on", "--output-name", Kind::Str),
+    ("-ot", "--output-template", Kind::Str),
     ("-f", "--format", Kind::Str),
     ("", "--ddp-mode", Kind::Str),
     ("", "--ddp-atmos-mode", Kind::Str),
@@ -117,6 +131,8 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-sps", "--surround-phase-shift", Kind::Str),
     ("-lpf", "--low-pass-filter", Kind::Str),
     ("-s3a", "--surround-3db-attenuation", Kind::Str),
+    ("-wm", "--warp-mode", Kind::Str),
+    ("-bc", "--bed-conform", Kind::Str),
     // hidden alias of `-sps off`
     ("-d", "--delay", Kind::Str),
     ("-r", "--drc", Kind::Str),
@@ -294,6 +310,8 @@ fn set_int(args: &mut Args, long: &str, v: i64) {
 fn set_str(args: &mut Args, long: &str, v: String) {
     match long {
         "--output" => args.output = Some(v),
+        "--output-name" => args.output_name = Some(v),
+        "--output-template" => args.output_template = Some(v),
         "--format" => args.format = v,
         "--ddp-mode" => args.ddp_mode = Some(v),
         "--ddp-atmos-mode" => args.ddp_atmos_mode = Some(v),
@@ -304,6 +322,8 @@ fn set_str(args: &mut Args, long: &str, v: String) {
         "--surround-phase-shift" => args.surround_phase_shift = Some(v),
         "--low-pass-filter" => args.low_pass_filter = Some(v),
         "--surround-3db-attenuation" => args.surround_3db_attenuation = Some(v),
+        "--warp-mode" => args.warp_mode = Some(v),
+        "--bed-conform" => args.bed_conform = Some(v),
         _ => unreachable!("not a string option: {long}"),
     }
 }
@@ -503,6 +523,7 @@ mod tests {
         );
         assert!(a.surround_phase_shift.is_none() && a.low_pass_filter.is_none());
         assert!(a.surround_3db_attenuation.is_none());
+        assert!(a.warp_mode.is_none() && a.bed_conform.is_none());
         assert!(a.ddp_mode.is_none() && a.ddp_atmos_mode.is_none() && a.ac4_ims_mode.is_none());
         assert!(!a.list_bitrates && !a.long_argument && !a.no_prompt && !a.print_logos);
         assert!(!a.changelog && !a.get_tools && !a.config && !a.generate_config);
@@ -528,6 +549,23 @@ mod tests {
         assert!(err(&["-sps"]).contains("expected one argument"));
         assert!(err(&["-lpf", "-k"]).contains("expected one argument"));
         assert_eq!(ok(&["-sps", "maybe"]).surround_phase_shift, some("maybe"));
+    }
+
+    #[test]
+    fn truehdd_options() {
+        let some = |v: &str| Some(v.to_string());
+        assert_eq!(ok(&["-wm", "normal"]).warp_mode, some("normal"));
+        assert_eq!(ok(&["--warp-mode", "LoRo"]).warp_mode, some("LoRo"));
+        assert_eq!(ok(&["--warp-mode=warping"]).warp_mode, some("warping"));
+        assert_eq!(ok(&["-bc", "on"]).bed_conform, some("on"));
+        assert_eq!(ok(&["--bed-conform", "OFF"]).bed_conform, some("OFF"));
+        assert_eq!(ok(&["--bed-conform=on"]).bed_conform, some("on"));
+        let a = ok(&[]);
+        assert!(a.warp_mode.is_none() && a.bed_conform.is_none());
+        assert!(err(&["-wm"]).contains("expected one argument"));
+        assert!(err(&["-bc", "-k"]).contains("expected one argument"));
+        // bad values are rejected later
+        assert_eq!(ok(&["-bc", "maybe"]).bed_conform, some("maybe"));
     }
 
     #[test]
@@ -742,6 +780,24 @@ mod tests {
         assert_eq!(ok(&["-d", "-5 ms"]).delay.as_deref(), Some("-5 ms"));
         // a lone dash is a value
         assert_eq!(ok(&["-o", "-"]).output.as_deref(), Some("-"));
+    }
+
+    #[test]
+    fn output_name_and_template() {
+        let a = ok(&["-on", "Movie", "-ot", "{stem}.{lang}"]);
+        assert_eq!(a.output_name.as_deref(), Some("Movie"));
+        assert_eq!(a.output_template.as_deref(), Some("{stem}.{lang}"));
+        let a = ok(&["--output-name=a b", "--output-template", "{name}"]);
+        assert_eq!(a.output_name.as_deref(), Some("a b"));
+        assert_eq!(a.output_template.as_deref(), Some("{name}"));
+        let a = ok(&[]);
+        assert!(a.output_name.is_none() && a.output_template.is_none());
+        assert_eq!(
+            err(&["-on"]),
+            "argument -on/--output-name: expected one argument"
+        );
+        // `-o` and `-oi` are not prefixes of the new options
+        assert_eq!(ok(&["-o", "x"]).output.as_deref(), Some("x"));
     }
 
     #[test]

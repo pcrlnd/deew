@@ -46,11 +46,39 @@ describe("summarizeProbe", () => {
       onlyMasters: false,
       atmos: false,
       inputs: [{ codec: "truehd", atmos: false, master: false }],
+      entries: [
+        {
+          path: "a.mkv",
+          channels: 6,
+          language: null,
+          title: null,
+          master: false,
+        },
+        {
+          path: "b.mkv",
+          channels: 6,
+          language: null,
+          title: null,
+          master: false,
+        },
+      ],
       mismatches: [],
       errors: [],
       skipped: [],
     })
     expect(formatSummary(s)).toBe("5.1 - 48 kHz - 24-bit - 2 files")
+  })
+
+  it("keeps the tags of the tracks, and works without them", () => {
+    const s = summarizeProbe([
+      file({ language: "eng", title: "Main" }),
+      file({ path: "b.mkv", language: null }),
+      file({ path: "c.mkv", error: "bad" }),
+    ])
+    expect(s.entries.map((e) => [e.path, e.language, e.title])).toEqual([
+      ["a.mkv", "eng", "Main"],
+      ["b.mkv", null, null],
+    ])
   })
 
   it("reports mismatches like the CLI and has no common value", () => {

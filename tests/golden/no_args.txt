@@ -1,10 +1,9 @@
-deew 5.4.0
+deew 5.5.0
 
 USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE]
-            [--ac4-ims-mode MODE] [-b BITRATE] [-dm CHANNELS] [-dl] [-d DELAY]
-            [-r DRC] [-dn DIALNORM] [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la]
-            [-np] [-pl] [-cl] [-c] [-gc] [-gt]
+            [-on NAME] [-f FORMAT] [-b BITRATE] [-dm CHANNELS] [-d DELAY]
+            [-r DRC] [-dn DIALNORM] [-k] [-mo] [-lb] [-np] [-cl] [-c] [-gc]
+            [-gt]
 
 FLAGS:
   -h, --help                show this help message.
@@ -23,28 +22,12 @@ FLAGS:
                             specifies output directory
   -oi, --output-to-input    save each output next to its input file
                             overrides -o and the output path of the config
+  -on, --output-name NAME   name of the output file, one input file only
   -f, --format FORMAT       options: dd / ddp / ddp-atmos / thd / thd-atmos /
                             ac4 / ac4-atmos / ac4-ims / aac
                             default: ddp
                             ddp-atmos and thd-atmos use truehdd and dee_shim,
                             ac4-atmos and ac4-ims (from Atmos) use truehdd
-  --ddp-mode MODE           options: standard / bluray
-                            default: run -c/--config
-                            profile of 7.1 DDP, 5.1 and below are not affected
-                            standard: E-AC-3 only, 384-1792 kbps
-                            bluray: AC-3 core + E-AC-3, 768-1664 kbps
-  --ddp-atmos-mode MODE     options: streaming / standard / bluray
-                            default: run -c/--config
-                            profile of ddp-atmos
-                            streaming: 5.1 with Atmos, 384-1024 kbps
-                            standard: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
-                            bluray: 7.1 with Atmos, AC-3 core + E-AC-3,
-                            1152-1664 kbps
-  --ac4-ims-mode MODE       options: general / music
-                            default: run -c/--config
-                            profile of ac4-ims (stereo for headphones and TV
-                            speakers, from 5.1 or Atmos)
-                            music: no dialogue enhancement, DRC music_light
   -b, --bitrate BITRATE     options: run -lb/--list-bitrates
                             default: run -c/--config
   -dm, --downmix CHANNELS   options: 1 / 2 / 6
@@ -53,10 +36,6 @@ FLAGS:
                             DD, AC4 and ac4-ims will be automatically downmixed
                             to 5.1 in case of a 7.1 source
                             AAC output is always 2.0
-  -dl, --disable-lfe        remove the LFE channel of 5.1 and 7.1 inputs
-                            DD and DDP get a real 5.0 or 7.0, the others keep a
-                            silent LFE
-                            5.0 and 7.0 inputs are supported, they have no LFE
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -73,26 +52,14 @@ FLAGS:
                             default: 0
                             applied dialnorm value, doesn't work for AAC,
                             AC4 Atmos and ac4-ims
-  -in, --instances NUMBER   examples: 1, 4, 50%
-                            default: 50%
-                            specifies how many encodes can run at the same time
-                            50% means 4 on a cpu with 8 threads
-                            one DEE can use 2 threads so 50% can utilize all
-                            threads
-                            (this option overrides the config's number)
   -k, --keeptemp            keep temp files
-  -kl, --keep-log           keep TrueHD's log and write a .deew-log.html report
-                            for each output
   -mo, --measure-only       only measures the loudness of the source with DEE,
                             no encoding, -f and the encoding options are
                             ignored, TrueHD Atmos sources and Atmos masters are
                             measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
-  -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
-                            input
   -np, --no-prompt          skip confirmation questions, print them as notes and
                             continue
-  -pl, --print-logos        show all logo variants you can set in the config
   -cl, --changelog          show changelog
   -c, --config              show config and config location
   -gc, --generate-config    generate a new config, asks before overwriting an

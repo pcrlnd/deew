@@ -33,6 +33,7 @@ import {
   ddFilterDefaultsOf,
   type DdFilterDefaults,
   buildArgs,
+  defaultBitrate,
   detectPlatform,
   effectiveDdpAtmosMode,
   effectiveDdpMode,
@@ -61,6 +62,11 @@ import {
   parseProgressEvent,
   reduceHistory,
 } from "@/lib/progress"
+import {
+  DEFAULT_TEMPLATE,
+  outputTemplateOf,
+  previewNames,
+} from "@/lib/output-name"
 import { stateAction } from "@/lib/run-client"
 import { useProbe } from "@/lib/use-probe"
 import {
@@ -169,6 +175,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     ...PROGRAM_DEFAULT_MODES,
   })
   const [defaultOutput, setDefaultOutput] = useState("")
+  // The config's `[output] template`: `-ot` is only passed when it differs.
+  const [configTemplate, setConfigTemplate] = useState(DEFAULT_TEMPLATE)
   // Every run of this session, for the native view (like the terminal's).
   const [history, dispatchHistory] = useReducer(reduceHistory, EMPTY_HISTORY)
   const current = history.runs.at(-1)
@@ -178,14 +186,17 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const showTerminal = !native
   const blockedReason = encodeBlock(utility)
 
-  const problems = useMemo(
-    () => validate(options, defaultModes),
-    [options, defaultModes]
-  )
-  const canRun = options.inputs.length > 0 && problems.length === 0
-
   const trackIndex = normalizeTrackIndex(options.trackIndex)
   const probe = useProbe(options.inputs, trackIndex)
+  // `-on` takes exactly one input file, counted after folders are expanded
+  const singleFile =
+    probe.status === "done"
+      ? probe.summary.files + probe.summary.skipped.length === 1
+      : options.inputs.length === 1
+  const naming = useMemo(
+    () => ({ configTemplate, singleFile }),
+    [configTemplate, singleFile]
+  )
   const channels = probe.status === "done" ? probe.summary.channels : null
   const codecs = probe.status === "done" ? probe.summary.codecs : []
   const inputs = probe.status === "done" ? probe.summary.inputs : undefined
@@ -201,11 +212,60 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     ddpMode: effectiveDdpMode(options.ddpMode, defaultModes),
     atmosMode: effectiveDdpAtmosMode(options.ddpAtmosMode, defaultModes),
   })
+  const outputNames = useMemo(
+    () =>
+      options.measureOnly || probe.status !== "done"
+        ? []
+        : previewNames(
+            probe.summary.entries,
+            {
+              options,
+              configTemplate,
+              atmosMode: effectiveDdpAtmosMode(
+                options.ddpAtmosMode,
+                defaultModes
+              ),
+              ddp71Bluray:
+                bitrateInfo.ddp71 === true &&
+                effectiveDdpMode(options.ddpMode, defaultModes) === "bluray",
+              bitrate:
+                options.bitrate === DEFAULT_BITRATE
+                  ? defaultBitrate(bitrateInfo, defaults)
+                  : Number(options.bitrate),
+              track: trackIndex ?? "0",
+            },
+            singleFile
+          ),
+    [
+      options,
+      probe,
+      configTemplate,
+      defaultModes,
+      bitrateInfo,
+      defaults,
+      trackIndex,
+      singleFile,
+    ]
+  )
+  const problems = useMemo(() => {
+    const list = validate(options, defaultModes, naming)
+    // what the CLI would refuse for the names it makes
+    const refused = [
+      ...new Set(
+        outputNames.flatMap((p) =>
+          "error" in p.result ? [`Output name: ${p.result.error}.`] : []
+        )
+      ),
+    ]
+    return [...list, ...refused.filter((m) => !list.includes(m))]
+  }, [options, defaultModes, naming, outputNames])
+  const canRun = options.inputs.length > 0 && problems.length === 0
   const args = buildArgs(options, {
     ddp71: bitrateInfo.ddp71,
     channels,
     defaultModes,
     ddFilterDefaults,
+    naming,
   })
   const command = formatCommand(args, platform)
   // A downmix or bitrate that the probed layout cannot do goes back to the
@@ -299,6 +359,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
           o.format === "ac4-ims" ? setAc4ImsMode(o, o.ac4ImsMode, modes) : o
         )
         setDdFilterDefaults(ddFilterDefaultsOf(settings))
+        setConfigTemplate(outputTemplateOf(settings))
         if (!toInputTouchedRef.current) {
           savedToInputRef.current = settings.toInput
           toInputRef.current = settings.toInput
@@ -396,6 +457,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
           o.format === "ac4-ims" ? setAc4ImsMode(o, o.ac4ImsMode, modes) : o
         )
         setDdFilterDefaults(ddFilterDefaultsOf(settings))
+        setConfigTemplate(outputTemplateOf(settings))
       })
       .catch(console.warn)
   }, [])
@@ -787,6 +849,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               defaultBitrates={defaults}
               defaultModes={defaultModes}
               ddFilterDefaults={ddFilterDefaults}
+              naming={naming}
+              outputNames={outputNames}
               downmixChoices={downmixes}
               toolbar={
                 inWeb() && (

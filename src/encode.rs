@@ -57,7 +57,6 @@ pub struct Job {
     /// Custom dialnorm given to DEE with `skip:dialnorm=N` (not for AC4).
     pub skip_dialnorm: Option<i64>,
     pub output_path: String,
-    pub output_dir: String,
     /// Files in the temp directory that are removed afterwards (not with `-k`).
     pub temp_files: Vec<String>,
     /// Files truehdd listed in its result (also the extra parts of a split
@@ -715,20 +714,34 @@ pub fn manifest_with_dialnorm(manifest: &str, dialnorm: i64) -> Result<String, S
 // ---------------------------------------------------------------------------
 // Files
 
-/// Paths DEE writes next to a TrueHD output that are not wanted: both
-/// the names with and without the DELAY part, `.thd.log.html` (DEE 6.7),
-/// `.thd.log` and `.thd.mll`.
-pub fn thd_leftovers(input: &str, output_dir: &str, keep_log: bool) -> Vec<String> {
-    let dir = Path::new(output_dir);
+/// Paths DEE writes next to a TrueHD output that are not wanted: the output's
+/// path with `.log.html` (DEE 6.7), `.log` and `.mll` added, and the same
+/// names made of the input's name (with and without the DELAY part) in the
+/// output's folder.
+pub fn thd_leftovers(input: &str, output_path: &str, keep_log: bool) -> Vec<String> {
+    let dir = Path::new(output_path).parent().unwrap_or(Path::new(""));
     let mut paths = Vec::new();
-    for ext in ["thd.log.html", "thd.log", "thd.mll"] {
+    for (ext, suffix) in [
+        ("thd.log.html", ".log.html"),
+        ("thd.log", ".log"),
+        ("thd.mll", ".mll"),
+    ] {
         // `-kl` keeps DEE's html log
         if keep_log && ext == "thd.log.html" {
             continue;
         }
+        // every candidate goes through `join`, so the same path is never
+        // spelled two ways (separators on Windows)
+        let mut candidates = Vec::new();
+        if let Some(file) = Path::new(output_path).file_name() {
+            let name = format!("{}{suffix}", file.to_string_lossy());
+            candidates.push(dir.join(name).to_string_lossy().into_owned());
+        }
         for stripdelay in [true, false] {
             let name = basename(input, ext, false, false, stripdelay);
-            let path = dir.join(name).to_string_lossy().into_owned();
+            candidates.push(dir.join(name).to_string_lossy().into_owned());
+        }
+        for path in candidates {
             if !paths.contains(&path) {
                 paths.push(path);
             }
@@ -791,7 +804,7 @@ fn cleanup(job: &Job, options: &Options, ui: &Ui) {
         }
     }
     if matches!(job.format, Format::Thd | Format::ThdAtmos) {
-        for path in thd_leftovers(&job.input, &job.output_dir, options.keep_log) {
+        for path in thd_leftovers(&job.input, &job.output_path, options.keep_log) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -823,7 +836,7 @@ fn cleanup_interrupted(job: &Job, stages: &[StageLog], ui: &Ui) {
         }
     }
     if encoding && matches!(job.format, Format::Thd | Format::ThdAtmos) {
-        for path in thd_leftovers(&job.input, &job.output_dir, false) {
+        for path in thd_leftovers(&job.input, &job.output_path, false) {
             remove_file(&path);
         }
     }
@@ -2586,7 +2599,7 @@ mod tests {
     #[test]
     fn keep_log_keeps_the_html_log_only() {
         let names = |keep| -> Vec<String> {
-            thd_leftovers("in/a.mkv", "out", keep)
+            thd_leftovers("in/a.mkv", "out/a.thd", keep)
                 .iter()
                 .map(|p| file_name(p).to_string())
                 .collect()
@@ -2603,7 +2616,7 @@ mod tests {
                 .map(|n| Path::new("out").join(n).to_string_lossy().into_owned())
                 .collect()
         };
-        let list = thd_leftovers("in/a DELAY -5ms.mkv", "out", false);
+        let list = thd_leftovers("in/a DELAY -5ms.mkv", "out/a.thd", false);
         assert_eq!(
             list,
             in_out(&[
@@ -2616,7 +2629,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            thd_leftovers("in/a.mkv", "out", false),
+            thd_leftovers("in/a.mkv", "out/a.thd", false),
             in_out(&["a.thd.log.html", "a.thd.log", "a.thd.mll"])
         );
     }

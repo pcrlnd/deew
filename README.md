@@ -89,15 +89,16 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 - after updating from deew 3.x or older generate a new config with `deew -gc` (the config format changed in 5.0.0)
 
 ### Usage
-- `deew -fh` (`deew -h` shows the same without the advanced `-sps`, `-lpf` and `-s3a`)
+- `deew -fh` (`deew -h` shows the same without the advanced `-sps`, `-lpf`, `-s3a`, `-wm` and `-bc`)
 
 ```
 USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-f FORMAT] [--ddp-mode MODE] [--ddp-atmos-mode MODE]
-            [--ac4-ims-mode MODE] [-b BITRATE] [-dm CHANNELS] [-dl]
-            [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH] [-d DELAY] [-r DRC]
-            [-dn DIALNORM] [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl]
-            [-cl] [-c] [-gc] [-gt]
+            [-on NAME] [-ot TEMPLATE] [-f FORMAT] [--ddp-mode MODE]
+            [--ddp-atmos-mode MODE] [--ac4-ims-mode MODE] [-b BITRATE]
+            [-dm CHANNELS] [-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH]
+            [-wm MODE] [-bc SWITCH] [-d DELAY] [-r DRC] [-dn DIALNORM]
+            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
+            [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
@@ -116,6 +117,14 @@ FLAGS:
                             specifies output directory
   -oi, --output-to-input    save each output next to its input file
                             overrides -o and the output path of the config
+  -on, --output-name NAME   name of the output file, one input file only
+  -ot, --output-template TEMPLATE
+                            default: {stem}, config: output.template
+                            name of each output file, placeholders:
+                            {stem} (name without extension and delay tag)
+                            {name}, {format}, {codec}, {channels}, {bitrate}
+                            {lang}, {title} (of the audio track), {track}
+                            empty values drop out with a separator
   -f, --format FORMAT       options: dd / ddp / ddp-atmos / thd / thd-atmos /
                             ac4 / ac4-atmos / ac4-ims / aac
                             default: ddp
@@ -169,6 +178,17 @@ FLAGS:
                             surround_3db_attenuation
                             TrueHD asks first: the output is no longer identical
                             to the source
+  -wm, --warp-mode MODE     options: normal / warping / prologiciix / loro
+                            default: from the source's metadata
+                            truehdd's warp mode, only used when the TrueHD Atmos
+                            source has none
+                            config: truehdd_warp_mode
+  -bc, --bed-conform SWITCH
+                            options: on / off
+                            default: off
+                            truehdd's bed conformance, for Atmos sources whose
+                            bed comes out as objects
+                            config: truehdd_bed_conform
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
                             specifies delay as ms, s or frame@FPS

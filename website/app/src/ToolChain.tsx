@@ -176,7 +176,9 @@ export default function ToolChain() {
               pipes and temp files, with the options shown below. Placeholders
               are in capitals: <code>IN</code>, <code>TI</code> (track index),{" "}
               <code>TEMP/NAME</code>, <code>OUT</code>, <code>B</code>{" "}
-              (bitrate), <code>P</code> (DRC profile).
+              (bitrate), <code>P</code> (DRC profile). <code>OUT</code> is named
+              after the input (<code>{"{stem}"}</code>, the template default)
+              unless you set <code>-on</code> or <code>-ot</code>.
             </p>
             <div className="legend" aria-label="Legend">
               <span>
@@ -1376,6 +1378,13 @@ export default function ToolChain() {
                         <code>.atmos.metadata</code>, <code>.atmos.audio</code>
                       </li>
                       <li>
+                        with <code>-wm</code> / <code>-bc</code> the name has a
+                        variant (<code>NAME.wm-normal.atmos</code>,{" "}
+                        <code>NAME.bc.atmos</code>,{" "}
+                        <code>NAME.wm-loro.bc.atmos</code>), so a kept decode (
+                        <code>-k</code>) is only reused with the same options
+                      </li>
+                      <li>
                         <code>NAME.caf</code> instead when there is no Atmos
                         (the job fails)
                       </li>
@@ -1386,9 +1395,19 @@ export default function ToolChain() {
                 <div className="module-body">
                   <pre className="argv">
                     <span className="p">{"truehdd"}</span>
-                    {" decode --presentation 3 --json --output-path "}
+                    {" decode --presentation 3 --json "}
+                    <span className="c">
+                      {"[--warp-mode M] [--bed-conform]"}
+                    </span>
+                    {" --output-path "}
                     <span className="v">{"TEMP/NAME"}</span>{" "}
                     <span className="v">{"IN|-"}</span>
+                    {"\n       "}
+                    <span className="m">
+                      {
+                        "# -wm (or truehdd_warp_mode in the config) adds --warp-mode, -bc (or truehdd_bed_conform = true) adds --bed-conform; TEMP/NAME is then NAME.wm-MODE and/or NAME.bc, e.g. NAME.wm-loro.bc.atmos"
+                      }
+                    </span>
                   </pre>
                 </div>
               </article>
@@ -1547,7 +1566,11 @@ export default function ToolChain() {
                     <h4>Out</h4>
                     <ul>
                       <li>
-                        <code>OUT</code> in the output folder
+                        <code>OUT</code> in the output folder, named by{" "}
+                        <code>-ot</code> (config: <code>output.template</code>,
+                        default <code>{"{stem}"}</code>: the input name without
+                        extension and DELAY tag) or, for one input file, by{" "}
+                        <code>-on</code>; deew adds the extension
                       </li>
                       <li>
                         AC4: <code>TEMP/NAME.ac4.json</code> manifest
@@ -2141,7 +2164,7 @@ export default function ToolChain() {
             </div>
           </section>
           <footer>
-            Built from the deew source on 2026-11-19 ({__DEEW_VERSION__}):
+            Built from the deew source on 2026-11-20 ({__DEEW_VERSION__}):
             src/commands.rs, src/probe.rs, src/pipeline.rs, src/encode.rs,
             src/plan.rs, src/master.rs, src/pipe.rs, src/awake.rs,
             src/config.rs. Tool

@@ -1,7 +1,7 @@
 //! ffmpeg, truehdd and DEE command lines (argument lists and the markup printed for
 //! them). Everything here is pure.
 
-use crate::config::DdpAtmosMode;
+use crate::config::{DdpAtmosMode, WarpMode};
 use crate::error::escape;
 use crate::plan::Format;
 use crate::probe::TrackIndex;
@@ -801,18 +801,25 @@ pub fn measure_atmos_args(tool: &str, atmos: &str) -> Vec<String> {
 }
 
 /// truehdd: decodes the Atmos presentation to `<output_prefix>.atmos` (and
-/// `.atmos.metadata`, `.atmos.audio`).
-pub fn decode_args(truehdd: &str, input: &str, output_prefix: &str) -> Vec<String> {
-    strings(&[
-        truehdd,
-        "decode",
-        "--presentation",
-        "3",
-        "--json",
-        "--output-path",
-        output_prefix,
-        input,
-    ])
+/// `.atmos.metadata`, `.atmos.audio`). `warp_mode` and `bed_conform` are
+/// passed only when set.
+pub fn decode_args(
+    truehdd: &str,
+    input: &str,
+    output_prefix: &str,
+    warp_mode: Option<WarpMode>,
+    bed_conform: bool,
+) -> Vec<String> {
+    let mut args = strings(&[truehdd, "decode", "--presentation", "3", "--json"]);
+    if let Some(mode) = warp_mode {
+        args.push("--warp-mode".to_string());
+        args.push(mode.name().to_string());
+    }
+    if bed_conform {
+        args.push("--bed-conform".to_string());
+    }
+    args.extend(strings(&["--output-path", output_prefix, input]));
+    args
 }
 
 /// How a path argument is shown.
@@ -993,7 +1000,10 @@ mod tests {
             "ffmpeg -v error -nostdin -i [input] -map 0:a:1 -c copy -f truehd -"
         );
         assert_eq!(
-            strip(&print_command(&decode_args("truehdd", "-", "/t/a"), true)),
+            strip(&print_command(
+                &decode_args("truehdd", "-", "/t/a", None, false),
+                true
+            )),
             "truehdd decode --presentation 3 --json --output-path [output] -"
         );
     }
@@ -2112,7 +2122,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            decode_args("truehdd", "/in/a.thd", "/t/a"),
+            decode_args("truehdd", "/in/a.thd", "/t/a", None, false),
             v(&[
                 "truehdd",
                 "decode",
@@ -2122,6 +2132,57 @@ mod tests {
                 "--output-path",
                 "/t/a",
                 "/in/a.thd"
+            ])
+        );
+        assert_eq!(
+            decode_args(
+                "truehdd",
+                "/in/a.thd",
+                "/t/a",
+                Some(WarpMode::Prologiciix),
+                false
+            ),
+            v(&[
+                "truehdd",
+                "decode",
+                "--presentation",
+                "3",
+                "--json",
+                "--warp-mode",
+                "prologiciix",
+                "--output-path",
+                "/t/a",
+                "/in/a.thd"
+            ])
+        );
+        assert_eq!(
+            decode_args("truehdd", "-", "/t/a", None, true),
+            v(&[
+                "truehdd",
+                "decode",
+                "--presentation",
+                "3",
+                "--json",
+                "--bed-conform",
+                "--output-path",
+                "/t/a",
+                "-"
+            ])
+        );
+        assert_eq!(
+            decode_args("truehdd", "-", "/t/a", Some(WarpMode::Loro), true),
+            v(&[
+                "truehdd",
+                "decode",
+                "--presentation",
+                "3",
+                "--json",
+                "--warp-mode",
+                "loro",
+                "--bed-conform",
+                "--output-path",
+                "/t/a",
+                "-"
             ])
         );
     }

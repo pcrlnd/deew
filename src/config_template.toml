@@ -30,6 +30,12 @@ low_pass_filter = true
 # TrueHD asks first: the output is no longer identical to the source.
 surround_3db_attenuation = false
 
+# TrueHD Atmos sources: truehdd's warp mode, used only when the source has none: '' (not passed), 'normal', 'warping', 'prologiciix' or 'loro' (-wm overrides it for one run).
+truehdd_warp_mode = ''
+
+# TrueHD Atmos sources: truehdd's bed conformance, for sources whose bed comes out as objects, set to true to turn it on (-bc overrides it for one run).
+truehdd_bed_conform = false
+
 # Feed the decoded audio from ffmpeg straight into DEE instead of writing a temp .wav (DD, DDP, AC4, AAC, -mo).
 # 'auto': always on Linux/macOS; on Windows only when fewer than 2 encodes run at once, because DEE's
 #   named pipe is much slower when several encodes run in parallel (those use the temp .wav).
@@ -42,9 +48,19 @@ pipe = 'auto'
 #   You can override it with -o/--output.
 # to_input: save each output next to its input file, this overrides path.
 #   You can turn it on with -oi/--output-to-input.
+# template: the name of each output file without the extension (deew adds it).
+#   Placeholders: {stem} (the input's name without extension and delay tag),
+#   {name} (without extension, delay tag kept), {format} (ddp, thd, ...),
+#   {codec} (DDP, TrueHD Atmos, ...), {channels} (2.0, 5.1, 7.1), {bitrate}
+#   (kbps, empty for TrueHD), {lang} and {title} (tags of the audio track),
+#   {track} (the -ti value). Empty values drop out with a neighbouring
+#   separator, e.g. '{stem}.{lang}' gives 'Movie' without a language tag.
+#   You can override it with -ot/--output-template, or name a single output
+#   with -on/--output-name.
 [output]
     path = ''
     to_input = false
+    template = '{stem}'
 
 [default_bitrates]
     dd_1_0 = 128

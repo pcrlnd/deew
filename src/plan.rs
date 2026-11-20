@@ -3,7 +3,7 @@
 
 use crate::cli::Args;
 use crate::config::{
-    Ac4ImsMode, DdpAtmosMode, DdpMode, DefaultBitrates, DefaultModes, MaxInstances,
+    Ac4ImsMode, DdpAtmosMode, DdpMode, DefaultBitrates, DefaultModes, MaxInstances, WarpMode,
 };
 use crate::data::{ErrorKind, allowed_bitrates};
 use crate::error::{escape, print_exit};
@@ -123,6 +123,12 @@ impl Format {
     /// Atmos downmixes.
     pub fn has_surround_3db(self) -> bool {
         matches!(self, Format::Dd | Format::Ddp | Format::Thd)
+    }
+
+    /// Formats whose Atmos source goes through truehdd (`-wm`, `-bc`): the
+    /// Atmos formats and AC4 IMS (from a TrueHD Atmos source).
+    pub fn has_truehdd(self) -> bool {
+        self.is_atmos() || self == Format::Ac4Ims
     }
 
     /// Formats that accept a custom dialnorm.
@@ -275,6 +281,10 @@ pub struct Validated {
     pub low_pass_filter: Option<bool>,
     /// `-s3a` (DD and DDP only); `None` leaves it to the config's `surround_3db_attenuation`.
     pub surround_3db_attenuation: Option<bool>,
+    /// `-wm`; `None` leaves it to the config's `truehdd_warp_mode`.
+    pub warp_mode: Option<WarpMode>,
+    /// `-bc`; `None` leaves it to the config's `truehdd_bed_conform`.
+    pub bed_conform: Option<bool>,
 }
 
 pub const DRC_PROFILES: [&str; 6] = [
@@ -303,6 +313,8 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
 
     // `-mo` measures the source: the format and the encoding options are ignored
     if args.measure_only {
+        // a TrueHD Atmos source is decoded by truehdd for the measurement
+        let (warp_mode, bed_conform) = truehdd_options(args)?;
         return Ok(Validated {
             format: Format::Ddp,
             downmix: None,
@@ -315,6 +327,8 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
             surround_phase_shift: None,
             low_pass_filter: None,
             surround_3db_attenuation: None,
+            warp_mode,
+            bed_conform,
         });
     }
 
@@ -391,6 +405,13 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
     if surround_3db_attenuation.is_some() && !format.has_surround_3db() {
         return Err(Fail::new(ErrorKind::Surround3dbFormat));
     }
+    let (warp_mode, bed_conform) = truehdd_options(args)?;
+    if warp_mode.is_some() && !format.has_truehdd() {
+        return Err(Fail::new(ErrorKind::WarpModeFormat));
+    }
+    if bed_conform.is_some() && !format.has_truehdd() {
+        return Err(Fail::new(ErrorKind::BedConformFormat));
+    }
     Ok(Validated {
         format,
         downmix,
@@ -403,7 +424,29 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
         surround_phase_shift,
         low_pass_filter,
         surround_3db_attenuation,
+        warp_mode,
+        bed_conform,
     })
+}
+
+/// `-wm` and `-bc` (the format is checked by the caller).
+fn truehdd_options(args: &Args) -> Result<(Option<WarpMode>, Option<bool>), Fail> {
+    let warp_mode = match args.warp_mode.as_deref() {
+        Some(m) => Some(WarpMode::parse(m).ok_or(Fail::new(ErrorKind::WarpMode))?),
+        None => None,
+    };
+    let bed_conform = match args
+        .bed_conform
+        .as_deref()
+        .map(str::to_lowercase)
+        .as_deref()
+    {
+        None => None,
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        Some(_) => return Err(Fail::new(ErrorKind::OnOff)),
+    };
+    Ok((warp_mode, bed_conform))
 }
 
 /// What the probed inputs have in common, and their bit depths.
@@ -551,6 +594,35 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// The channels of the output for `{channels}` of an output name: `2.0`,
+    /// `5.1`, `7.1`, `5.0`, `7.0`. Atmos outputs have the layout deew knows
+    /// they are coded in, empty if it does not know one.
+    pub fn name_label(&self, format: Format, atmos_mode: DdpAtmosMode) -> String {
+        match format {
+            Format::Ac4Ims => return "2.0".to_string(),
+            Format::DdpAtmos => {
+                return match atmos_mode {
+                    DdpAtmosMode::Streaming => "5.1",
+                    DdpAtmosMode::Standard | DdpAtmosMode::Bluray => "7.1",
+                }
+                .to_string();
+            }
+            Format::ThdAtmos => return "7.1".to_string(),
+            Format::Ac4Atmos => return String::new(),
+            _ => {}
+        }
+        match (self.outchannels, self.lfe) {
+            (6, Lfe::Removed) => "5.0",
+            (8, Lfe::Removed) => "7.0",
+            (1, _) => "1.0",
+            (2, _) => "2.0",
+            (6, _) => "5.1",
+            (8, _) => "7.1",
+            _ => "",
+        }
+        .to_string()
+    }
+
     /// The channels of the output as shown: `5.0`, `7.1`, `stereo`, ...
     pub fn output_name(&self) -> String {
         match (self.outchannels, self.lfe) {
@@ -1215,6 +1287,77 @@ mod tests {
     }
 
     #[test]
+    fn warp_mode_and_bed_conform_are_for_the_truehdd_formats() {
+        for format in ["ddp-atmos", "thd-atmos", "ac4-atmos", "ac4-ims", "AC4-IMS"] {
+            let v = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.warp_mode = Some("LoRo".into());
+                a.bed_conform = Some("ON".into())
+            }))
+            .unwrap();
+            assert_eq!(v.warp_mode, Some(WarpMode::Loro), "{format}");
+            assert_eq!(v.bed_conform, Some(true), "{format}");
+        }
+        let v = validate_args_d(&args(|a| {
+            a.format = "thd-atmos".into();
+            a.bed_conform = Some("off".into())
+        }))
+        .unwrap();
+        assert_eq!((v.warp_mode, v.bed_conform), (None, Some(false)));
+        let v = validate_args_d(&Args::default()).unwrap();
+        assert_eq!((v.warp_mode, v.bed_conform), (None, None));
+        for format in ["dd", "ddp", "thd", "ac4", "aac"] {
+            let e = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.warp_mode = Some("normal".into())
+            }))
+            .unwrap_err();
+            assert_eq!(e.kind, ErrorKind::WarpModeFormat, "{format}");
+            let e = validate_args_d(&args(|a| {
+                a.format = format.into();
+                a.bed_conform = Some("on".into())
+            }))
+            .unwrap_err();
+            assert_eq!(e.kind, ErrorKind::BedConformFormat, "{format}");
+        }
+        // -mo decodes a TrueHD Atmos source with truehdd, any format
+        for format in ["dd", "thd", "aac"] {
+            let v = validate_args_d(&args(|a| {
+                a.measure_only = true;
+                a.format = format.into();
+                a.warp_mode = Some("warping".into());
+                a.bed_conform = Some("on".into())
+            }))
+            .unwrap();
+            assert_eq!(v.warp_mode, Some(WarpMode::Warping), "{format}");
+            assert_eq!(v.bed_conform, Some(true), "{format}");
+        }
+    }
+
+    #[test]
+    fn bad_warp_mode_and_bed_conform_values() {
+        let e = validate_args_d(&args(|a| {
+            a.format = "ddp-atmos".into();
+            a.warp_mode = Some("x".into())
+        }))
+        .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::WarpMode);
+        let e = validate_args_d(&args(|a| {
+            a.format = "ddp-atmos".into();
+            a.bed_conform = Some("maybe".into())
+        }))
+        .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::OnOff);
+        // bad values of -mo are errors too
+        let e = validate_args_d(&args(|a| {
+            a.measure_only = true;
+            a.warp_mode = Some("x".into())
+        }))
+        .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::WarpMode);
+    }
+
+    #[test]
     fn thd_surround_3db_notice() {
         let n = |f, ch, mo, s3a| notices(f, ch, mo, 0, s3a);
         for ch in [6, 8] {
@@ -1287,6 +1430,8 @@ mod tests {
             profile: String::new(),
             is_atmos: false,
             master: None,
+            language: None,
+            title: None,
         }
     }
 

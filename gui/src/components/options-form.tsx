@@ -21,6 +21,10 @@ import {
   ddpModeApplies,
   disableLfeApplies,
   ddFilterApplies,
+  truehddOptionsApply,
+  WARP_MODES,
+  type WarpModeChoice,
+  type WarpModeConfig,
   effectiveAc4ImsMode,
   setAc4ImsMode,
   supportsDownmix,
@@ -49,8 +53,14 @@ import {
   type Drc,
   type BitrateInfo,
   type Format,
+  type OutputNaming,
 } from "@/lib/deew-args"
 import { HELP } from "@/lib/help-text"
+import {
+  DEFAULT_TEMPLATE,
+  effectiveTemplateText,
+  type NamePreview,
+} from "@/lib/output-name"
 import {
   SHIM_DDP_ATMOS_MODES,
   SHIM_DDP_MODES,
@@ -111,6 +121,23 @@ function modeChoices<T extends string>(
   )
 }
 
+/** The warp mode select: the default is the config's mode, else the source's own. */
+function warpModeChoices(configMode: WarpModeConfig): SelectChoice[] {
+  return [
+    {
+      value: DEFAULT_MODE,
+      label:
+        configMode === ""
+          ? "from the source (default)"
+          : `${configMode} (default)`,
+    },
+    ...WARP_MODES.filter((m) => m !== configMode).map((m) => ({
+      value: m,
+      label: m,
+    })),
+  ]
+}
+
 /** The select value of a stored choice (an explicit default mode is the default). */
 function modeValue(choice: string, defaultMode: string): string {
   return choice === defaultMode ? DEFAULT_MODE : choice
@@ -147,6 +174,12 @@ const CHECKBOXES: {
     help: HELP.surround3dbAttenuation,
   },
   {
+    key: "truehddBedConform",
+    flag: "-bc",
+    label: "Bed conform",
+    help: HELP.truehddBedConform,
+  },
+  {
     key: "keepTemp",
     flag: "-k",
     label: "Keep temp files",
@@ -177,6 +210,7 @@ const DD_FILTER_KEYS: readonly string[] = [
   "surroundPhaseShift",
   "lowPassFilter",
   "surround3dbAttenuation",
+  "truehddBedConform",
 ]
 
 function isDdFilter(key: string): key is DdFilterOption {
@@ -188,6 +222,8 @@ const DD_FILTER_FORMATS: Record<DdFilterOption, string> = {
   surroundPhaseShift: "DD, DDP and DDP Atmos",
   lowPassFilter: "DD and DDP",
   surround3dbAttenuation: "DD, DDP and TrueHD",
+  truehddBedConform:
+    "DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only",
 }
 
 function FlagCode({ flag }: { flag: string }) {
@@ -232,6 +268,40 @@ function Field({
 }
 
 const MAX_LISTED_ERRORS = 3
+
+/** The first error, else (with a non-default template) an example name. */
+function OutputNamesLine({
+  names,
+  showExample,
+}: {
+  names: NamePreview[]
+  showExample: boolean
+}) {
+  const p =
+    names.find((n) => "error" in n.result) ??
+    (showExample ? names[0] : undefined)
+  if (!p) return null
+  const input = p.path.split(/[\\/]/).pop() ?? p.path
+  return (
+    <div className="min-w-0 text-xs">
+      {"error" in p.result ? (
+        <NoteLine
+          tone="warning"
+          text={`${input}: ${p.result.error}`}
+          title={p.path}
+          truncate
+        />
+      ) : (
+        <p
+          title={p.path}
+          className="truncate font-mono whitespace-nowrap text-muted-foreground"
+        >
+          {input} {"→"} {p.result.name}
+        </p>
+      )}
+    </div>
+  )
+}
 
 /** Summary of the probed inputs, under the input list. */
 function ProbeSummaryLine({
@@ -312,6 +382,10 @@ interface OptionsFormProps {
   defaultModes: DefaultModes
   /** The config's `surround_phase_shift`, `low_pass_filter`, `surround_3db_attenuation`. */
   ddFilterDefaults: DdFilterDefaults
+  /** The config's output template and whether `-on` can be used. */
+  naming: OutputNaming
+  /** The output names of the probed files, as deew will make them. */
+  outputNames: NamePreview[]
   /** Downmix values that fit the probed input. */
   downmixChoices: Downmix[]
   /** Right-aligned in the "Input(s)" row (web mode, no window bar). */
@@ -332,6 +406,8 @@ export function OptionsForm({
   defaultBitrates,
   defaultModes,
   ddFilterDefaults,
+  naming,
+  outputNames,
   downmixChoices,
   toolbar,
 }: OptionsFormProps) {
@@ -349,6 +425,10 @@ export function OptionsForm({
   // Fields that only make sense once there is something to encode.
   const waiting = disabled || value.inputs.length === 0
   const probedChannels = probe.status === "done" ? probe.summary.channels : null
+  // -on needs a single file, and the name wins over the template
+  const nameOff = waiting || value.measureOnly || !naming.singleFile
+  const nameWins = naming.singleFile && value.outputName.trim() !== ""
+  const templateOff = waiting || value.measureOnly || nameWins
 
   const hasList =
     bitrateInfo.status === "ok" || bitrateInfo.status === "fallback"
@@ -548,6 +628,28 @@ export function OptionsForm({
             />
           </Field>
           <Field
+            label="Warp mode"
+            flag="-wm"
+            disabled={
+              waiting || !truehddOptionsApply(value.format, value.measureOnly)
+            }
+            help={HELP.warpMode}
+            htmlFor={id("wm")}
+          >
+            <SimpleSelect
+              id={id("wm")}
+              value={modeValue(
+                value.warpMode,
+                ddFilterDefaults.truehddWarpMode
+              )}
+              choices={warpModeChoices(ddFilterDefaults.truehddWarpMode)}
+              onChange={(v) => patch({ warpMode: v as WarpModeChoice })}
+              disabled={
+                waiting || !truehddOptionsApply(value.format, value.measureOnly)
+              }
+            />
+          </Field>
+          <Field
             label="Bitrate"
             flag="-b"
             disabled={waiting}
@@ -692,6 +794,71 @@ export function OptionsForm({
             </Button>
           </div>
         </Field>
+        <BalancedRows minItemWidth={MIN_FIELD_WIDTH}>
+          <Field
+            label="Output name"
+            flag="-on"
+            disabled={nameOff}
+            help={
+              naming.singleFile
+                ? HELP.outputName
+                : `${HELP.outputName}\n\nOnly available with a single input file.`
+            }
+            htmlFor={id("on")}
+          >
+            <Input
+              id={id("on")}
+              className="h-7"
+              placeholder={
+                naming.singleFile
+                  ? "name of the output file"
+                  : "only for a single input file"
+              }
+              value={value.outputName}
+              onChange={(e) => patch({ outputName: e.target.value })}
+              disabled={nameOff}
+              spellCheck={false}
+            />
+          </Field>
+          <Field
+            label="Output template"
+            flag="-ot"
+            disabled={templateOff}
+            help={
+              nameWins
+                ? `${HELP.outputTemplate}\n\nNot used while an output name is set.`
+                : HELP.outputTemplate
+            }
+            htmlFor={id("ot")}
+          >
+            <Input
+              id={id("ot")}
+              className="h-7"
+              placeholder={naming.configTemplate}
+              value={value.outputTemplate ?? naming.configTemplate}
+              onChange={(e) =>
+                patch({
+                  outputTemplate:
+                    e.target.value === naming.configTemplate
+                      ? null
+                      : e.target.value,
+                })
+              }
+              disabled={templateOff}
+              spellCheck={false}
+            />
+          </Field>
+        </BalancedRows>
+        <OutputNamesLine
+          names={outputNames}
+          showExample={
+            !nameWins &&
+            effectiveTemplateText(
+              value.outputTemplate,
+              naming.configTemplate
+            ).trim() !== DEFAULT_TEMPLATE
+          }
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
@@ -724,7 +891,8 @@ export function OptionsForm({
         </div>
         {CHECKBOXES.map(({ key, flag, label, help }) => {
           const isFilter = isDdFilter(key)
-          const filterOff = isFilter && !ddFilterApplies(key, value.format)
+          const filterOff =
+            isFilter && !ddFilterApplies(key, value.format, value.measureOnly)
           const off =
             disabled ||
             (key === "disableLfe" &&

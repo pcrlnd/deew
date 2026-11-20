@@ -137,6 +137,17 @@ fn stem_basename(path: &str, windows: bool) -> &str {
 static DELAY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r" ?DELAY [-|+]?[0-9]+m?s").expect("valid regex"));
 
+/// The file name of `path` without extension, and without the DELAY tag if
+/// `stripdelay` (what `basename` gives, minus the extension).
+pub fn file_stem(path: &str, stripdelay: bool) -> String {
+    let stem = stem_basename(path, cfg!(windows));
+    if stripdelay {
+        DELAY_RE.replace_all(stem, "").into_owned()
+    } else {
+        stem.to_string()
+    }
+}
+
 pub fn basename(path: &str, ext: &str, quote: bool, sanitize: bool, stripdelay: bool) -> String {
     basename_for(path, ext, quote, sanitize, stripdelay, cfg!(windows))
 }

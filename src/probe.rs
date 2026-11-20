@@ -132,6 +132,10 @@ pub struct Probe {
     /// An Atmos master (ADM BWF or DAMF) that DEE reads directly, never
     /// probed with ffprobe.
     pub master: Option<MasterKind>,
+    /// The `language` tag of the stream, `None` if it has none.
+    pub language: Option<String>,
+    /// The `title` tag of the stream, `None` if it has none.
+    pub title: Option<String>,
 }
 
 impl Probe {
@@ -150,6 +154,8 @@ impl Probe {
             profile: String::new(),
             is_atmos: true,
             master: Some(master.kind),
+            language: None,
+            title: None,
         }
     }
 }
@@ -363,7 +369,23 @@ pub fn parse_probe(json: &str, track: impl Into<TrackIndex>) -> Result<Probe, Pr
         profile,
         is_atmos,
         master: None,
+        language: tag(audio, "language"),
+        title: tag(audio, "title"),
     })
+}
+
+/// A tag of the stream (ffprobe's key case varies, e.g. `LANGUAGE` in some
+/// containers), `None` if missing or blank.
+fn tag(stream: &Value, key: &str) -> Option<String> {
+    let value = stream
+        .get("tags")?
+        .as_object()?
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))?
+        .1
+        .as_str()?
+        .trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// The reason of a failed ffprobe: the last non-empty stderr line without a
@@ -445,7 +467,9 @@ mod tests {
                 raw_truehd: false,
                 profile: String::new(),
                 is_atmos: false,
-                master: None
+                master: None,
+                language: None,
+                title: None,
             })
         );
     }
@@ -467,9 +491,32 @@ mod tests {
                 raw_truehd: false,
                 profile: String::new(),
                 is_atmos: false,
-                master: None
+                master: None,
+                language: None,
+                title: None,
             })
         );
+    }
+
+    #[test]
+    fn tags_of_the_track() {
+        let json = r#"{"streams":[
+            {"codec_type":"audio","sample_rate":"48000","channels":2,"tags":{"language":"eng"}},
+            {"codec_type":"audio","sample_rate":"48000","channels":6,
+             "tags":{"LANGUAGE":" hun ","TITLE":"Commentary","other":"x"}},
+            {"codec_type":"audio","sample_rate":"48000","channels":6,"tags":{"title":" "}}]}"#;
+        let first = parse_probe(json, 0).unwrap();
+        assert_eq!(
+            (first.language.as_deref(), first.title.as_deref()),
+            (Some("eng"), None)
+        );
+        let second = parse_probe(json, 1).unwrap();
+        assert_eq!(
+            (second.language.as_deref(), second.title.as_deref()),
+            (Some("hun"), Some("Commentary"))
+        );
+        let third = parse_probe(json, 2).unwrap();
+        assert_eq!((third.language, third.title), (None, None));
     }
 
     #[test]

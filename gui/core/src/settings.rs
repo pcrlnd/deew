@@ -110,6 +110,12 @@ pub struct SettingsView {
     pub low_pass_filter: bool,
     /// `surround_3db_attenuation` of the config (false when missing).
     pub surround_3db_attenuation: bool,
+    /// `truehdd_warp_mode` of the config (empty when missing or unknown).
+    pub truehdd_warp_mode: String,
+    /// `truehdd_bed_conform` of the config (false when missing).
+    pub truehdd_bed_conform: bool,
+    /// `output.template` of the config (`{stem}` when missing, empty or not a string).
+    pub output_template: String,
 }
 
 impl Default for SettingsView {
@@ -123,8 +129,29 @@ impl Default for SettingsView {
             surround_phase_shift: true,
             low_pass_filter: true,
             surround_3db_attenuation: false,
+            truehdd_warp_mode: String::new(),
+            truehdd_bed_conform: false,
+            output_template: DEFAULT_OUTPUT_TEMPLATE.to_string(),
         }
     }
+}
+
+/// The output name template of a config without one.
+const DEFAULT_OUTPUT_TEMPLATE: &str = "{stem}";
+
+/// `output.template` of a config text; a missing, empty or non-string value
+/// gives `{stem}`.
+pub fn parse_output_template(text: &str) -> String {
+    text.parse::<toml::Table>()
+        .ok()
+        .and_then(|d| {
+            d.get("output")?
+                .get("template")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| DEFAULT_OUTPUT_TEMPLATE.to_string())
 }
 
 /// The top-level `surround_phase_shift`, `low_pass_filter` and
@@ -142,6 +169,24 @@ pub fn parse_dd_filters(text: &str) -> (bool, bool, bool) {
         pick("low_pass_filter", true),
         pick("surround_3db_attenuation", false),
     )
+}
+
+/// The top-level `truehdd_warp_mode` (empty when missing, empty or not one
+/// of `normal`, `warping`, `prologiciix`, `loro`) and `truehdd_bed_conform`
+/// (false when missing or of the wrong type) of a config text.
+pub fn parse_truehdd_options(text: &str) -> (String, bool) {
+    let doc = text.parse::<toml::Table>().ok();
+    let warp_mode = doc
+        .as_ref()
+        .and_then(|d| d.get("truehdd_warp_mode")?.as_str())
+        .filter(|v| ["normal", "warping", "prologiciix", "loro"].contains(v))
+        .unwrap_or_default()
+        .to_string();
+    let bed_conform = doc
+        .as_ref()
+        .and_then(|d| d.get("truehdd_bed_conform")?.as_bool())
+        .unwrap_or(false);
+    (warp_mode, bed_conform)
 }
 
 /// `default_modes.ddp`, `.ddp_atmos` and `.ac4_ims` of a config text; a missing or
@@ -179,6 +224,8 @@ impl SettingsView {
             parse_default_modes(&text);
         let (surround_phase_shift, low_pass_filter, surround_3db_attenuation) =
             parse_dd_filters(&text);
+        let (truehdd_warp_mode, truehdd_bed_conform) = parse_truehdd_options(&text);
+        let output_template = parse_output_template(&text);
         SettingsView {
             settings,
             default_ddp_mode,
@@ -187,6 +234,9 @@ impl SettingsView {
             surround_phase_shift,
             low_pass_filter,
             surround_3db_attenuation,
+            truehdd_warp_mode,
+            truehdd_bed_conform,
+            output_template,
             default_output: std::env::home_dir()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
@@ -422,7 +472,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false}"#
+            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}"}"#
         );
         let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","toInput":true}"#).unwrap();
         assert!(o.to_input);
@@ -606,6 +656,69 @@ mod tests {
         );
         // only top-level keys count
         assert_eq!(f("[gui]\nlow_pass_filter = false\n"), (true, true, false));
+    }
+
+    #[test]
+    fn truehdd_options_come_from_the_config() {
+        let f = |t: &str| parse_truehdd_options(t);
+        assert_eq!(f(""), (String::new(), false));
+        assert_eq!(f("not toml [[["), (String::new(), false));
+        assert_eq!(f(TEMPLATE), (String::new(), false));
+        assert_eq!(
+            f("truehdd_warp_mode = 'loro'\ntruehdd_bed_conform = true\n"),
+            ("loro".to_string(), true)
+        );
+        for mode in ["normal", "warping", "prologiciix", "loro"] {
+            assert_eq!(f(&format!("truehdd_warp_mode = '{mode}'\n")).0, mode);
+        }
+        // wrong types and unknown values give the default
+        assert_eq!(
+            f("truehdd_warp_mode = 'Loro'\ntruehdd_bed_conform = 'yes'\n"),
+            (String::new(), false)
+        );
+        assert_eq!(f("truehdd_warp_mode = 3\n"), (String::new(), false));
+        // only top-level keys count
+        assert_eq!(
+            f("[gui]\ntruehdd_warp_mode = 'loro'\ntruehdd_bed_conform = true\n"),
+            (String::new(), false)
+        );
+    }
+
+    #[test]
+    fn output_template_comes_from_the_config() {
+        let f = |t: &str| parse_output_template(t);
+        assert_eq!(f(""), "{stem}");
+        assert_eq!(f("not toml [[["), "{stem}");
+        assert_eq!(f(TEMPLATE), "{stem}");
+        assert_eq!(f("[output]\npath = ''\n"), "{stem}");
+        assert_eq!(f("[output]\ntemplate = ''\n"), "{stem}");
+        assert_eq!(f("[output]\ntemplate = 3\n"), "{stem}");
+        assert_eq!(f("[output]\ntemplate = '{stem}.{lang}'\n"), "{stem}.{lang}");
+        // only the [output] table counts
+        assert_eq!(f("template = '{name}'\n[gui]\ntemplate = 'x'\n"), "{stem}");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[output]\ntemplate = '{name} {codec}'\n").unwrap();
+        let view = SettingsView::new(GuiSettings::default(), Some(&path));
+        assert_eq!(view.output_template, "{name} {codec}");
+        let view = SettingsView::new(GuiSettings::default(), None);
+        assert_eq!(view.output_template, "{stem}");
+    }
+
+    #[test]
+    fn settings_view_reads_the_truehdd_options_from_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "truehdd_warp_mode = 'warping'\ntruehdd_bed_conform = true\n",
+        )
+        .unwrap();
+        let view = SettingsView::new(GuiSettings::default(), Some(&path));
+        assert_eq!(view.truehdd_warp_mode, "warping");
+        assert!(view.truehdd_bed_conform);
+        let view = SettingsView::new(GuiSettings::default(), None);
+        assert!(view.truehdd_warp_mode.is_empty() && !view.truehdd_bed_conform);
     }
 
     #[test]

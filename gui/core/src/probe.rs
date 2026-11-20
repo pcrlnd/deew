@@ -25,6 +25,13 @@ pub struct FileProbe {
     pub codec: Option<String>,
     /// ffprobe's stream `profile` mentions Dolby Atmos.
     pub atmos: bool,
+    /// The `language` tag of the selected track, `None` when missing (also
+    /// from a deew that doesn't report it).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// The `title` tag of the selected track.
+    #[serde(default)]
+    pub title: Option<String>,
     /// An Atmos master (ADM BWF / DAMF) that DEE reads directly: `codec` is
     /// its label, never probed with ffprobe.
     pub master: bool,
@@ -110,7 +117,7 @@ mod tests {
     }
 
     const GOOD: &str = r#"{"version":1,"ffprobe":"/x/ffprobe","files":[
-        {"path":"a.mka","channels":6,"sampleRate":48000,"bitDepth":24,"codec":"truehd","atmos":true,"master":false,"error":null,"skipped":false},
+        {"path":"a.mka","channels":6,"sampleRate":48000,"bitDepth":24,"codec":"truehd","atmos":true,"language":"eng","title":"Main","master":false,"error":null,"skipped":false},
         {"path":"d/n.txt","channels":null,"sampleRate":null,"bitDepth":null,"codec":null,"atmos":false,"master":false,"error":"ffprobe: Invalid data","skipped":true}
     ],"error":null}"#;
 
@@ -128,10 +135,20 @@ mod tests {
                 bit_depth: Some(24),
                 codec: Some("truehd".into()),
                 atmos: true,
+                language: Some("eng".into()),
+                title: Some("Main".into()),
                 master: false,
                 error: None,
                 skipped: false,
             }
+        );
+        // no tags: None
+        assert_eq!(
+            (
+                result.files[1].language.as_deref(),
+                result.files[1].title.as_deref()
+            ),
+            (None, None)
         );
         assert!(result.files[1].skipped);
         assert_eq!(
@@ -139,6 +156,17 @@ mod tests {
             Some("ffprobe: Invalid data")
         );
         assert_eq!(result.files[1].channels, None);
+    }
+
+    #[test]
+    fn output_without_the_tags_still_works() {
+        // `language` and `title` were added to version 1 later
+        let json = r#"{"version":1,"ffprobe":"/x","files":[{"path":"a.wav","channels":2,"sampleRate":48000,"bitDepth":16,"codec":"pcm_s16le","atmos":false,"master":false,"error":null,"skipped":false}],"error":null}"#;
+        let result = parse_probe_json(json).unwrap();
+        assert_eq!(result.files[0].language, None);
+        assert_eq!(result.files[0].title, None);
+        let out = serde_json::to_value(&result).unwrap();
+        assert_eq!(out["files"][0]["language"], serde_json::Value::Null);
     }
 
     #[test]

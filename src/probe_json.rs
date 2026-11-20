@@ -5,8 +5,12 @@
 //! ```text
 //! {"version":1,"ffprobe":"<path>","files":[{"path":"..","channels":6,
 //!  "sampleRate":48000,"bitDepth":24,"codec":"truehd","atmos":true,
-//!  "master":false,"error":null,"skipped":false}],"error":null}
+//!  "language":"eng","title":null,"master":false,"error":null,"skipped":false}],
+//!  "error":null}
 //! ```
+//!
+//! `language` and `title` (the tags of the track, `null` when missing) were
+//! added without a new version: a reader has to accept output without them.
 //!
 //! A fatal problem gives `"files":[]` and `"error"` (exit code 1). The
 //! config isn't read, nothing else is printed.
@@ -39,6 +43,9 @@ fn file_json(input: &Input, result: Result<Probe, ProbeError>) -> Value {
         "bitDepth": probe.as_ref().map(|p| p.bit_depth),
         "codec": probe.as_ref().map(|p| p.codec.as_str()).filter(|c| !c.is_empty()),
         "atmos": probe.as_ref().is_some_and(|p| p.is_atmos),
+        // the tags of the selected track, null when missing
+        "language": probe.as_ref().and_then(|p| p.language.as_deref()),
+        "title": probe.as_ref().and_then(|p| p.title.as_deref()),
         "master": probe.as_ref().is_some_and(|p| p.master.is_some()),
         "error": error,
         "skipped": skipped,

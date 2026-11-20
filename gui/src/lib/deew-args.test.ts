@@ -7,6 +7,8 @@ import {
   ATMOS_INPUT_WARNING,
   CHANNELS_WARNING,
   DEFAULT_OPTIONS,
+  PROGRAM_DD_FILTER_DEFAULTS,
+  type DdFilterDefaults,
   FORMATS,
   DRC_VALUES,
   ddpAtmosModeApplies,
@@ -48,6 +50,7 @@ import {
   supportsDownmix,
   lowPassFilterApplies,
   surround3dbAttenuationApplies,
+  truehddOptionsApply,
   type BitrateContext,
   type DeewOptions,
   type Downmix,
@@ -102,6 +105,8 @@ describe("buildArgs", () => {
         dialnorm: "-27",
         instances: "50%",
         outputToInput: false,
+        outputName: "",
+        outputTemplate: null,
         ddpMode: "default",
         ddpAtmosMode: "default",
         ac4ImsMode: "default",
@@ -109,6 +114,8 @@ describe("buildArgs", () => {
         surroundPhaseShift: null,
         lowPassFilter: null,
         surround3dbAttenuation: null,
+        warpMode: "default",
+        truehddBedConform: null,
         keepTemp: true,
         keepLog: true,
         measureOnly: true,
@@ -592,6 +599,84 @@ describe("-oi (save next to input)", () => {
   })
 })
 
+describe("-on and -ot (output name)", () => {
+  const single = { configTemplate: "{stem}", singleFile: true }
+  const several = { configTemplate: "{stem}", singleFile: false }
+  const args = (o: Partial<DeewOptions>, naming = single) =>
+    buildArgs(opts({ inputs: ["a.mkv"], ...o }), { naming })
+
+  it("passes nothing by default", () => {
+    expect(args({})).toEqual(["-i", "a.mkv"])
+    expect(args({ outputName: "  ", outputTemplate: "" })).toEqual([
+      "-i",
+      "a.mkv",
+    ])
+  })
+
+  it("passes the name for a single file, after -o", () => {
+    expect(args({ outputName: " Movie ", output: "/out" })).toEqual([
+      "-i",
+      "a.mkv",
+      "-o",
+      "/out",
+      "-on",
+      "Movie",
+    ])
+  })
+
+  it("ignores the name for several files and passes the template", () => {
+    const o = { outputName: "Movie", outputTemplate: "{stem}.{lang}" }
+    expect(args(o, several)).toEqual(["-i", "a.mkv", "-ot", "{stem}.{lang}"])
+  })
+
+  it("lets the name win over the template", () => {
+    const o = { outputName: "Movie", outputTemplate: "{stem}.{lang}" }
+    expect(args(o)).toEqual(["-i", "a.mkv", "-on", "Movie"])
+  })
+
+  it("passes the template only when it differs from the config", () => {
+    expect(args({ outputTemplate: "{stem}" })).toEqual(["-i", "a.mkv"])
+    expect(args({ outputTemplate: null })).toEqual(["-i", "a.mkv"])
+    expect(args({ outputTemplate: "{name}" })).toEqual([
+      "-i",
+      "a.mkv",
+      "-ot",
+      "{name}",
+    ])
+    const config = { configTemplate: "{name}", singleFile: false }
+    expect(args({ outputTemplate: "{name}" }, config)).toEqual(["-i", "a.mkv"])
+    expect(args({ outputTemplate: "{stem}" }, config)).toEqual([
+      "-i",
+      "a.mkv",
+      "-ot",
+      "{stem}",
+    ])
+  })
+
+  it("passes neither with measure only", () => {
+    expect(
+      args({ outputName: "x", outputTemplate: "{name}", measureOnly: true })
+    ).toEqual(["-i", "a.mkv", "-mo"])
+  })
+
+  it("reports an invalid template that would be passed", () => {
+    const check = (o: Partial<DeewOptions>, naming = several) =>
+      validate(opts({ inputs: ["a.mkv"], ...o }), undefined, naming)
+    expect(check({ outputTemplate: "{nope}" })).toHaveLength(1)
+    expect(check({ outputTemplate: "{nope}" })[0]).toContain(
+      "unknown placeholder {nope}"
+    )
+    expect(check({ outputTemplate: "{stem" })[0]).toContain("unbalanced")
+    expect(check({ outputTemplate: "a/{stem}" })[0]).toContain("path separator")
+    // not passed, so not a problem
+    expect(check({ outputTemplate: "{stem" }, single)).toHaveLength(1)
+    expect(check({ outputTemplate: "{stem", outputName: "x" }, single)).toEqual(
+      []
+    )
+    expect(check({ outputTemplate: "{stem", measureOnly: true })).toEqual([])
+  })
+})
+
 describe("-dl (disable LFE)", () => {
   const dl = (
     format: Parameters<typeof disableLfeApplies>[0],
@@ -636,10 +721,17 @@ describe("-dl (disable LFE)", () => {
 })
 
 describe("-sps, -lpf and -s3a (config-tied toggles)", () => {
+  const full = (c: Partial<DdFilterDefaults>): DdFilterDefaults => ({
+    ...PROGRAM_DD_FILTER_DEFAULTS,
+    ...c,
+  })
   const flags = (
     o: Partial<Parameters<typeof opts>[0]>,
-    ddFilterDefaults?: Parameters<typeof effectiveDdFilter>[2]
-  ) => buildArgs(opts(o), { ddFilterDefaults })
+    ddFilterDefaults?: Partial<DdFilterDefaults>
+  ) =>
+    buildArgs(opts(o), {
+      ddFilterDefaults: ddFilterDefaults && full(ddFilterDefaults),
+    })
   const off = {
     surroundPhaseShift: false,
     lowPassFilter: false,
@@ -676,7 +768,7 @@ describe("-sps, -lpf and -s3a (config-tied toggles)", () => {
   })
 
   it("reads the effective state from the option or the config", () => {
-    const cfg = { ...off, lowPassFilter: true }
+    const cfg = full({ ...off, lowPassFilter: true })
     expect(effectiveDdFilter(opts({}), "lowPassFilter", cfg)).toBe(true)
     expect(effectiveDdFilter(opts({}), "surroundPhaseShift", cfg)).toBe(false)
     expect(
@@ -745,6 +837,8 @@ describe("-sps, -lpf and -s3a (config-tied toggles)", () => {
       surroundPhaseShift: true,
       lowPassFilter: true,
       surround3dbAttenuation: false,
+      truehddBedConform: false,
+      truehddWarpMode: "",
     })
     expect(
       ddFilterDefaultsOf({
@@ -756,7 +850,105 @@ describe("-sps, -lpf and -s3a (config-tied toggles)", () => {
       surroundPhaseShift: false,
       lowPassFilter: true,
       surround3dbAttenuation: true,
+      truehddBedConform: false,
+      truehddWarpMode: "",
     })
+  })
+})
+
+describe("-wm and -bc (truehdd options)", () => {
+  const flags = (
+    o: Partial<Parameters<typeof opts>[0]>,
+    ddFilterDefaults?: Parameters<typeof effectiveDdFilter>[2]
+  ) => buildArgs(opts(o), { ddFilterDefaults })
+  const applying = ["ddp-atmos", "thd-atmos", "ac4-atmos", "ac4-ims"] as const
+  const others = ["dd", "ddp", "thd", "ac4", "aac"] as const
+
+  it("passes nothing by default or for values equal to the config", () => {
+    for (const format of applying) {
+      expect(flags({ format })).toEqual(["-f", format])
+    }
+    const cfg = {
+      ...PROGRAM_DD_FILTER_DEFAULTS,
+      truehddWarpMode: "loro" as const,
+      truehddBedConform: true,
+    }
+    expect(
+      flags(
+        { format: "thd-atmos", warpMode: "loro", truehddBedConform: true },
+        cfg
+      )
+    ).toEqual(["-f", "thd-atmos"])
+    expect(flags({ format: "thd-atmos" }, cfg)).toEqual(["-f", "thd-atmos"])
+  })
+
+  it("passes -wm and -bc when they differ from the config", () => {
+    expect(
+      flags({
+        format: "thd-atmos",
+        warpMode: "normal",
+        truehddBedConform: true,
+      })
+    ).toEqual(["-f", "thd-atmos", "-bc", "on", "-wm", "normal"])
+    const cfg = {
+      ...PROGRAM_DD_FILTER_DEFAULTS,
+      truehddWarpMode: "loro" as const,
+      truehddBedConform: true,
+    }
+    expect(
+      flags(
+        { format: "ddp-atmos", warpMode: "warping", truehddBedConform: false },
+        cfg
+      )
+    ).toEqual(["-f", "ddp-atmos", "-bc", "off", "-wm", "warping"])
+  })
+
+  it("is only enabled for the formats that use truehdd, or with -mo", () => {
+    for (const format of applying) {
+      expect(truehddOptionsApply(format, false)).toBe(true)
+      expect(ddFilterApplies("truehddBedConform", format)).toBe(true)
+    }
+    for (const format of others) {
+      expect(truehddOptionsApply(format, false)).toBe(false)
+      expect(ddFilterApplies("truehddBedConform", format)).toBe(false)
+      expect(truehddOptionsApply(format, true)).toBe(true)
+      expect(ddFilterApplies("truehddBedConform", format, true)).toBe(true)
+    }
+  })
+
+  it("is never passed for the other formats, so the CLI never fails on it", () => {
+    for (const format of others) {
+      const args = buildArgs(
+        opts({ format, warpMode: "loro", truehddBedConform: true })
+      )
+      expect(args).not.toContain("-wm")
+      expect(args).not.toContain("-bc")
+    }
+    // -mo takes them for any format
+    expect(
+      buildArgs(
+        opts({
+          format: "dd",
+          measureOnly: true,
+          warpMode: "loro",
+          truehddBedConform: true,
+        })
+      )
+    ).toEqual(["-f", "dd", "-bc", "on", "-wm", "loro", "-mo"])
+  })
+
+  it("takes the config's values from the settings answer", () => {
+    expect(
+      ddFilterDefaultsOf({
+        truehddWarpMode: "prologiciix",
+        truehddBedConform: true,
+      })
+    ).toMatchObject({ truehddWarpMode: "prologiciix", truehddBedConform: true })
+    expect(
+      ddFilterDefaultsOf({ truehddWarpMode: "x", truehddBedConform: "yes" })
+    ).toMatchObject({ truehddWarpMode: "", truehddBedConform: false })
+    expect(DEFAULT_OPTIONS.warpMode).toBe("default")
+    expect(DEFAULT_OPTIONS.truehddBedConform).toBeNull()
   })
 })
 

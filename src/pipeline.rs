@@ -8,7 +8,7 @@ use crate::commands::{
     measure_with_encoder_args, pcm_input_format, pcm_rate, pipe_args, pipe_sample_count,
     print_command,
 };
-use crate::config::{Ac4ImsMode, Config, DdpAtmosMode, Paths, PipeMode};
+use crate::config::{Ac4ImsMode, Config, DdpAtmosMode, Paths, PipeMode, WarpMode};
 use crate::data::ErrorKind;
 use crate::deewlog::LogSpec;
 use crate::encode::{self, Job, Options, Outcome};
@@ -18,6 +18,7 @@ use crate::inputs::{self, Input, Problem};
 use crate::interrupt;
 use crate::markup;
 use crate::master;
+use crate::output_name::{self, Template, Values};
 use crate::pipe;
 use crate::plan::{
     self, Format, InputInfo, Layout, Lfe, Modes, Profile71, Validated, check_ac4_dialnorm_channels,
@@ -29,7 +30,7 @@ use crate::probe::{self, Probe, ProbeError, TrackIndex};
 use crate::summary::{self, SummaryData};
 use crate::tools::{self, Shim, Versions};
 use crate::ui::{End, Ui};
-use crate::util::{basename, delay_options, file_name};
+use crate::util::{basename, delay_options, file_name, file_stem};
 use crate::{prompt, rprintln};
 use std::path::Path;
 use std::sync::Mutex;
@@ -266,6 +267,108 @@ fn measure_by_encoder(measure_only: bool, channels: i64) -> bool {
     measure_only && plan::wav_channels(channels) == 8
 }
 
+/// Before anything runs: two inputs must not make the same output file, and
+/// no output may be an input. The paths are compared without regard to case
+/// on every platform (they are the same file on Windows and macOS, and not
+/// wanted on Linux either). `outputs` belongs to `files`, empty for `-mo`.
+fn check_outputs(files: &[String], outputs: &[String]) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let abs = |path: &String| tools::abspath(path, &cwd);
+    let outs: Vec<String> = outputs.iter().map(abs).collect();
+    let mut clashes = Vec::new();
+    let mut seen = vec![false; outs.len()];
+    for i in 0..outs.len() {
+        if seen[i] {
+            continue;
+        }
+        let same: Vec<usize> = (i..outs.len())
+            .filter(|&j| output_name::same_path(&outs[i], &outs[j]))
+            .collect();
+        if same.len() > 1 {
+            let names: Vec<String> = same.iter().map(|&j| escape(&files[j])).collect();
+            clashes.push(format!("{}: {}", escape(&outputs[i]), names.join(", ")));
+            for j in same {
+                seen[j] = true;
+            }
+        }
+    }
+    if !clashes.is_empty() {
+        print_exit(ErrorKind::OutputClash, Some(&clashes.join("\n")));
+    }
+    let inputs: Vec<String> = files.iter().map(abs).collect();
+    let overwritten: Vec<String> = outs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, out)| {
+            let outputs = &outputs;
+            let files = &files;
+            inputs
+                .iter()
+                .enumerate()
+                .filter(|(_, input)| output_name::same_path(out, input))
+                .map(move |(k, _)| {
+                    format!(
+                        "{} (the output of {})",
+                        escape(&files[k]),
+                        escape(&outputs[i])
+                    )
+                })
+        })
+        .collect();
+    if !overwritten.is_empty() {
+        print_exit(ErrorKind::OutputIsInput, Some(&overwritten.join("\n")));
+    }
+}
+
+/// How the output files are named: the template (a literal name for `-on`).
+struct OutputNaming {
+    template: Template,
+    /// `-on`: a single, literal name.
+    single: bool,
+}
+
+/// The naming of this run, from `-on`, `-ot` and the config's template; exits
+/// on an invalid or conflicting one. `-mo` writes no output, it names nothing.
+fn output_naming(args: &Args, config: &Config) -> OutputNaming {
+    let given = args.output_name.is_some() || args.output_template.is_some();
+    if args.measure_only {
+        if given {
+            print_exit(ErrorKind::OutputNameMeasureOnly, None);
+        }
+        return OutputNaming {
+            template: Template::parse(output_name::DEFAULT_TEMPLATE).expect("default template"),
+            single: false,
+        };
+    }
+    if args.output_name.is_some() && args.output_template.is_some() {
+        print_exit(ErrorKind::OutputNameAndTemplate, None);
+    }
+    if let Some(name) = &args.output_name {
+        if name.contains(['/', '\\']) {
+            let message = escape("the name can't contain a path separator, use -o for the folder");
+            print_exit(ErrorKind::OutputName, Some(&message));
+        }
+        if name.is_empty() {
+            print_exit(ErrorKind::OutputName, Some(&escape("the name is empty")));
+        }
+        return OutputNaming {
+            template: Template::literal(name),
+            single: true,
+        };
+    }
+    let text = args
+        .output_template
+        .as_deref()
+        .unwrap_or(&config.output.template);
+    match Template::parse(text) {
+        Ok(template) => OutputNaming {
+            template,
+            single: false,
+        },
+        Err(message) => print_exit(ErrorKind::OutputTemplate, Some(&escape(&message))),
+    }
+}
+
 struct Context<'a> {
     args: &'a Args,
     config: &'a Config,
@@ -278,6 +381,7 @@ struct Context<'a> {
     output: &'a str,
     /// `-oi`: every output goes to the folder of its input, `output` is unused.
     to_input: bool,
+    naming: &'a OutputNaming,
     /// The 7.1 DDP profile, `None` for other outputs.
     profile: Option<Profile71>,
     versions: &'a Versions,
@@ -341,11 +445,32 @@ fn master_source(probes: &[Probe]) -> Option<String> {
     Some(labels.join(" / "))
 }
 
+/// The "truehdd" row of the summary: the warp mode and the bed conformance
+/// that are set, when the run decodes a TrueHD Atmos source with truehdd.
+fn truehdd_summary(ctx: &Context, probes: &[Probe]) -> Option<String> {
+    let uses_truehdd = (ctx.validated.format.has_truehdd() || ctx.args.measure_only)
+        && probes
+            .iter()
+            .any(|p| p.master.is_none() && (ctx.validated.format.is_atmos() || atmos_source(p)));
+    if !uses_truehdd {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if let Some(mode) = warp_mode(ctx) {
+        parts.push(format!("warp mode {}", mode.name()));
+    }
+    if bed_conform_on(ctx) {
+        parts.push("bed conform on".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// Print the summary table (if enabled).
 fn print_summary(
     ctx: &Context,
     files: &[String],
     probes: &[Probe],
+    outputs: &[String],
     instances: f64,
     piping: &str,
     versions: &Versions,
@@ -364,6 +489,14 @@ fn print_summary(
             .unwrap_or_else(|()| print_exit(ErrorKind::Delay, None))
     } else {
         String::new()
+    };
+    // only a name that is not the default one is worth showing
+    let default_naming = !ctx.naming.single
+        && Template::parse(output_name::DEFAULT_TEMPLATE).as_ref() == Ok(&ctx.naming.template);
+    let output_names: Vec<String> = if default_naming {
+        Vec::new()
+    } else {
+        outputs.iter().map(|o| file_name(o).to_string()).collect()
     };
     let data = SummaryData {
         sections,
@@ -392,8 +525,10 @@ fn print_summary(
             ctx.output
         },
         files: files.len(),
+        output_names: &output_names,
         instances,
         piping: Some(piping.to_string()),
+        truehdd: truehdd_summary(ctx, probes),
         delay,
         temp_path: ctx.temp,
     };
@@ -423,20 +558,51 @@ struct TempNames {
 }
 
 /// `variant` is `commands::intermediate_variant`: a wav made differently
-/// has another name, so a kept one (`-k`) is never reused by mistake.
-fn temp_names(temp: &str, file: &str, variant: &str) -> TempNames {
+/// has another name, so a kept one (`-k`) is never reused by mistake. The
+/// same goes for `atmos_variant` (`truehdd_variant`) and the decoded `.atmos`.
+fn temp_names(temp: &str, file: &str, variant: &str, atmos_variant: &str) -> TempNames {
     let name = |ext: &str, sanitize: bool| join(temp, &basename(file, ext, false, sanitize, false));
     let wav = if variant.is_empty() {
         "wav".to_string()
     } else {
         format!("{variant}.wav")
     };
+    let atmos = if atmos_variant.is_empty() {
+        "atmos".to_string()
+    } else {
+        format!("{atmos_variant}.atmos")
+    };
     TempNames {
         wav: name(&wav, false),
-        atmos: name("atmos", true),
+        atmos: name(&atmos, true),
         loudness: name("loudness.json", false),
         ac4_manifest: name("ac4.json", false),
     }
+}
+
+/// The part of the name of a decoded `.atmos` that says how truehdd was
+/// run: `wm-normal`, `bc`, `wm-loro.bc`; empty with neither option.
+fn truehdd_variant(warp_mode: Option<WarpMode>, bed_conform: bool) -> String {
+    let mut parts = Vec::new();
+    if let Some(mode) = warp_mode {
+        parts.push(format!("wm-{}", mode.name()));
+    }
+    if bed_conform {
+        parts.push("bc".to_string());
+    }
+    parts.join(".")
+}
+
+/// truehdd's warp mode: `-wm`, else the config's `truehdd_warp_mode`.
+fn warp_mode(ctx: &Context) -> Option<WarpMode> {
+    ctx.validated.warp_mode.or(ctx.config.truehdd_warp_mode)
+}
+
+/// truehdd's bed conformance is on: `-bc`, else the config's `truehdd_bed_conform`.
+fn bed_conform_on(ctx: &Context) -> bool {
+    ctx.validated
+        .bed_conform
+        .unwrap_or(ctx.config.truehdd_bed_conform)
 }
 
 /// The files truehdd writes for `<name>.atmos`, and the `.caf` it writes
@@ -466,6 +632,49 @@ impl Context<'_> {
             })
     }
 
+    /// The values of the placeholders of an output name.
+    fn name_values(&self, file: &str, probe: &Probe) -> Values {
+        let format = self.validated.format;
+        let thd = matches!(format, Format::Thd | Format::ThdAtmos);
+        Values {
+            stem: file_stem(file, true),
+            name: file_stem(file, false),
+            format: format.name().to_string(),
+            codec: format.summary_name().to_string(),
+            channels: self.layout.name_label(format, self.validated.atmos_mode),
+            bitrate: self
+                .bitrate
+                .filter(|_| !thd)
+                .map(|b| b.to_string())
+                .unwrap_or_default(),
+            lang: probe.language.clone().unwrap_or_default(),
+            title: probe.title.clone().unwrap_or_default(),
+            track: self.args.track_index.to_string(),
+        }
+    }
+
+    /// The path of the output of an input: the folder and the name.
+    fn output_path(&self, file: &str, probe: &Probe) -> String {
+        let ext = self
+            .validated
+            .format
+            .extension(self.layout.outchannels, self.bluray());
+        let name = self
+            .naming
+            .template
+            .render(&self.name_values(file, probe), ext)
+            .unwrap_or_else(|message| {
+                let message = format!("{}: {message}", file_name(file));
+                let kind = if self.naming.single {
+                    ErrorKind::OutputName
+                } else {
+                    ErrorKind::OutputTemplate
+                };
+                print_exit(kind, Some(&escape(&message)))
+            });
+        join(&self.output_dir(file), &name)
+    }
+
     /// Whether the output is the Blu-ray flavour (`.eb3`).
     fn bluray(&self) -> bool {
         self.profile == Some(Profile71::Bluray)
@@ -475,7 +684,13 @@ impl Context<'_> {
 }
 
 /// What the report of `-kl` shows besides the run itself.
-fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpec {
+fn log_spec(
+    ctx: &Context,
+    file: &str,
+    probe: &Probe,
+    bit_depth: &u32,
+    output_path: &str,
+) -> LogSpec {
     let row = |k: &str, v: String| (k.to_string(), v);
     let format = ctx.validated.format;
     let v = ctx.versions;
@@ -539,9 +754,12 @@ fn log_spec(ctx: &Context, file: &str, probe: &Probe, bit_depth: &u32) -> LogSpe
         encode_settings(ctx, file, shim_used)
     };
     LogSpec {
-        path: join(
-            &ctx.output_dir(file),
-            &basename(file, "deew-log.html", false, false, true),
+        // next to the output, named like it without the extension
+        path: format!(
+            "{}.deew-log.html",
+            output_path
+                .rsplit_once('.')
+                .map_or(output_path, |(stem, _)| stem)
         ),
         versions,
         input,
@@ -712,7 +930,12 @@ fn build_job(
         silent_lfe,
         downmix,
     );
-    let names = temp_names(ctx.temp, file, &variant);
+    let names = temp_names(
+        ctx.temp,
+        file,
+        &variant,
+        &truehdd_variant(warp_mode(ctx), bed_conform_on(ctx)),
+    );
     let format = if measure_atmos {
         Format::DdpAtmos
     } else {
@@ -802,22 +1025,18 @@ fn build_job(
     let decode_args = if decoded {
         let prefix = names.atmos.strip_suffix(".atmos").unwrap_or(&names.atmos);
         let truehdd = ctx.programs.truehdd.as_deref().unwrap_or_default();
-        decode_args(truehdd, if piped { "-" } else { file }, prefix)
+        decode_args(
+            truehdd,
+            if piped { "-" } else { file },
+            prefix,
+            warp_mode(ctx),
+            bed_conform_on(ctx),
+        )
     } else {
         Vec::new()
     };
 
-    let output_dir = ctx.output_dir(file);
-    let output_path = join(
-        &output_dir,
-        &basename(
-            file,
-            format.extension(ctx.layout.outchannels, ctx.bluray()),
-            false,
-            false,
-            true,
-        ),
-    );
+    let output_path = ctx.output_path(file, probe);
     let measuring = measure_only || via_manifest;
     let skip_dialnorm =
         (dialnorm != 0 && !measure_only && !format.dialnorm_via_manifest()).then_some(dialnorm);
@@ -889,7 +1108,7 @@ fn build_job(
     let log = ctx
         .args
         .keep_log
-        .then(|| log_spec(ctx, file, probe, &bit_depth));
+        .then(|| log_spec(ctx, file, probe, &bit_depth, &output_path));
     let job = Job {
         input: file.to_string(),
         length: probe.duration,
@@ -907,7 +1126,6 @@ fn build_job(
         dialnorm,
         skip_dialnorm,
         output_path,
-        output_dir,
         temp_files,
         decoded_files: Default::default(),
         dee_temp,
@@ -1095,7 +1313,15 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         .unwrap_or_else(|message| error_line(&escape(&message)));
 
     let validated = validate_args(&args, &config.default_modes).unwrap_or_else(|fail| fail.exit());
+    let naming = output_naming(&args, &config);
     let format = validated.format;
+    let inputs = collect_inputs(args.input.as_deref().unwrap_or_default());
+    if inputs.is_empty() {
+        error_line("no input files found.");
+    }
+    if naming.single && inputs.len() != 1 {
+        print_exit(ErrorKind::OutputNameSingle, Some(&inputs.len().to_string()));
+    }
     let needs_measure =
         args.measure_only || (validated.dialnorm != 0 && validated.format.dialnorm_via_manifest());
     let mut programs = find_programs(
@@ -1107,10 +1333,6 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         args.measure_only,
     );
 
-    let inputs = collect_inputs(args.input.as_deref().unwrap_or_default());
-    if inputs.is_empty() {
-        error_line("no input files found.");
-    }
     let atmos_info = tools::dee_tool("atmos_info", &cwd, &paths.exe_dir);
     let (files, probes) = probe_inputs(
         &programs.ffprobe,
@@ -1261,13 +1483,26 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         temp: &temp,
         output: &output,
         to_input,
+        naming: &naming,
         profile,
         versions: &versions,
         notices: &notice_texts,
         pipe,
     };
 
-    print_summary(&ctx, &files, &probes, instances, &piping, &versions);
+    let outputs: Vec<String> = if args.measure_only {
+        Vec::new()
+    } else {
+        files
+            .iter()
+            .zip(&probes)
+            .map(|(file, probe)| ctx.output_path(file, probe))
+            .collect()
+    };
+    check_outputs(&files, &outputs);
+    print_summary(
+        &ctx, &files, &probes, &outputs, instances, &piping, &versions,
+    );
     let prepared = prepare_jobs(&ctx, &files, &probes);
     print_commands(&prepared, args.long_argument);
 
@@ -1298,7 +1533,7 @@ mod tests {
 
     #[test]
     fn temp_files_are_named_after_the_input() {
-        let names = temp_names("/t", "/in/My Song DELAY -5ms.flac", "");
+        let names = temp_names("/t", "/in/My Song DELAY -5ms.flac", "", "");
         assert_eq!(names.wav, join("/t", "My Song DELAY -5ms.wav"));
         assert_eq!(names.atmos, join("/t", "My_Song_DELAY_-5ms.atmos"));
         assert_eq!(
@@ -1309,9 +1544,29 @@ mod tests {
             names.ac4_manifest,
             join("/t", "My Song DELAY -5ms.ac4.json")
         );
-        let names = temp_names("/t", "/in/a [1].flac", "thd.dm6.dl");
+        let names = temp_names("/t", "/in/a [1].flac", "thd.dm6.dl", "");
         assert_eq!(names.wav, join("/t", "a [1].thd.dm6.dl.wav"));
         assert_eq!(names.atmos, join("/t", "a_[1].atmos"));
+    }
+
+    #[test]
+    fn decoded_atmos_name_has_the_truehdd_options() {
+        let atmos =
+            |warp, bed| temp_names("/t", "/in/My Song.thd", "", &truehdd_variant(warp, bed)).atmos;
+        assert_eq!(atmos(None, false), join("/t", "My_Song.atmos"));
+        assert_eq!(
+            atmos(Some(WarpMode::Normal), false),
+            join("/t", "My_Song.wm-normal.atmos")
+        );
+        assert_eq!(atmos(None, true), join("/t", "My_Song.bc.atmos"));
+        assert_eq!(
+            atmos(Some(WarpMode::Loro), true),
+            join("/t", "My_Song.wm-loro.bc.atmos")
+        );
+        // the files truehdd writes follow from the name
+        let files = atmos_files(&atmos(Some(WarpMode::Loro), true));
+        assert!(files.contains(&join("/t", "My_Song.wm-loro.bc.atmos.audio")));
+        assert!(files.contains(&join("/t", "My_Song.wm-loro.bc.atmos.metadata")));
     }
 
     #[test]
@@ -1351,6 +1606,8 @@ mod tests {
             .into(),
             is_atmos: atmos,
             master: None,
+            language: None,
+            title: None,
         }
     }
 
@@ -1403,6 +1660,7 @@ mod tests {
             }),
         };
         let versions = Versions::default();
+        let naming = output_naming(&args, &config);
         let ctx = Context {
             info: check_inputs(std::slice::from_ref(probe)).unwrap(),
             args: &args,
@@ -1414,6 +1672,7 @@ mod tests {
             temp: "/t",
             output: "/o",
             to_input: false,
+            naming: &naming,
             profile,
             versions: &versions,
             notices: &[],

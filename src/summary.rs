@@ -60,9 +60,14 @@ pub struct SummaryData<'a> {
     /// Resolved absolute output directory.
     pub output_dir: &'a str,
     pub files: usize,
+    /// The output file names, only when they are not the default ones.
+    pub output_names: &'a [String],
     pub instances: f64,
     /// Text of the "Piping" row, `None` leaves the row out.
     pub piping: Option<String>,
+    /// Text of the "truehdd" row (its warp mode and bed conformance), `None`
+    /// leaves the row out.
+    pub truehdd: Option<String>,
     /// Text of the "Delay" row, see [`delay_summary`].
     pub delay: String,
     pub temp_path: &'a str,
@@ -214,13 +219,21 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
             format!("{} dB", d.dialnorm)
         };
         rows.push(row(&["Dialnorm", &dialnorm], false));
-        rows.push(row(&["Directory", &escape(d.output_dir)], true));
+        let names = !d.output_names.is_empty();
+        rows.push(row(&["Directory", &escape(d.output_dir)], !names));
+        for (i, name) in d.output_names.iter().enumerate() {
+            let label = if i == 0 { "File name" } else { "" };
+            rows.push(row(&[label, &escape(name)], i + 1 == d.output_names.len()));
+        }
     }
     if d.sections.other {
         rows.push(row(&["[bold yellow]Other"], false));
         rows.push(row(&["Max instances", &format_g(d.instances)], false));
         if let Some(piping) = &d.piping {
             rows.push(row(&["Piping", piping], false));
+        }
+        if let Some(truehdd) = &d.truehdd {
+            rows.push(row(&["truehdd", truehdd], false));
         }
         rows.push(row(&["Delay", &d.delay], false));
         rows.push(Row {
@@ -588,8 +601,10 @@ mod tests {
             dialnorm: 0,
             output_dir: "/out/di[r]",
             files: 2,
+            output_names: &[],
             instances: 2.5,
             piping: None,
+            truehdd: None,
             delay: "0ms".into(),
             temp_path: "/tmp/de[ew",
         }
@@ -647,8 +662,10 @@ mod tests {
                 dialnorm: p["dialnorm"].as_i64().unwrap(),
                 output_dir: s("output"),
                 files: p["files"].as_u64().unwrap() as usize,
+                output_names: &[],
                 instances: p["instances"].as_f64().unwrap(),
                 piping: None,
+                truehdd: None,
                 delay: s("delay_text").to_string(),
                 temp_path: s("temp"),
             };
@@ -1060,6 +1077,19 @@ mod tests {
         let rows = summary_rows(&d);
         assert_eq!(label(&rows, other + 2), "Piping");
         assert_eq!(rows[other + 2].cells[1], "on (auto)");
+    }
+
+    #[test]
+    fn truehdd_row_follows_the_options() {
+        let all = sections(true);
+        let mut d = data(&all);
+        let rows = summary_rows(&d);
+        assert!(!rows.iter().any(|r| r.cells[0] == "truehdd"));
+        d.truehdd = Some("warp mode normal, bed conform on".into());
+        let rows = summary_rows(&d);
+        let at = rows.iter().position(|r| r.cells[0] == "truehdd").unwrap();
+        assert_eq!(rows[at].cells[1], "warp mode normal, bed conform on");
+        assert_eq!(rows[at + 1].cells[0], "Delay");
     }
 
     #[test]

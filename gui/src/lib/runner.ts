@@ -281,6 +281,12 @@ export interface LoadedGuiSettings extends GuiSettings {
   lowPassFilter: boolean
   /** `surround_3db_attenuation` of the config (false when missing). */
   surround3dbAttenuation: boolean
+  /** `truehdd_warp_mode` of the config (empty when missing). */
+  truehddWarpMode: string
+  /** `truehdd_bed_conform` of the config (false when missing). */
+  truehddBedConform: boolean
+  /** `output.template` of the config (`{stem}` when missing). */
+  outputTemplate: string
 }
 
 /** The GUI settings of the config (`gui.progress`, `output.*`, `default_modes`). */

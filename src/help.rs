@@ -11,7 +11,7 @@ const RAW_HELP: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     r#"
 
-[yellow]USAGE[/yellow]: [bold cyan]deew[/bold cyan] [[green]-h[/green]] [[green]-fh[/green]] [[green]-v[/green]] [[green]-i[/green] [[bold color(231)]INPUT[/bold color(231)] ...]] [[green]-ti[/green] [bold color(231)]INDEX[/bold color(231)]] [[green]-o[/green] [bold color(231)]DIRECTORY[/bold color(231)]] [[green]-oi[/green]] [[green]-f[/green] [bold color(231)]FORMAT[/bold color(231)]] [[green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]] [[green]-b[/green] [bold color(231)]BITRATE[/bold color(231)]] [[green]-dm[/green] [bold color(231)]CHANNELS[/bold color(231)]] [[green]-dl[/green]]<< [[green]-sps[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-lpf[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-s3a[/green] [bold color(231)]SWITCH[/bold color(231)]]>> [[green]-d[/green] [bold color(231)]DELAY[/bold color(231)]] [[green]-r[/green] [bold color(231)]DRC[/bold color(231)]] [[green]-dn[/green] [bold color(231)]DIALNORM[/bold color(231)]] [[green]-in[/green] [bold color(231)]NUMBER[/bold color(231)]] [[green]-k[/green]] [[green]-kl[/green]] [[green]-mo[/green]] [[green]-lb[/green]] [[green]-la[/green]] [[green]-np[/green]] [[green]-pl[/green]] [[green]-cl[/green]] [[green]-c[/green]] [[green]-gc[/green]] [[green]-gt[/green]]
+[yellow]USAGE[/yellow]: [bold cyan]deew[/bold cyan] [[green]-h[/green]] [[green]-fh[/green]] [[green]-v[/green]] [[green]-i[/green] [[bold color(231)]INPUT[/bold color(231)] ...]] [[green]-ti[/green] [bold color(231)]INDEX[/bold color(231)]] [[green]-o[/green] [bold color(231)]DIRECTORY[/bold color(231)]] [[green]-oi[/green]] [[green]-on[/green] [bold color(231)]NAME[/bold color(231)]]<< [[green]-ot[/green] [bold color(231)]TEMPLATE[/bold color(231)]]>> [[green]-f[/green] [bold color(231)]FORMAT[/bold color(231)]]<< [[green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]]>><< [[green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]]>><< [[green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]]>> [[green]-b[/green] [bold color(231)]BITRATE[/bold color(231)]] [[green]-dm[/green] [bold color(231)]CHANNELS[/bold color(231)]]<< [[green]-dl[/green]]>><< [[green]-sps[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-lpf[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-s3a[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-wm[/green] [bold color(231)]MODE[/bold color(231)]] [[green]-bc[/green] [bold color(231)]SWITCH[/bold color(231)]]>> [[green]-d[/green] [bold color(231)]DELAY[/bold color(231)]] [[green]-r[/green] [bold color(231)]DRC[/bold color(231)]] [[green]-dn[/green] [bold color(231)]DIALNORM[/bold color(231)]]<< [[green]-in[/green] [bold color(231)]NUMBER[/bold color(231)]]>> [[green]-k[/green]]<< [[green]-kl[/green]]>> [[green]-mo[/green]] [[green]-lb[/green]]<< [[green]-la[/green]]>> [[green]-np[/green]]<< [[green]-pl[/green]]>> [[green]-cl[/green]] [[green]-c[/green]] [[green]-gc[/green]] [[green]-gt[/green]]
 
 [yellow]FLAGS[/yellow]:
   [green]-h[/green], [green]--help[/green]                show this help message.
@@ -29,33 +29,41 @@ const RAW_HELP: &str = concat!(
                             specifies output directory
   [green]-oi[/green], [green]--output[/green][green]-to-input[/green]    save each output next to its input file
                             overrides [bold color(231)]-o[/bold color(231)] and the output path of the config
+  [green]-on[/green], [green]--output-name[/green] [bold color(231)]NAME[/bold color(231)]   name of the output file, one input file only
+~  [green]-ot[/green], [green]--output-template[/green] [bold color(231)]TEMPLATE[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] [bold color(231)]{stem}[/bold color(231)], config: [bold color(231)]output.template[/bold color(231)]
+~                            name of each output file, placeholders:
+~                            [bold color(231)]{stem}[/bold color(231)] (name without extension and delay tag)
+~                            [bold color(231)]{name}[/bold color(231)], [bold color(231)]{format}[/bold color(231)], [bold color(231)]{codec}[/bold color(231)], [bold color(231)]{channels}[/bold color(231)], [bold color(231)]{bitrate}[/bold color(231)]
+~                            [bold color(231)]{lang}[/bold color(231)], [bold color(231)]{title}[/bold color(231)] (of the audio track), [bold color(231)]{track}[/bold color(231)]
+~                            empty values drop out with a separator
   [green]-f[/green], [green]--format[/green] [bold color(231)]FORMAT[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]dd[/bold color(231)] / [bold color(231)]ddp[/bold color(231)] / [bold bright_blue]ddp-atmos[/bold bright_blue] / [bold color(231)]thd[/bold color(231)] / [bold bright_blue]thd-atmos[/bold bright_blue] / [bold color(231)]ac4[/bold color(231)] / [bold color(231)]ac4-atmos[/bold color(231)] / [bold color(231)]ac4-ims[/bold color(231)] / [bold color(231)]aac[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]ddp[/bold color(231)]
                             [bold bright_blue]ddp-atmos[/bold bright_blue] and [bold bright_blue]thd-atmos[/bold bright_blue] use truehdd and dee_shim, ac4-atmos and ac4-ims (from Atmos) use truehdd
-  [green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]           [underline magenta]options:[/underline magenta] [bold bright_blue]standard[/bold bright_blue] / [bold color(231)]bluray[/bold color(231)]
-                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
-                            profile of 7.1 DDP, 5.1 and below are not affected
-                            [bold bright_blue]standard[/bold bright_blue]: E-AC-3 only, 384-1792 kbps
-                            [bold color(231)]bluray[/bold color(231)]: AC-3 core + E-AC-3, 768-1664 kbps
-  [green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]     [underline magenta]options:[/underline magenta] [bold bright_blue]streaming[/bold bright_blue] / [bold bright_blue]standard[/bold bright_blue] / [bold bright_blue]bluray[/bold bright_blue]
-                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
-                            profile of [bold bright_blue]ddp-atmos[/bold bright_blue]
-                            [bold bright_blue]streaming[/bold bright_blue]: 5.1 with Atmos, 384-1024 kbps
-                            [bold bright_blue]standard[/bold bright_blue]: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
-                            [bold bright_blue]bluray[/bold bright_blue]: 7.1 with Atmos, AC-3 core + E-AC-3, 1152-1664 kbps
-  [green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]general[/bold color(231)] / [bold color(231)]music[/bold color(231)]
-                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
-                            profile of [bold color(231)]ac4-ims[/bold color(231)] (stereo for headphones and TV speakers, from 5.1 or Atmos)
-                            [bold color(231)]music[/bold color(231)]: no dialogue enhancement, DRC [bold color(231)]music_light[/bold color(231)]
+~  [green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]           [underline magenta]options:[/underline magenta] [bold bright_blue]standard[/bold bright_blue] / [bold color(231)]bluray[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
+~                            profile of 7.1 DDP, 5.1 and below are not affected
+~                            [bold bright_blue]standard[/bold bright_blue]: E-AC-3 only, 384-1792 kbps
+~                            [bold color(231)]bluray[/bold color(231)]: AC-3 core + E-AC-3, 768-1664 kbps
+~  [green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]     [underline magenta]options:[/underline magenta] [bold bright_blue]streaming[/bold bright_blue] / [bold bright_blue]standard[/bold bright_blue] / [bold bright_blue]bluray[/bold bright_blue]
+~                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
+~                            profile of [bold bright_blue]ddp-atmos[/bold bright_blue]
+~                            [bold bright_blue]streaming[/bold bright_blue]: 5.1 with Atmos, 384-1024 kbps
+~                            [bold bright_blue]standard[/bold bright_blue]: 7.1 with Atmos, E-AC-3 only, 768-2048 kbps
+~                            [bold bright_blue]bluray[/bold bright_blue]: 7.1 with Atmos, AC-3 core + E-AC-3, 1152-1664 kbps
+~  [green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]general[/bold color(231)] / [bold color(231)]music[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
+~                            profile of [bold color(231)]ac4-ims[/bold color(231)] (stereo for headphones and TV speakers, from 5.1 or Atmos)
+~                            [bold color(231)]music[/bold color(231)]: no dialogue enhancement, DRC [bold color(231)]music_light[/bold color(231)]
   [green]-b[/green], [green]--bitrate[/green] [bold color(231)]BITRATE[/bold color(231)]     [underline magenta]options:[/underline magenta] run [green][green]-lb[/green][/green]/[green][green]--list[/green][green]-bitrates[/green][/green]
                             [underline magenta]default:[/underline magenta] run [green][green]-c[/green][/green]/[green][green]--config[/green][/green]
   [green]-dm[/green], [green]--downmix[/green] [bold color(231)]CHANNELS[/bold color(231)]   [underline magenta]options:[/underline magenta] [bold color(231)]1[/bold color(231)] / [bold color(231)]2[/bold color(231)] / [bold color(231)]6[/bold color(231)]
                             specifies downmix, only works for DD/DDP/AC4/AAC and TrueHD (2 / 6)
                             DD, AC4 and ac4-ims will be automatically downmixed to 5.1 in case of a 7.1 source
                             AAC output is always 2.0
-  [green]-dl[/green], [green]--disable-lfe[/green]        remove the LFE channel of 5.1 and 7.1 inputs
-                            DD and DDP get a real 5.0 or [bold bright_blue]7.0[/bold bright_blue], the others keep a silent LFE
-                            5.0 and 7.0 inputs are supported, they have no LFE
+~  [green]-dl[/green], [green]--disable-lfe[/green]        remove the LFE channel of 5.1 and 7.1 inputs
+~                            DD and DDP get a real 5.0 or [bold bright_blue]7.0[/bold bright_blue], the others keep a silent LFE
+~                            5.0 and 7.0 inputs are supported, they have no LFE
 ~  [green]-sps[/green], [green]--surround-phase-shift[/green] [bold color(231)]SWITCH[/bold color(231)]
 ~                            [underline magenta]options:[/underline magenta] [bold color(231)]on[/bold color(231)] / [bold color(231)]off[/bold color(231)]
 ~                            [underline magenta]default:[/underline magenta] [bold color(231)]on[/bold color(231)]
@@ -72,6 +80,15 @@ const RAW_HELP: &str = concat!(
 ~                            3 dB attenuation of the surround channels
 ~                            only works for DD/DDP/TrueHD, config: [bold color(231)]surround_3db_attenuation[/bold color(231)]
 ~                            TrueHD asks first: the output is no longer identical to the source
+~  [green]-wm[/green], [green]--warp-mode[/green] [bold color(231)]MODE[/bold color(231)]     [underline magenta]options:[/underline magenta] [bold color(231)]normal[/bold color(231)] / [bold color(231)]warping[/bold color(231)] / [bold color(231)]prologiciix[/bold color(231)] / [bold color(231)]loro[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] from the source's metadata
+~                            truehdd's warp mode, only used when the TrueHD Atmos source has none
+~                            config: [bold color(231)]truehdd_warp_mode[/bold color(231)]
+~  [green]-bc[/green], [green]--bed-conform[/green] [bold color(231)]SWITCH[/bold color(231)]
+~                            [underline magenta]options:[/underline magenta] [bold color(231)]on[/bold color(231)] / [bold color(231)]off[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] [bold color(231)]off[/bold color(231)]
+~                            truehdd's bed conformance, for Atmos sources whose bed comes out as objects
+~                            config: [bold color(231)]truehdd_bed_conform[/bold color(231)]
   [green]-d[/green], [green]--delay[/green] [bold color(231)]DELAY[/bold color(231)]         [underline magenta]examples:[/underline magenta] [bold color(231)]-5.1ms[/bold color(231)], [bold color(231)]+1,52s[/bold color(231)], [bold color(231)]-24@pal[/bold color(231)], [bold color(231)]+10@24000/1001[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]0ms[/bold color(231)] or parsed from filename
                             specifies delay as ms, s or frame@FPS
@@ -86,19 +103,19 @@ const RAW_HELP: &str = concat!(
                             [underline magenta]default:[/underline magenta] [bold color(231)]0[/bold color(231)]
                             applied dialnorm value, doesn't work for AAC,
                             AC4 Atmos and ac4-ims
-  [green]-in[/green], [green]--instances[/green] [bold color(231)]NUMBER[/bold color(231)]   [underline magenta]examples:[/underline magenta] [bold color(231)]1[/bold color(231)], [bold color(231)]4[/bold color(231)], [bold color(231)]50%[/bold color(231)]
-                            [underline magenta]default:[/underline magenta] [bold color(231)]50%[/bold color(231)]
-                            specifies how many encodes can run at the same time
-                            [bold color(231)]50%[/bold color(231)] means [bold color(231)]4[/bold color(231)] on a cpu with 8 threads
-                            one DEE can use 2 threads so [bold color(231)]50%[/bold color(231)] can utilize all threads
-                            (this option overrides the config's number)
+~  [green]-in[/green], [green]--instances[/green] [bold color(231)]NUMBER[/bold color(231)]   [underline magenta]examples:[/underline magenta] [bold color(231)]1[/bold color(231)], [bold color(231)]4[/bold color(231)], [bold color(231)]50%[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] [bold color(231)]50%[/bold color(231)]
+~                            specifies how many encodes can run at the same time
+~                            [bold color(231)]50%[/bold color(231)] means [bold color(231)]4[/bold color(231)] on a cpu with 8 threads
+~                            one DEE can use 2 threads so [bold color(231)]50%[/bold color(231)] can utilize all threads
+~                            (this option overrides the config's number)
   [green]-k[/green], [green]--keeptemp[/green]            keep temp files
-  [green]-kl[/green], [green]--keep[/green][green]-log[/green]           keep TrueHD's log and write a .deew-log.html report for each output
+~  [green]-kl[/green], [green]--keep[/green][green]-log[/green]           keep TrueHD's log and write a .deew-log.html report for each output
   [green]-mo[/green], [green]--measure[/green][green]-only[/green]       only measures the loudness of the source with DEE, no encoding, -f and the encoding options are ignored, TrueHD Atmos sources and Atmos masters are measured as Atmos
   [green]-lb[/green], [green]--list[/green][green]-bitrates[/green]      list bitrates that DEE can do for each format
-  [green]-la[/green], [green]--long[/green][green]-argument[/green]      print ffmpeg, truehdd and DEE arguments for each input
+~  [green]-la[/green], [green]--long[/green][green]-argument[/green]      print ffmpeg, truehdd and DEE arguments for each input
   [green]-np[/green], [green]--no[/green][green]-prompt[/green]          skip confirmation questions, print them as notes and continue
-  [green]-pl[/green], [green]--print[/green][green]-logos[/green]        show all logo variants you can set in the config
+~  [green]-pl[/green], [green]--print[/green][green]-logos[/green]        show all logo variants you can set in the config
   [green]-cl[/green], [green]--changelog[/green]          show changelog
   [green]-c[/green], [green]--config[/green]              show config and config location
   [green]-gc[/green], [green]--generate[/green][green]-config[/green]    generate a new config, asks before overwriting an existing config (-np skips the question)
@@ -387,6 +404,12 @@ mod tests {
             "-sps",
             "-lpf",
             "-s3a",
+            "-wm",
+            "-bc",
+            "--warp-mode",
+            "--bed-conform",
+            "truehdd_warp_mode",
+            "truehdd_bed_conform",
             "--surround-phase-shift",
             "surround_3db_attenuation",
         ] {
@@ -398,14 +421,31 @@ mod tests {
             assert!(text.contains("-fh, --full-help"));
             assert!(!text.contains(['~', '!', '<', '>']));
         }
-        assert!(full.contains("[-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH] [-d DELAY]"));
-        assert!(basic.contains("[-dl] [-d DELAY]"));
+        assert!(full.contains(
+            "[-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH] [-wm MODE] [-bc SWITCH] [-d DELAY]"
+        ));
+        assert!(basic.contains("[-dm CHANNELS] [-d DELAY]"));
+        for flag in [
+            "--ddp-mode",
+            "--ddp-atmos-mode",
+            "--ac4-ims-mode",
+            "--disable-lfe",
+            "--keep-log",
+            "--long-argument",
+            "--print-logos",
+            "--output-template",
+            "--instances",
+        ] {
+            assert!(!basic.contains(flag), "{flag}");
+            assert!(full.contains(flag), "{flag}");
+        }
+        assert!(!basic.contains("  -ot,") && !basic.contains("  -in,"));
         for text in [&basic, &full] {
             assert!(text.ends_with("blue: uses dee_shim"));
         }
         // everything else is the same
         let rows = |t: &str| t.lines().filter(|l| l.starts_with("  -")).count();
-        assert_eq!(rows(&full), rows(&basic) + 3);
+        assert_eq!(rows(&full), rows(&basic) + 14);
     }
 
     #[test]

@@ -1,3 +1,45 @@
+# deew 5.5.0:
+- new advanced `-wm, --warp-mode normal|warping|prologiciix|loro` and
+  `-bc, --bed-conform on|off` for TrueHD Atmos sources: truehdd's warp
+  mode (only used when the source has none) and bed conformance, config
+  keys `truehdd_warp_mode` and `truehdd_bed_conform`; a kept (`-k`)
+  decode is only reused with the same options
+- new `-on, --output-name NAME`: the name of the output file for a
+  single input file (counted after folders and wildcards are expanded);
+  deew adds the extension (`.ec3`, `.eb3`, `.thd`, ...), a name with a
+  folder is an error (`-o`/`-oi` set the folder), a different output
+  extension is an error
+- new `-ot, --output-template TEMPLATE` (config: `template` in `[output]`,
+  default `{stem}`): a pattern for the output file names, deew fills in
+  the placeholders for each input:
+  - `{stem}`: the input's name without extension and delay tag
+  - `{name}`: the input's name without extension, delay tag kept
+  - `{format}`: the `-f` value (`ddp`, `thd-atmos`, ...)
+  - `{codec}`: the output format as the summary shows it
+  - `{channels}`: the output's channel layout (`2.0`, `5.1`, `7.1`)
+  - `{bitrate}`: the bitrate in kbps (empty for TrueHD)
+  - `{lang}`, `{title}`: the language and title tags of the audio track
+  - `{track}`: the `-ti` value
+
+  e.g. `{stem}.{lang}` gives `Movie.eng.ec3`; a placeholder with no value
+  (e.g. no language tag) is left out together with the `.`, `_`, `-` or
+  space next to it, characters Windows doesn't allow become `_`
+- two inputs that would write the same output file (compared without
+  regard to case) or an output that is its own input are an error before
+  anything runs; `-on` and `-ot` can't be used together or with `-mo`
+- `-h` is shorter: `--ddp-mode`, `--ddp-atmos-mode`, `--ac4-ims-mode`,
+  `-dl`, `-in`, `-kl`, `-la`, `-pl` and `-ot` are only in `-fh` now
+- `deew-gui`/`deew-web` 0.10.0:
+  - "Warp mode" select and "Bed conform" checkbox for TrueHD Atmos
+    sources (`-wm`, `-bc`): they start with the config's values and a
+    flag is only passed when you change one
+  - "Output name" (`-on`, greyed out unless exactly one file is added)
+    and "Output template" (`-ot`, starts with the config's template and
+    is only passed when you change it) fields; under them the first
+    file's output name when the template isn't `{stem}`, or the first
+    naming error; `--probe-json` has the `language` and `title` tags of
+    the tracks for it
+
 # deew 5.4.0:
 - `-sps, --surround-phase-shift on|off` replaces `-nps`: it
   overrides the config's `surround_phase_shift` in both directions

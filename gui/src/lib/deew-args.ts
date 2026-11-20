@@ -1,6 +1,7 @@
 // Pure helpers that turn the GUI option state into a deew argv and into a
 // shell-quoted command line for display. No Tauri / DOM dependencies.
 
+import { DEFAULT_TEMPLATE, parseTemplate } from "@/lib/output-name"
 import { shimBitratesDdp71 } from "@/lib/shim"
 
 export const FORMATS = [
@@ -190,6 +191,34 @@ export function ac4ImsModeApplies(format: Format): boolean {
   return format === "ac4-ims"
 }
 
+/** `-wm` values (truehdd's warp mode). */
+export const WARP_MODES = ["normal", "warping", "prologiciix", "loro"] as const
+export type WarpMode = (typeof WARP_MODES)[number]
+
+/** The warp mode select: the default is the config's (nothing is passed). */
+export type WarpModeChoice = typeof DEFAULT_MODE | WarpMode
+
+/** The config's `truehdd_warp_mode`: empty leaves it to truehdd (the source's metadata). */
+export type WarpModeConfig = WarpMode | ""
+
+/**
+ * Whether `-wm` and `-bc` are enabled: the formats that decode a TrueHD
+ * Atmos source with truehdd, and measure only (any format). The CLI
+ * rejects them for the other formats.
+ */
+export function truehddOptionsApply(
+  format: Format,
+  measureOnly: boolean
+): boolean {
+  return (
+    measureOnly ||
+    format === "ddp-atmos" ||
+    format === "thd-atmos" ||
+    format === "ac4-atmos" ||
+    format === "ac4-ims"
+  )
+}
+
 export interface DeewOptions {
   inputs: string[]
   /** `N`, `a:N` (the Nth audio track) or `s:N` (container stream N). */
@@ -206,6 +235,10 @@ export interface DeewOptions {
   instances: string
   /** `-oi`: write each output next to its input; `output` is then unused. */
   outputToInput: boolean
+  /** `-on`: the name of the output file, only for a single input file; empty is none. */
+  outputName: string
+  /** `-ot`: the name template; `null` (or empty) follows the config's `[output] template`. */
+  outputTemplate: string | null
   /** `--ddp-mode`: profile of a 7.1 DDP output. */
   ddpMode: DdpModeChoice
   /** `--ddp-atmos-mode`: profile of DDP Atmos. */
@@ -224,6 +257,10 @@ export interface DeewOptions {
   lowPassFilter: boolean | null
   /** `-s3a`: 3 dB attenuation of the surrounds (DD, DDP and TrueHD); `null` follows the config. */
   surround3dbAttenuation: boolean | null
+  /** `-wm`: truehdd's warp mode (TrueHD Atmos sources); `DEFAULT_MODE` follows the config. */
+  warpMode: WarpModeChoice
+  /** `-bc`: truehdd's bed conformance (TrueHD Atmos sources); `null` follows the config. */
+  truehddBedConform: boolean | null
   keepTemp: boolean
   keepLog: boolean
   measureOnly: boolean
@@ -243,6 +280,8 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
   dialnorm: "0",
   instances: "",
   outputToInput: false,
+  outputName: "",
+  outputTemplate: null,
   ddpMode: DEFAULT_MODE,
   ddpAtmosMode: DEFAULT_MODE,
   ac4ImsMode: DEFAULT_MODE,
@@ -250,6 +289,8 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
   surroundPhaseShift: null,
   lowPassFilter: null,
   surround3dbAttenuation: null,
+  warpMode: DEFAULT_MODE,
+  truehddBedConform: null,
   keepTemp: false,
   keepLog: false,
   measureOnly: false,
@@ -259,20 +300,32 @@ export const DEFAULT_OPTIONS: Readonly<DeewOptions> = {
 
 /** The on/off options that are tied to the config's value. */
 export type DdFilterOption =
-  "surroundPhaseShift" | "lowPassFilter" | "surround3dbAttenuation"
+  | "surroundPhaseShift"
+  | "lowPassFilter"
+  | "surround3dbAttenuation"
+  | "truehddBedConform"
 
-/** The config's `surround_phase_shift`, `low_pass_filter`, `surround_3db_attenuation`. */
-export type DdFilterDefaults = Record<DdFilterOption, boolean>
+/**
+ * The config's `surround_phase_shift`, `low_pass_filter`,
+ * `surround_3db_attenuation`, `truehdd_bed_conform` and `truehdd_warp_mode`.
+ */
+export type DdFilterDefaults = Record<DdFilterOption, boolean> & {
+  truehddWarpMode: WarpModeConfig
+}
 
 export const PROGRAM_DD_FILTER_DEFAULTS: Readonly<DdFilterDefaults> = {
   surroundPhaseShift: true,
   lowPassFilter: true,
   surround3dbAttenuation: false,
+  truehddBedConform: false,
+  truehddWarpMode: "",
 }
 
 /** The config's values from the settings answer; anything but a boolean gives the program default. */
 export function ddFilterDefaultsOf(
-  settings: Partial<Record<DdFilterOption, unknown>>
+  settings: Partial<Record<DdFilterOption, unknown>> & {
+    truehddWarpMode?: unknown
+  }
 ): DdFilterDefaults {
   const pick = (key: DdFilterOption) =>
     typeof settings[key] === "boolean"
@@ -282,6 +335,9 @@ export function ddFilterDefaultsOf(
     surroundPhaseShift: pick("surroundPhaseShift"),
     lowPassFilter: pick("lowPassFilter"),
     surround3dbAttenuation: pick("surround3dbAttenuation"),
+    truehddBedConform: pick("truehddBedConform"),
+    truehddWarpMode:
+      WARP_MODES.find((m) => m === settings.truehddWarpMode) ?? "",
   }
 }
 
@@ -708,6 +764,24 @@ export function closestAllowed(value: number, allowed: readonly number[]) {
   return best
 }
 
+/**
+ * The bitrate the CLI picks for the default entry (the config's, else the
+ * program's, moved to the closest allowed one); `null` when there is none.
+ */
+export function defaultBitrate(
+  info: BitrateInfo,
+  configDefaults: Readonly<Record<string, number>>
+): number | null {
+  if (info.status !== "ok" && info.status !== "fallback") return null
+  if (!info.defaultKey) return null
+  const wanted =
+    configDefaults[info.defaultKey] ??
+    TEMPLATE_DEFAULT_BITRATES[info.defaultKey]
+  return wanted === undefined
+    ? null
+    : (closestAllowed(wanted, info.bitrates) ?? null)
+}
+
 export interface BitrateChoice {
   value: string
   label: string
@@ -844,9 +918,15 @@ export function surround3dbAttenuationApplies(format: Format): boolean {
   return format === "dd" || format === "ddp" || format === "thd"
 }
 
-/** Whether the toggle can be used with the format. */
-export function ddFilterApplies(key: DdFilterOption, format: Format): boolean {
+/** Whether the toggle can be used with the format (`-bc` also with measure only). */
+export function ddFilterApplies(
+  key: DdFilterOption,
+  format: Format,
+  measureOnly = false
+): boolean {
   switch (key) {
+    case "truehddBedConform":
+      return truehddOptionsApply(format, measureOnly)
     case "surroundPhaseShift":
       return surroundPhaseShiftApplies(format)
     case "lowPassFilter":
@@ -860,6 +940,7 @@ const DD_FILTER_FLAGS: [DdFilterOption, string][] = [
   ["surroundPhaseShift", "-sps"],
   ["lowPassFilter", "-lpf"],
   ["surround3dbAttenuation", "-s3a"],
+  ["truehddBedConform", "-bc"],
 ]
 
 /** Changes the format and resets what the new format cannot do. */
@@ -937,10 +1018,44 @@ export function normalizeTrackIndex(text: string): string | null {
 
 export const TRACK_INDEX_HINT = "0, a:1 or s:3"
 
+/** What decides the output name that is passed: the config and the file count. */
+export interface OutputNaming {
+  /** The config's `[output] template`. */
+  configTemplate: string
+  /** Exactly one input file (after expanding folders): `-on` can be used. */
+  singleFile: boolean
+}
+
+export const PROGRAM_OUTPUT_NAMING: Readonly<OutputNaming> = {
+  configTemplate: DEFAULT_TEMPLATE,
+  singleFile: false,
+}
+
+/** The name or the template that is passed, `null` when neither is. */
+export function outputNameArg(
+  o: DeewOptions,
+  naming: OutputNaming
+): { flag: "-on" | "-ot"; value: string } | null {
+  if (o.measureOnly) return null
+  const name = o.outputName.trim()
+  // the name wins, and a template is never passed with it
+  if (naming.singleFile && name !== "") return { flag: "-on", value: name }
+  const template = o.outputTemplate
+  if (
+    template !== null &&
+    template.trim() !== "" &&
+    template !== naming.configTemplate
+  ) {
+    return { flag: "-ot", value: template }
+  }
+  return null
+}
+
 /** Human readable problems; Run is disabled while there are any. */
 export function validate(
   o: DeewOptions,
-  defaults: DefaultModes = PROGRAM_DEFAULT_MODES
+  defaults: DefaultModes = PROGRAM_DEFAULT_MODES,
+  naming: OutputNaming = PROGRAM_OUTPUT_NAMING
 ): string[] {
   const problems: string[] = []
   if (normalizeTrackIndex(o.trackIndex) === null) {
@@ -948,6 +1063,11 @@ export function validate(
   }
   // -mo measures the source: the format and the encoding options are ignored.
   if (o.measureOnly) return problems
+  const named = outputNameArg(o, naming)
+  if (named?.flag === "-ot") {
+    const parsed = parseTemplate(named.value)
+    if ("error" in parsed) problems.push(`Output template: ${parsed.error}.`)
+  }
   const dn = parseInteger(o.dialnorm)
   if (dn === null || dn < -31 || dn > 0) {
     problems.push("Dialnorm must be between -31 and 0.")
@@ -981,6 +1101,8 @@ export function buildArgs(
     defaultModes?: DefaultModes
     /** The config's on/off values; a toggle equal to it is not passed. */
     ddFilterDefaults?: DdFilterDefaults
+    /** The config's output template and the file count, see `outputNameArg`. */
+    naming?: OutputNaming
   } = {}
 ): string[] {
   const defaultModes = layout.defaultModes ?? PROGRAM_DEFAULT_MODES
@@ -992,6 +1114,8 @@ export function buildArgs(
   // -oi overrides -o, so the (greyed out) directory is not passed with it.
   if (o.outputToInput) args.push("-oi")
   else if (o.output.trim() !== "") args.push("-o", o.output.trim())
+  const named = outputNameArg(o, layout.naming ?? PROGRAM_OUTPUT_NAMING)
+  if (named !== null) args.push(named.flag, named.value)
   if (o.format !== DEFAULT_OPTIONS.format) args.push("-f", o.format)
   if (
     o.format === "ddp" &&
@@ -1041,10 +1165,17 @@ export function buildArgs(
     if (
       value !== null &&
       value !== filterDefaults[key] &&
-      ddFilterApplies(key, o.format)
+      ddFilterApplies(key, o.format, o.measureOnly)
     ) {
       args.push(flag, value ? "on" : "off")
     }
+  }
+  if (
+    truehddOptionsApply(o.format, o.measureOnly) &&
+    o.warpMode !== DEFAULT_MODE &&
+    o.warpMode !== filterDefaults.truehddWarpMode
+  ) {
+    args.push("-wm", o.warpMode)
   }
   if (o.keepTemp) args.push("-k")
   if (o.keepLog) args.push("-kl")

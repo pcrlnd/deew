@@ -127,6 +127,9 @@ pub enum ErrorKind {
     PhaseShiftFormat,
     LowPassFilterFormat,
     Surround3dbFormat,
+    WarpModeFormat,
+    BedConformFormat,
+    WarpMode,
     OnOff,
     Ac4Drc,
     AtmosInput,
@@ -159,6 +162,13 @@ pub enum ErrorKind {
     Ac4ImsMixed,
     MasterFormat,
     MasterMixed,
+    OutputNameSingle,
+    OutputNameAndTemplate,
+    OutputNameMeasureOnly,
+    OutputName,
+    OutputTemplate,
+    OutputClash,
+    OutputIsInput,
 }
 
 impl ErrorKind {
@@ -197,8 +207,17 @@ impl ErrorKind {
             Self::Surround3dbFormat => {
                 "[bold yellow]-s3a[/bold yellow]/[bold yellow]--surround-3db-attenuation[/bold yellow] only works for [bold yellow]DD[/bold yellow], [bold yellow]DDP[/bold yellow] and [bold yellow]TrueHD[/bold yellow]."
             }
+            Self::WarpModeFormat => {
+                "[bold yellow]-wm[/bold yellow]/[bold yellow]--warp-mode[/bold yellow] only works for [bold yellow]DDP Atmos[/bold yellow], [bold yellow]TrueHD Atmos[/bold yellow], [bold yellow]AC4 Atmos[/bold yellow], [bold yellow]AC4 IMS[/bold yellow] and [bold yellow]-mo[/bold yellow]."
+            }
+            Self::BedConformFormat => {
+                "[bold yellow]-bc[/bold yellow]/[bold yellow]--bed-conform[/bold yellow] only works for [bold yellow]DDP Atmos[/bold yellow], [bold yellow]TrueHD Atmos[/bold yellow], [bold yellow]AC4 Atmos[/bold yellow], [bold yellow]AC4 IMS[/bold yellow] and [bold yellow]-mo[/bold yellow]."
+            }
+            Self::WarpMode => {
+                "[bold yellow]-wm[/bold yellow]/[bold yellow]--warp-mode[/bold yellow] can only be [bold yellow]normal[/bold yellow], [bold yellow]warping[/bold yellow], [bold yellow]prologiciix[/bold yellow] or [bold yellow]loro[/bold yellow]."
+            }
             Self::OnOff => {
-                "[bold yellow]-sps[/bold yellow], [bold yellow]-lpf[/bold yellow] and [bold yellow]-s3a[/bold yellow] can only be [bold yellow]on[/bold yellow] or [bold yellow]off[/bold yellow]."
+                "[bold yellow]-sps[/bold yellow], [bold yellow]-lpf[/bold yellow], [bold yellow]-s3a[/bold yellow] and [bold yellow]-bc[/bold yellow] can only be [bold yellow]on[/bold yellow] or [bold yellow]off[/bold yellow]."
             }
             Self::Ac4Drc => {
                 "DRC [bold yellow]none[/bold yellow] is not supported for AC4 encoding (AC4 Atmos supports it)."
@@ -282,6 +301,21 @@ impl ErrorKind {
             Self::MasterMixed => {
                 "Atmos masters (ADM BWF, DAMF) can't be encoded to [bold yellow]dd[/bold yellow]/[bold yellow]ddp[/bold yellow] together with other inputs."
             }
+            Self::OutputNameSingle => {
+                "[bold yellow]-on[/bold yellow]/[bold yellow]--output-name[/bold yellow] only works with a single input file (found 🤠), use [bold yellow]-ot[/bold yellow]/[bold yellow]--output-template[/bold yellow] for several."
+            }
+            Self::OutputNameAndTemplate => {
+                "[bold yellow]-on[/bold yellow]/[bold yellow]--output-name[/bold yellow] and [bold yellow]-ot[/bold yellow]/[bold yellow]--output-template[/bold yellow] can't be used together."
+            }
+            Self::OutputNameMeasureOnly => {
+                "[bold yellow]-on[/bold yellow]/[bold yellow]--output-name[/bold yellow] and [bold yellow]-ot[/bold yellow]/[bold yellow]--output-template[/bold yellow] don't work with [bold yellow]-mo[/bold yellow], it writes no output file."
+            }
+            Self::OutputName => "invalid output name: 🤠",
+            Self::OutputTemplate => "invalid output template: 🤠",
+            Self::OutputClash => {
+                "more than one output would be written to the same file, use [bold yellow]-ot[/bold yellow]/[bold yellow]--output-template[/bold yellow] to name them differently:\n🤠"
+            }
+            Self::OutputIsInput => "an output would overwrite its own input file:\n🤠",
             Self::DdpAtmosMode => {
                 "[bold yellow]--ddp-atmos-mode[/bold yellow] can only be [bold yellow]streaming[/bold yellow], [bold yellow]standard[/bold yellow] or [bold yellow]bluray[/bold yellow]."
             }
