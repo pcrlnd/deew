@@ -104,6 +104,11 @@ pub fn save_gui_settings(settings: &GuiSettings) -> Result<(), String> {
     crate::settings::save(config_path().as_deref(), settings)
 }
 
+/// Saves only `gui.theme` into the config next to the CLI.
+pub fn save_gui_theme(theme: crate::settings::ThemeMode) -> Result<(), String> {
+    crate::settings::save_theme(config_path().as_deref(), theme)
+}
+
 /// Probes the inputs by asking the deew CLI next to this program
 /// (`deew --probe-json`), so the answer is exactly what deew will do:
 /// folders and patterns are expanded, the ffprobe is the one deew uses.

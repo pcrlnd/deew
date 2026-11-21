@@ -91,11 +91,13 @@ import {
   runDeew,
   runInfo,
   saveGuiSettings,
+  saveGuiTheme,
   stopDeew,
   stopInfo,
   writeStdin,
   type OutputView,
 } from "@/lib/runner"
+import { parseThemeMode, setThemeMode, type ThemeMode } from "@/lib/theme"
 
 const platform = detectPlatform(navigator.userAgent)
 
@@ -347,6 +349,10 @@ export function App({ onLogout }: { onLogout?: () => void }) {
         if (settings.useSystemFont) {
           document.documentElement.dataset.font = "system"
         }
+        // deew-web keeps its own mode per browser; the config wins in deew-gui.
+        if (!inWeb()) {
+          setThemeMode(parseThemeMode(settings.theme), { persist: true })
+        }
         setDefaultOutput(settings.defaultOutput)
         const modes = parseDefaultModes(
           settings.defaultDdpMode,
@@ -389,6 +395,13 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       output: outputRef.current,
       toInput: toInputRef.current,
     }).then(
+      () => setSaveError(null),
+      (e) => setSaveError(errorMessage(e))
+    )
+  }, [])
+
+  const saveTheme = useCallback((mode: ThemeMode) => {
+    saveGuiTheme(mode).then(
       () => setSaveError(null),
       (e) => setSaveError(errorMessage(e))
     )
@@ -830,6 +843,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
             encoding={running}
             utilityRunning={utility !== null}
             onRunInfo={requestUtility}
+            onThemeChange={saveTheme}
           />
         )}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-none">

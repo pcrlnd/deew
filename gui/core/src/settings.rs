@@ -1,9 +1,10 @@
 //! GUI settings, stored in the deew `config.toml`: `gui.progress`,
-//! `gui.scaling` and `gui.use_system_font` (the CLI ignores the `[gui]`
-//! section) and the CLI's `output.path` / `output.to_input`.
-//! Saving edits only `gui.progress` and the two `output` keys (`scaling` and
-//! `use_system_font` are only written when a new `[gui]` section is added) and keeps the rest of the file
-//! (comments, quoting, indentation) as it is.
+//! `gui.scaling`, `gui.use_system_font` and `gui.theme` (the CLI ignores the
+//! `[gui]` section) and the CLI's `output.path` / `output.to_input`.
+//! Saving edits only `gui.progress` and the two `output` keys (`scaling`,
+//! `use_system_font` and `theme` are only written when a new `[gui]` section
+//! is added); `save_theme` edits only `gui.theme`. Both keep the rest of the
+//! file (comments, quoting, indentation) as it is.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -37,6 +38,36 @@ impl ProgressView {
     }
 }
 
+/// `gui.theme`: the colour theme of deew-gui.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    /// Follows the operating system.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ThemeMode::System => "system",
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<ThemeMode> {
+        match value {
+            "system" => Some(ThemeMode::System),
+            "light" => Some(ThemeMode::Light),
+            "dark" => Some(ThemeMode::Dark),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiSettings {
@@ -55,6 +86,10 @@ pub struct GuiSettings {
     /// Sans. Read-only for the GUI: saving keeps the value in the file.
     #[serde(default)]
     pub use_system_font: bool,
+    /// `gui.theme`: 'system', 'light' or 'dark'. Saved on its own by
+    /// `save_theme`; saving the other settings keeps the value in the file.
+    #[serde(default)]
+    pub theme: ThemeMode,
 }
 
 fn default_scaling() -> u16 {
@@ -69,6 +104,7 @@ impl Default for GuiSettings {
             to_input: false,
             scaling: default_scaling(),
             use_system_font: false,
+            theme: ThemeMode::default(),
         }
     }
 }
@@ -249,6 +285,7 @@ const SECTION_COMMENT: &str = "# Settings of deew-gui and deew-web:
 # progress: 'cli' shows the terminal output of the CLI, 'native' shows progress bars, warnings and pop-up prompts in the window.
 # scaling: zoom of the deew-gui window, '80%' to '150%' (deew-web uses the browser's zoom).
 # use_system_font: true uses the system's font instead of the bundled IBM Plex Sans.
+# theme: 'system' follows the operating system, 'light' or 'dark' (deew-gui; deew-web keeps its own per browser).
 ";
 
 /// Comment above the section when it is added to an existing config.
@@ -284,12 +321,17 @@ pub fn parse(text: &str) -> GuiSettings {
     let use_system_font = gui
         .and_then(|g| g.get("use_system_font")?.as_bool())
         .unwrap_or_default();
+    let theme = gui
+        .and_then(|g| g.get("theme")?.as_str())
+        .and_then(ThemeMode::from_str)
+        .unwrap_or_default();
     GuiSettings {
         progress,
         output,
         to_input,
         scaling,
         use_system_font,
+        theme,
     }
 }
 
@@ -392,12 +434,42 @@ pub fn update_text(text: &str, settings: &GuiSettings) -> Result<String, String>
         blank(&mut out);
         out.push_str(SECTION_COMMENT);
         out.push_str(&format!(
-            "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n",
+            "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n    theme = '{}'\n",
             settings.progress.as_str(),
             settings.scaling,
-            settings.use_system_font
+            settings.use_system_font,
+            settings.theme.as_str()
         ));
     }
+    Ok(out)
+}
+
+/// Returns the config text with only `gui.theme` set, everything else kept.
+/// A missing `[gui]` section is appended with the default values.
+pub fn update_theme_text(text: &str, theme: ThemeMode) -> Result<String, String> {
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("config.toml is not valid TOML: {e}"))?;
+    let value: Value = format!("'{}'", theme.as_str())
+        .parse()
+        .map_err(|e| format!("internal error: {e}"))?;
+    if edit_section(&mut doc, "gui", vec![("theme", value)])? {
+        return Ok(doc.to_string());
+    }
+    let mut out = doc.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(SECTION_COMMENT);
+    let defaults = GuiSettings::default();
+    out.push_str(&format!(
+        "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n    theme = '{}'\n",
+        defaults.progress.as_str(),
+        defaults.scaling,
+        defaults.use_system_font,
+        theme.as_str()
+    ));
     Ok(out)
 }
 
@@ -415,6 +487,18 @@ pub fn save(path: Option<&Path>, settings: &GuiSettings) -> Result<(), String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("cannot read config.toml: {e}"))?;
     let updated = update_text(&text, settings)?;
+    if updated != text {
+        std::fs::write(path, updated).map_err(|e| format!("cannot write config.toml: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Writes only `gui.theme` into the existing config file.
+pub fn save_theme(path: Option<&Path>, theme: ThemeMode) -> Result<(), String> {
+    let path = path.filter(|path| path.is_file()).ok_or(NOT_FOUND)?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("cannot read config.toml: {e}"))?;
+    let updated = update_theme_text(&text, theme)?;
     if updated != text {
         std::fs::write(path, updated).map_err(|e| format!("cannot write config.toml: {e}"))?;
     }
@@ -444,7 +528,7 @@ mod tests {
 
     fn gui_block(value: &str) -> String {
         format!(
-            "{SECTION_COMMENT}[gui]\n    progress = '{value}'\n    scaling = '100%'\n    use_system_font = false\n"
+            "{SECTION_COMMENT}[gui]\n    progress = '{value}'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n"
         )
     }
 
@@ -456,7 +540,7 @@ mod tests {
     fn serde_shape() {
         assert_eq!(
             serde_json::to_string(&native()).unwrap(),
-            r#"{"progress":"native","output":"","toInput":false,"scaling":100,"useSystemFont":false}"#
+            r#"{"progress":"native","output":"","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system"}"#
         );
         let cli: GuiSettings = serde_json::from_str(r#"{"progress":"cli"}"#).unwrap();
         assert_eq!(cli, GuiSettings::default());
@@ -472,10 +556,96 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}"}"#
+            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system","defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}"}"#
         );
         let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","toInput":true}"#).unwrap();
         assert!(o.to_input);
+    }
+
+    #[test]
+    fn theme_parse() {
+        let t = |text: &str| parse(text).theme;
+        assert_eq!(t("[gui]\ntheme = 'dark'\n"), ThemeMode::Dark);
+        assert_eq!(t("[gui]\ntheme = \"light\"\n"), ThemeMode::Light);
+        assert_eq!(t("[gui]\ntheme = 'system'\n"), ThemeMode::System);
+        assert_eq!(t("[gui]\ntheme = 'Dark'\n"), ThemeMode::System);
+        assert_eq!(t("[gui]\ntheme = 'x'\n"), ThemeMode::System);
+        assert_eq!(t("[gui]\ntheme = 3\n"), ThemeMode::System);
+        assert_eq!(t("[gui]\n"), ThemeMode::System);
+        assert_eq!(t(""), ThemeMode::System);
+        assert_eq!(t("theme = 'dark'\n"), ThemeMode::System);
+        let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","theme":"dark"}"#).unwrap();
+        assert_eq!(o.theme, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn save_theme_edits_only_the_theme_key() {
+        let text = "# top\n[gui]\n  progress = \"native\" # a\n  theme = \"light\"  # b\n  scaling = '110%'\n\n[output]\n  path = 'x'\n";
+        let updated = update_theme_text(text, ThemeMode::Dark).unwrap();
+        assert_eq!(updated, text.replace("\"light\"", "'dark'"));
+        assert_eq!(
+            update_theme_text(&updated, ThemeMode::Dark).unwrap(),
+            updated
+        );
+        let updated = update_theme_text(TEMPLATE, ThemeMode::Light).unwrap();
+        assert_eq!(
+            updated,
+            TEMPLATE.replace("theme = 'system'", "theme = 'light'")
+        );
+        assert_eq!(parse(&updated).theme, ThemeMode::Light);
+    }
+
+    #[test]
+    fn save_theme_adds_the_key_or_section() {
+        let text = "[gui]\n  progress = 'cli'\nother = 1\n";
+        let updated = update_theme_text(text, ThemeMode::Dark).unwrap();
+        assert!(
+            updated.starts_with("[gui]\n  progress = 'cli'\nother = 1\n    theme = 'dark'\n"),
+            "{updated}"
+        );
+        let updated = update_theme_text("a = 1", ThemeMode::Dark).unwrap();
+        assert_eq!(
+            updated,
+            format!(
+                "a = 1\n\n{}",
+                gui_block("cli").replace("theme = 'system'", "theme = 'dark'")
+            )
+        );
+        assert!(update_theme_text("a = [", ThemeMode::Dark).is_err());
+        assert!(update_theme_text("gui = 1\n", ThemeMode::Dark).is_err());
+    }
+
+    #[test]
+    fn saving_progress_and_output_keeps_the_theme() {
+        let text = "[gui]\n  progress = 'cli'\n  theme = 'dark'\n\n[output]\n  path = ''\n  to_input = false\n";
+        // the settings of the web (no theme in the body) must not touch it
+        let body: GuiSettings =
+            serde_json::from_str(r#"{"progress":"native","output":"/m","toInput":true}"#).unwrap();
+        let updated = update_text(text, &body).unwrap();
+        assert_eq!(parse(&updated).theme, ThemeMode::Dark);
+        assert!(updated.contains("  theme = 'dark'\n"), "{updated}");
+        let other = GuiSettings {
+            theme: ThemeMode::Light,
+            ..native()
+        };
+        assert_eq!(
+            parse(&update_text(text, &other).unwrap()).theme,
+            ThemeMode::Dark
+        );
+    }
+
+    #[test]
+    fn save_theme_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert_eq!(
+            save_theme(Some(&path), ThemeMode::Dark).unwrap_err(),
+            NOT_FOUND
+        );
+        assert_eq!(save_theme(None, ThemeMode::Dark).unwrap_err(), NOT_FOUND);
+        std::fs::write(&path, TEMPLATE).unwrap();
+        save_theme(Some(&path), ThemeMode::Dark).unwrap();
+        assert_eq!(load(Some(&path)).theme, ThemeMode::Dark);
     }
 
     #[test]
@@ -540,17 +710,20 @@ mod tests {
     fn new_gui_section_has_all_keys() {
         let updated = update_text("", &native()).unwrap();
         assert!(
-            updated.ends_with("[gui]\n    progress = 'native'\n    scaling = '100%'\n    use_system_font = false\n"),
+            updated.ends_with("[gui]\n    progress = 'native'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n"),
             "{updated}"
         );
         let custom = GuiSettings {
             scaling: 125,
             use_system_font: true,
+            theme: ThemeMode::Dark,
             ..native()
         };
         let updated = update_text("", &custom).unwrap();
         assert!(
-            updated.ends_with("    scaling = '125%'\n    use_system_font = true\n"),
+            updated.ends_with(
+                "    scaling = '125%'\n    use_system_font = true\n    theme = 'dark'\n"
+            ),
             "{updated}"
         );
         assert_eq!(parse(&updated), custom);

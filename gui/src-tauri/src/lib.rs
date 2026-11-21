@@ -4,7 +4,7 @@ use deew_gui_core::cli;
 use deew_gui_core::info::{self, Gate};
 use deew_gui_core::probe::ProbeResult;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
-use deew_gui_core::settings::{GuiSettings, SettingsView};
+use deew_gui_core::settings::{GuiSettings, SettingsView, ThemeMode};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -257,6 +257,14 @@ async fn save_gui_settings(settings: GuiSettings) -> Result<(), String> {
         .map_err(|e| format!("saving the settings failed: {e}"))?
 }
 
+/// Saves only `gui.theme` into the config next to the CLI.
+#[tauri::command]
+async fn save_gui_theme(theme: ThemeMode) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || cli::save_gui_theme(theme))
+        .await
+        .map_err(|e| format!("saving the theme failed: {e}"))?
+}
+
 /// The version of the deew CLI that the GUI runs (`deew -v`).
 #[tauri::command]
 async fn cli_version() -> Result<String, String> {
@@ -322,7 +330,8 @@ pub fn run() {
             default_bitrates,
             cli_version,
             gui_settings,
-            save_gui_settings
+            save_gui_settings,
+            save_gui_theme
         ])
         .setup(|app| {
             match app.get_webview_window("main") {

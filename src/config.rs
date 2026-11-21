@@ -39,6 +39,16 @@ pub enum PipeMode {
 }
 
 impl PipeMode {
+    /// The value of `-p` (like the config's text values).
+    pub fn parse(s: &str) -> Option<PipeMode> {
+        match s.to_lowercase().as_str() {
+            "auto" => Some(PipeMode::Auto),
+            "always" => Some(PipeMode::Always),
+            "never" => Some(PipeMode::Never),
+            _ => None,
+        }
+    }
+
     /// Whether the run feeds DEE through the pipe, `parallel` being the number
     /// of encodes that run at the same time.
     pub fn use_pipe(self, windows: bool, parallel: usize) -> bool {

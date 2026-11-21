@@ -3,8 +3,9 @@ import { getVersion } from "@tauri-apps/api/app"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { Copy, Minus, Square, X } from "lucide-react"
 
-import { ThemeToggle } from "@/components/theme-toggle"
+import { ThemeMenu } from "@/components/theme-menu"
 import { UtilitiesMenu } from "@/components/utilities-menu"
+import type { ThemeMode } from "@/lib/theme"
 import type { InfoFlag } from "@/lib/deew-args"
 import { inTauri } from "@/lib/runner"
 import { cn } from "@/lib/utils"
@@ -101,10 +102,12 @@ export function TitleBar({
   encoding,
   utilityRunning,
   onRunInfo,
+  onThemeChange,
 }: {
   encoding: boolean
   utilityRunning: boolean
   onRunInfo: (flag: InfoFlag) => void
+  onThemeChange: (mode: ThemeMode) => void
 }) {
   const [version, setVersion] = useState<string>()
 
@@ -141,7 +144,7 @@ export function TitleBar({
           utilityRunning={utilityRunning}
           onRun={onRunInfo}
         />
-        <ThemeToggle />
+        <ThemeMenu onChange={onThemeChange} />
       </div>
       {inTauri() && <WindowControls />}
     </header>

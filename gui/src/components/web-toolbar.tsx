@@ -1,11 +1,11 @@
 import { LogOut } from "lucide-react"
 
-import { ThemeToggle } from "@/components/theme-toggle"
+import { ThemeMenu } from "@/components/theme-menu"
 import { UtilitiesMenu } from "@/components/utilities-menu"
 import { Button } from "@/components/ui/button"
 import type { InfoFlag } from "@/lib/deew-args"
 
-/** Utilities menu, theme toggle and log out; replaces the window bar. */
+/** Utilities menu, theme menu and log out; replaces the window bar. */
 export function WebToolbar({
   encoding,
   utilityRunning,
@@ -24,7 +24,7 @@ export function WebToolbar({
         utilityRunning={utilityRunning}
         onRun={onRunInfo}
       />
-      <ThemeToggle />
+      <ThemeMenu />
       {onLogout && (
         <Button
           variant="ghost"

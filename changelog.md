@@ -1,3 +1,15 @@
+# deew 5.5.3:
+- new advanced `-p, --pipe auto|always|never` (only in `-fh`): overrides
+  the config's `pipe` for one run
+- new configs have `theme = 'system'` in the `[gui]` section
+- `deew-gui`/`deew-web` 1.0.0:
+  - 1.0.0 because the GUI is considered complete and stable now
+  - the theme button opens a menu with Light, Dark and System (follows
+    the operating system); `deew-gui` saves the choice as `theme` in the
+    `[gui]` section of the config (`'system'`, `'light'` or `'dark'`,
+    default `'system'`), `deew-web` starts on System and each browser
+    keeps its own choice
+
 # deew 5.5.2:
 - piped encodes (DD, DDP, AC4, AAC and `-mo` when ffmpeg feeds DEE
   directly) show real progress instead of jumping from 0 to 100%: DEE

@@ -28,6 +28,8 @@ pub struct Args {
     pub drc: Option<String>, // None: the default of the format
     pub dialnorm: i64,       // default 0
     pub instances: Option<String>,
+    /// `-p MODE` (raw)
+    pub pipe: Option<String>,
     pub keeptemp: bool,
     pub keep_log: bool,
     pub output_to_input: bool,
@@ -73,6 +75,7 @@ impl Default for Args {
             drc: None,
             dialnorm: 0,
             instances: None,
+            pipe: None,
             keeptemp: false,
             keep_log: false,
             output_to_input: false,
@@ -138,6 +141,7 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-r", "--drc", Kind::Str),
     ("-dn", "--dialnorm", Kind::Int),
     ("-in", "--instances", Kind::Str),
+    ("-p", "--pipe", Kind::Str),
     ("-k", "--keeptemp", Kind::Flag),
     ("-kl", "--keep-log", Kind::Flag),
     ("-mo", "--measure-only", Kind::Flag),
@@ -319,6 +323,7 @@ fn set_str(args: &mut Args, long: &str, v: String) {
         "--delay" => args.delay = Some(v),
         "--drc" => args.drc = Some(v),
         "--instances" => args.instances = Some(v),
+        "--pipe" => args.pipe = Some(v),
         "--surround-phase-shift" => args.surround_phase_shift = Some(v),
         "--low-pass-filter" => args.low_pass_filter = Some(v),
         "--surround-3db-attenuation" => args.surround_3db_attenuation = Some(v),
@@ -554,6 +559,10 @@ mod tests {
     #[test]
     fn truehdd_options() {
         let some = |v: &str| Some(v.to_string());
+        assert_eq!(ok(&["-p", "always"]).pipe, some("always"));
+        assert_eq!(ok(&["--pipe=never"]).pipe, some("never"));
+        assert_eq!(ok(&["-p", "auto", "-pl"]).pipe, some("auto"));
+        assert!(ok(&["-pl"]).pipe.is_none() && ok(&["-pl"]).print_logos);
         assert_eq!(ok(&["-wm", "normal"]).warp_mode, some("normal"));
         assert_eq!(ok(&["--warp-mode", "LoRo"]).warp_mode, some("LoRo"));
         assert_eq!(ok(&["--warp-mode=warping"]).warp_mode, some("warping"));

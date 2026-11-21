@@ -2839,6 +2839,10 @@ fn argument_errors() {
         &env.deew(&["-i", "a.wav", "-in", "many"]),
         "invalid number of instances: many",
     );
+    assert_error(
+        &env.deew(&["-i", "a.wav", "-p", "maybe"]),
+        "-p/--pipe can only be auto, always or never.",
+    );
 }
 
 #[test]
@@ -3824,6 +3828,25 @@ fn piped_ddp_has_no_wav() {
     );
     // not even -k leaves anything: no wav was written
     assert!(temp_is_empty(&env), "{:?}", temp_files(&env));
+}
+
+#[test]
+fn piping_option_overrides_the_config() {
+    let env = env_or_skip!();
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    // the config says never, -p always pipes
+    let out = env.deew(&["-i", "in.wav", "-p", "always"]);
+    ok(&out);
+    assert_eq!(piped_bytes(&env, "dee_ddp_encoder"), 2 * 48000 * 6 * 3);
+    assert!(stdout(&out).contains("on (always)"), "{}", stdout(&out));
+    // the config says auto, -p never uses the temp wav
+    env.set_pipe(true);
+    let out = env.deew(&["-i", "in.wav", "-p", "never", "-k"]);
+    ok(&out);
+    let text = stdout(&out);
+    assert!(text.contains("off"), "{text}");
+    assert!(!text.contains("/dev/stdin"), "{text}");
+    assert!(opt(&env.run("dee_ddp_encoder"), "-i").ends_with(".wav"));
 }
 
 #[test]

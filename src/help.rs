@@ -11,7 +11,7 @@ const RAW_HELP: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     r#"
 
-[yellow]USAGE[/yellow]: [bold cyan]deew[/bold cyan] [[green]-h[/green]] [[green]-fh[/green]] [[green]-v[/green]] [[green]-i[/green] [[bold color(231)]INPUT[/bold color(231)] ...]] [[green]-ti[/green] [bold color(231)]INDEX[/bold color(231)]] [[green]-o[/green] [bold color(231)]DIRECTORY[/bold color(231)]] [[green]-oi[/green]] [[green]-on[/green] [bold color(231)]NAME[/bold color(231)]]<< [[green]-ot[/green] [bold color(231)]TEMPLATE[/bold color(231)]]>> [[green]-f[/green] [bold color(231)]FORMAT[/bold color(231)]]<< [[green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]]>><< [[green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]]>><< [[green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]]>> [[green]-b[/green] [bold color(231)]BITRATE[/bold color(231)]] [[green]-dm[/green] [bold color(231)]CHANNELS[/bold color(231)]]<< [[green]-dl[/green]]>><< [[green]-sps[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-lpf[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-s3a[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-wm[/green] [bold color(231)]MODE[/bold color(231)]] [[green]-bc[/green] [bold color(231)]SWITCH[/bold color(231)]]>> [[green]-d[/green] [bold color(231)]DELAY[/bold color(231)]] [[green]-r[/green] [bold color(231)]DRC[/bold color(231)]] [[green]-dn[/green] [bold color(231)]DIALNORM[/bold color(231)]]<< [[green]-in[/green] [bold color(231)]NUMBER[/bold color(231)]]>> [[green]-k[/green]]<< [[green]-kl[/green]]>> [[green]-mo[/green]] [[green]-lb[/green]]<< [[green]-la[/green]]>> [[green]-np[/green]]<< [[green]-pl[/green]]>> [[green]-cl[/green]] [[green]-c[/green]] [[green]-gc[/green]] [[green]-gt[/green]]
+[yellow]USAGE[/yellow]: [bold cyan]deew[/bold cyan] [[green]-h[/green]] [[green]-fh[/green]] [[green]-v[/green]] [[green]-i[/green] [[bold color(231)]INPUT[/bold color(231)] ...]] [[green]-ti[/green] [bold color(231)]INDEX[/bold color(231)]] [[green]-o[/green] [bold color(231)]DIRECTORY[/bold color(231)]] [[green]-oi[/green]] [[green]-on[/green] [bold color(231)]NAME[/bold color(231)]]<< [[green]-ot[/green] [bold color(231)]TEMPLATE[/bold color(231)]]>> [[green]-f[/green] [bold color(231)]FORMAT[/bold color(231)]]<< [[green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]]>><< [[green]--ddp-atmos-mode[/green] [bold color(231)]MODE[/bold color(231)]]>><< [[green]--ac4-ims-mode[/green] [bold color(231)]MODE[/bold color(231)]]>> [[green]-b[/green] [bold color(231)]BITRATE[/bold color(231)]] [[green]-dm[/green] [bold color(231)]CHANNELS[/bold color(231)]]<< [[green]-dl[/green]]>><< [[green]-sps[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-lpf[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-s3a[/green] [bold color(231)]SWITCH[/bold color(231)]] [[green]-wm[/green] [bold color(231)]MODE[/bold color(231)]] [[green]-bc[/green] [bold color(231)]SWITCH[/bold color(231)]]>> [[green]-d[/green] [bold color(231)]DELAY[/bold color(231)]] [[green]-r[/green] [bold color(231)]DRC[/bold color(231)]] [[green]-dn[/green] [bold color(231)]DIALNORM[/bold color(231)]]<< [[green]-in[/green] [bold color(231)]NUMBER[/bold color(231)]]>><< [[green]-p[/green] [bold color(231)]MODE[/bold color(231)]]>> [[green]-k[/green]]<< [[green]-kl[/green]]>> [[green]-mo[/green]] [[green]-lb[/green]]<< [[green]-la[/green]]>> [[green]-np[/green]]<< [[green]-pl[/green]]>> [[green]-cl[/green]] [[green]-c[/green]] [[green]-gc[/green]] [[green]-gt[/green]]
 
 [yellow]FLAGS[/yellow]:
   [green]-h[/green], [green]--help[/green]                show this help message.
@@ -109,6 +109,10 @@ const RAW_HELP: &str = concat!(
 ~                            [bold color(231)]50%[/bold color(231)] means [bold color(231)]4[/bold color(231)] on a cpu with 8 threads
 ~                            one DEE can use 2 threads so [bold color(231)]50%[/bold color(231)] can utilize all threads
 ~                            (this option overrides the config's number)
+~  [green]-p[/green], [green]--pipe[/green] [bold color(231)]MODE[/bold color(231)]           [underline magenta]options:[/underline magenta] [bold color(231)]auto[/bold color(231)] / [bold color(231)]always[/bold color(231)] / [bold color(231)]never[/bold color(231)]
+~                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
+~                            ffmpeg's audio goes into DEE without a temp .wav
+~                            only works for DD/DDP/AC4/AAC and [green]-mo[/green], config: [bold color(231)]pipe[/bold color(231)]
   [green]-k[/green], [green]--keeptemp[/green]            keep temp files
 ~  [green]-kl[/green], [green]--keep[/green][green]-log[/green]           keep TrueHD's log and write a .deew-log.html report for each output
   [green]-mo[/green], [green]--measure[/green][green]-only[/green]       only measures the loudness of the source with DEE, no encoding, -f and the encoding options are ignored, TrueHD Atmos sources and Atmos masters are measured as Atmos
@@ -435,6 +439,7 @@ mod tests {
             "--print-logos",
             "--output-template",
             "--instances",
+            "--pipe",
         ] {
             assert!(!basic.contains(flag), "{flag}");
             assert!(full.contains(flag), "{flag}");
@@ -445,7 +450,7 @@ mod tests {
         }
         // everything else is the same
         let rows = |t: &str| t.lines().filter(|l| l.starts_with("  -")).count();
-        assert_eq!(rows(&full), rows(&basic) + 14);
+        assert_eq!(rows(&full), rows(&basic) + 15);
     }
 
     #[test]

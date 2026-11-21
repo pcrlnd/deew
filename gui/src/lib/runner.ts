@@ -5,6 +5,7 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core"
 
 import type { ProbeResult } from "@/lib/probe"
+import type { ThemeMode } from "@/lib/theme"
 import { fsRequestPath, type FsListing } from "@/lib/fs-browser"
 import {
   RunClient,
@@ -267,6 +268,8 @@ export interface LoadedGuiSettings extends GuiSettings {
   scaling: number
   /** `gui.use_system_font`: the OS font instead of IBM Plex Sans (read-only here). */
   useSystemFont: boolean
+  /** `gui.theme`: 'system', 'light' or 'dark' (deew-gui only; deew-web ignores it). */
+  theme: ThemeMode
   /** The folder deew runs in (the home folder), empty when unknown. */
   defaultOutput: string
   /** `default_modes.ddp` of the config. */
@@ -292,6 +295,10 @@ export interface LoadedGuiSettings extends GuiSettings {
 /** The GUI settings of the config (`gui.progress`, `output.*`, `default_modes`). */
 export const guiSettings = (): Promise<LoadedGuiSettings> =>
   inWeb() ? requestJson("/api/settings") : invoke("gui_settings")
+
+/** Saves only `gui.theme` (deew-gui; deew-web keeps the mode in the browser). */
+export const saveGuiTheme = (theme: ThemeMode): Promise<void> =>
+  inWeb() ? Promise.resolve() : invoke("save_gui_theme", { theme })
 
 export const saveGuiSettings = (settings: GuiSettings): Promise<void> =>
   inWeb()

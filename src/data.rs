@@ -130,6 +130,7 @@ pub enum ErrorKind {
     WarpModeFormat,
     BedConformFormat,
     WarpMode,
+    PipeMode,
     OnOff,
     Ac4Drc,
     AtmosInput,
@@ -215,6 +216,9 @@ impl ErrorKind {
             }
             Self::WarpMode => {
                 "[bold yellow]-wm[/bold yellow]/[bold yellow]--warp-mode[/bold yellow] can only be [bold yellow]normal[/bold yellow], [bold yellow]warping[/bold yellow], [bold yellow]prologiciix[/bold yellow] or [bold yellow]loro[/bold yellow]."
+            }
+            Self::PipeMode => {
+                "[bold yellow]-p[/bold yellow]/[bold yellow]--pipe[/bold yellow] can only be [bold yellow]auto[/bold yellow], [bold yellow]always[/bold yellow] or [bold yellow]never[/bold yellow]."
             }
             Self::OnOff => {
                 "[bold yellow]-sps[/bold yellow], [bold yellow]-lpf[/bold yellow], [bold yellow]-s3a[/bold yellow] and [bold yellow]-bc[/bold yellow] can only be [bold yellow]on[/bold yellow] or [bold yellow]off[/bold yellow]."

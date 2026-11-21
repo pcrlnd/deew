@@ -97,8 +97,8 @@ USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
             [--ddp-atmos-mode MODE] [--ac4-ims-mode MODE] [-b BITRATE]
             [-dm CHANNELS] [-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH]
             [-wm MODE] [-bc SWITCH] [-d DELAY] [-r DRC] [-dn DIALNORM]
-            [-in NUMBER] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl] [-cl] [-c]
-            [-gc] [-gt]
+            [-in NUMBER] [-p MODE] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl]
+            [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
@@ -212,6 +212,10 @@ FLAGS:
                             one DEE can use 2 threads so 50% can utilize all
                             threads
                             (this option overrides the config's number)
+  -p, --pipe MODE           options: auto / always / never
+                            default: run -c/--config
+                            ffmpeg's audio goes into DEE without a temp .wav
+                            only works for DD/DDP/AC4/AAC and -mo, config: pipe
   -k, --keeptemp            keep temp files
   -kl, --keep-log           keep TrueHD's log and write a .deew-log.html report
                             for each output

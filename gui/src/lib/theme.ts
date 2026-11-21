@@ -1,34 +1,34 @@
 import { useSyncExternalStore } from "react"
 
+/** The resolved colour theme. */
 export type Theme = "light" | "dark"
+
+/** What the user picked: a fixed theme or following the OS. */
+export type ThemeMode = Theme | "system"
 
 /** Legacy persisted key; only ever removed now. */
 const LEGACY_STORAGE_KEY = "deew-theme"
+
+/** Mirror of the mode (deew-gui: avoids a flash, the config wins; deew-web: the only store). */
+const MODE_STORAGE_KEY = "deew-theme-mode"
 
 export function themeFromPrefersDark(prefersDark: boolean): Theme {
   return prefersDark ? "dark" : "light"
 }
 
-export function toggleTheme(theme: Theme): Theme {
-  return theme === "dark" ? "light" : "dark"
+/** Any unknown value is "system". */
+export function parseThemeMode(value: unknown): ThemeMode {
+  return value === "light" || value === "dark" ? value : "system"
 }
 
-/**
- * Theme after an OS preference change: followed only until the user has
- * toggled manually in this session.
- */
-export function themeAfterOsChange(
-  current: Theme,
-  prefersDark: boolean,
-  manualOverride: boolean
-): Theme {
-  return manualOverride ? current : themeFromPrefersDark(prefersDark)
+export function resolveTheme(mode: ThemeMode, prefersDark: boolean): Theme {
+  return mode === "system" ? themeFromPrefersDark(prefersDark) : mode
 }
 
 const query = () => window.matchMedia("(prefers-color-scheme: dark)")
 
+let mode: ThemeMode = "system"
 let theme: Theme = "light"
-let manualOverride = false
 const listeners = new Set<() => void>()
 
 function apply() {
@@ -36,35 +36,57 @@ function apply() {
   listeners.forEach((l) => l())
 }
 
-/** Call once before rendering: starts from the OS preference and follows it. */
+function readStoredMode(): ThemeMode {
+  try {
+    return parseThemeMode(localStorage.getItem(MODE_STORAGE_KEY))
+  } catch {
+    return "system"
+  }
+}
+
+/** Call once before rendering: starts from the stored mode (else the OS). */
 export function initTheme() {
   try {
     localStorage.removeItem(LEGACY_STORAGE_KEY)
   } catch {
     // Best effort cleanup.
   }
-  theme = themeFromPrefersDark(query().matches)
-  manualOverride = false
+  mode = readStoredMode()
+  theme = resolveTheme(mode, query().matches)
   apply()
   query().addEventListener("change", (e) => {
-    theme = themeAfterOsChange(theme, e.matches, manualOverride)
+    if (mode !== "system") return
+    theme = themeFromPrefersDark(e.matches)
     apply()
   })
 }
 
-/** Flip light/dark; stops following the OS for the rest of the session. */
-export function toggleCurrentTheme() {
-  manualOverride = true
-  theme = toggleTheme(theme)
+/** Applies the mode; `persist` mirrors it into localStorage. */
+export function setThemeMode(
+  next: ThemeMode,
+  { persist }: { persist: boolean }
+) {
+  mode = next
+  theme = resolveTheme(mode, query().matches)
+  if (persist) {
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, mode)
+    } catch {
+      // Best effort: the mode still applies for this session.
+    }
+  }
   apply()
 }
 
+const subscribe = (l: () => void) => {
+  listeners.add(l)
+  return () => listeners.delete(l)
+}
+
 export function useTheme(): Theme {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l)
-      return () => listeners.delete(l)
-    },
-    () => theme
-  )
+  return useSyncExternalStore(subscribe, () => theme)
+}
+
+export function useThemeMode(): ThemeMode {
+  return useSyncExternalStore(subscribe, () => mode)
 }

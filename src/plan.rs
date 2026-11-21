@@ -3,7 +3,8 @@
 
 use crate::cli::Args;
 use crate::config::{
-    Ac4ImsMode, DdpAtmosMode, DdpMode, DefaultBitrates, DefaultModes, MaxInstances, WarpMode,
+    Ac4ImsMode, DdpAtmosMode, DdpMode, DefaultBitrates, DefaultModes, MaxInstances, PipeMode,
+    WarpMode,
 };
 use crate::data::{ErrorKind, allowed_bitrates};
 use crate::error::{escape, print_exit};
@@ -294,6 +295,8 @@ pub struct Validated {
     pub warp_mode: Option<WarpMode>,
     /// `-bc`; `None` leaves it to the config's `truehdd_bed_conform`.
     pub bed_conform: Option<bool>,
+    /// `-p`; `None` leaves it to the config's `pipe`.
+    pub pipe_mode: Option<PipeMode>,
 }
 
 pub const DRC_PROFILES: [&str; 6] = [
@@ -320,6 +323,10 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
     let track_index = args.track_index;
     let downmix = args.downmix.filter(|&d| d != 0);
 
+    let pipe_mode = match args.pipe.as_deref() {
+        Some(m) => Some(PipeMode::parse(m).ok_or(Fail::new(ErrorKind::PipeMode))?),
+        None => None,
+    };
     // `-mo` measures the source: the format and the encoding options are ignored
     if args.measure_only {
         // a TrueHD Atmos source is decoded by truehdd for the measurement
@@ -338,6 +345,7 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
             surround_3db_attenuation: None,
             warp_mode,
             bed_conform,
+            pipe_mode,
         });
     }
 
@@ -435,6 +443,7 @@ pub fn validate_args(args: &Args, modes: &DefaultModes) -> Result<Validated, Fai
         surround_3db_attenuation,
         warp_mode,
         bed_conform,
+        pipe_mode,
     })
 }
 

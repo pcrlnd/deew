@@ -1475,7 +1475,12 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         .iter()
         .filter(|probe| can_pipe(format, args.measure_only, probe))
         .count();
-    let (pipe, piping) = pipe_decision(config.pipe, pipe::NAMED, instances, pipeable);
+    let (pipe, piping) = pipe_decision(
+        validated.pipe_mode.unwrap_or(config.pipe),
+        pipe::NAMED,
+        instances,
+        pipeable,
+    );
     let ctx = Context {
         args: &args,
         config: &config,
