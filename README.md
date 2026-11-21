@@ -32,7 +32,7 @@
   - for DD/DDP/AC4 unsupported rates will be converted to 48 kHz
   - for TrueHD unsupported rates will be converted to 48 kHz if source sample rate is lower than 72 kHz, otherwise will be converted to 96 kHz
 - automatic channel swapping for 7.1 sources (DEE swaps Ls Rs with Lrs Rrs for some reason)
-- automatically compensates for the delay of the encoders: 256 samples for DD/DDP, 2048 for AC4 and 1600 for AAC (TrueHD has none)
+- automatically compensates for the delay of the encoders: 256 samples for DD/DDP, 2048 for AC4, 1710 / 1702 / 1600 for AAC (up to 71 / 72–87 / from 88 kbps), 32 more when DEE does the downmix (TrueHD has none)
 - works even with video inputs
 - AC4 `-dn` (loudness measurement) doesn't support 7.1 sources
 - versatile delay option that supports ms, s and also frame@fps formats, parsing delay from filenames also supported

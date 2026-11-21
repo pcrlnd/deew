@@ -37,7 +37,7 @@ export const features: Feature[] = [
   { text: "works on Windows, Linux and macOS" },
   { text: "works even with video inputs" },
   {
-    text: "automatically compensates for DEE's 256 sample delay (DD, DDP and AC4 encoding)",
+    text: "automatically compensates for the encoders' delay (DD/DDP, AC4, AAC), also when DEE downmixes",
   },
   {
     text: "versatile delay option that supports ms, s and also frame@fps formats, parsing delay from filenames also supported",

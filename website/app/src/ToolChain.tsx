@@ -1828,7 +1828,21 @@ export default function ToolChain() {
                           </td>
                         </tr>
                         <tr>
-                          <td>AAC</td>
+                          <td>AAC up to 71 kbps</td>
+                          <td>1710</td>
+                          <td>
+                            <code>--start 0.035625</code>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td>AAC 72–87 kbps</td>
+                          <td>1702</td>
+                          <td>
+                            <code>--start 0.035458</code>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td>AAC from 88 kbps</td>
                           <td>1600</td>
                           <td>
                             <code>--start 0.033333</code>
@@ -1844,6 +1858,12 @@ export default function ToolChain() {
                       </tbody>
                     </table>
                   </div>
+                  <p className="lede" style={{ fontSize: "13px" }}>
+                    A downmix done by DEE (DD/DDP <code>-dm</code>, DD from 7.1,
+                    AAC from 5.1/7.1) adds 32 samples (0.000667 s) to the trim.
+                    TrueHD and AC4 IMS are downmixed by ffmpeg, which adds
+                    nothing.
+                  </p>
                 </div>
               </article>
               <article className="module">
@@ -2164,7 +2184,7 @@ export default function ToolChain() {
             </div>
           </section>
           <footer>
-            Built from the deew source on 2026-11-20 ({__DEEW_VERSION__}):
+            Built from the deew source on 2026-11-21 ({__DEEW_VERSION__}):
             src/commands.rs, src/probe.rs, src/pipeline.rs, src/encode.rs,
             src/plan.rs, src/master.rs, src/pipe.rs, src/awake.rs,
             src/config.rs. Tool

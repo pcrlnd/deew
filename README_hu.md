@@ -32,7 +32,7 @@
   - DD/DDP/AC4 esetén a mintavételezési rátát 48 kHz-re konvertálja
   - TrueHD esetén a mintavételezési rátát 48 kHz-re konvertálja, ha a forrásé kisebb mint 72 kHz, fölötte 96 kHz-re
 - automatikus csatornafelcserélés 7.1-es forrásoknál (DEE valamiért megcseréli az Ls, Rs csatornákat az Lrs, Rrs-sel)
-- automatikusan kompenzálja az encoderek késleltetését: DD/DDP esetén 256, AC4 esetén 2048, AAC esetén 1600 minta (a TrueHD-nél nincs)
+- automatikusan kompenzálja az encoderek késleltetését: DD/DDP esetén 256, AC4 esetén 2048, AAC esetén 1710 / 1702 / 1600 minta (71 kbps-ig / 72–87 / 88 kbps-től), plusz 32, ha a downmixet a DEE végzi (a TrueHD-nél nincs)
 - akár videó inputokkal is működik
 - az AC4 `-dn` (hangosságmérés) nem támogat 7.1-es forrást
 - sokoldalú delay opció, ami támogat ms, s and és frame@fps formát is, delay parse-olása fájlnévből szintén támogatott

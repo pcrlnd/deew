@@ -1226,8 +1226,8 @@ fn aac_has_no_drc_or_dialnorm_and_trims_the_priming() {
     assert_eq!(opt(&args, "--loudness-management"), "skip");
     // DEE downmixes by itself
     assert!(!has(&args, "-c"));
-    // the 1600 sample priming of the AAC encoder is trimmed
-    assert_eq!(opt(&args, "--start"), "0.033333");
+    // the 1600 sample priming of the AAC encoder (+32 for the downmix) is trimmed
+    assert_eq!(opt(&args, "--start"), "0.034");
     assert!(!has(&args, "--add-silence") && !has(&args, "-d"));
     assert!(env.out().join("in.aac").exists());
 
@@ -1253,6 +1253,43 @@ fn aac_has_no_drc_or_dialnorm_and_trims_the_priming() {
     assert_error(
         &env.deew(&["-i", "in.wav", "-f", "aac", "-dn", "-27"]),
         "custom dialnorm is only supported for DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos and AC4 encoding.",
+    );
+}
+
+#[test]
+fn encoder_delay_depends_on_bitrate_and_dee_downmix() {
+    let env = env_or_skip!();
+    env.media("st.wav", "stereo", 48000, "pcm_s24le");
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    let start = |file: &str, extra: &[&str], tool: &str| {
+        let mut args = vec!["-i", file];
+        args.extend(extra);
+        ok(&env.deew(&args));
+        opt(&env.run(tool), "--start").to_string()
+    };
+    assert_eq!(
+        start("st.wav", &["-f", "aac", "-b", "64"], "dee_aac_encoder"),
+        "0.035625"
+    );
+    assert_eq!(
+        start("st.wav", &["-f", "aac", "-b", "80"], "dee_aac_encoder"),
+        "0.035458"
+    );
+    assert_eq!(
+        start("in.wav", &["-f", "aac", "-b", "256"], "dee_aac_encoder"),
+        "0.034"
+    );
+    assert_eq!(
+        start("in.wav", &["-f", "aac", "-b", "64"], "dee_aac_encoder"),
+        "0.036292"
+    );
+    assert_eq!(
+        start("in.wav", &["-f", "ddp", "-dm", "2"], "dee_ddp_encoder"),
+        "0.006"
+    );
+    assert_eq!(
+        start("in.wav", &["-f", "ddp"], "dee_ddp_encoder"),
+        "0.005333"
     );
 }
 
@@ -2289,15 +2326,12 @@ fn delay_options_per_format() {
     ok(&env.deew(&["-i", "in.wav", "-f", "thd", "-d", "+0ms"]));
     let args = env.run("dee_dthd_encoder");
     assert!(!has(&args, "--start") && !has(&args, "--add-silence"));
-    // AAC: 1600 samples, AC4: 2048 samples
+    // AAC: 1600 samples (+32 for DEE's downmix of the 5.1), AC4: 2048 samples
     ok(&env.deew(&["-i", "in.wav", "-f", "aac", "-d", "+1s"]));
-    assert_eq!(
-        opt(&env.run("dee_aac_encoder"), "--add-silence"),
-        "0.966667:0"
-    );
+    assert_eq!(opt(&env.run("dee_aac_encoder"), "--add-silence"), "0.966:0");
     ok(&env.deew(&["-i", "in.wav", "-f", "aac", "-d", "+0ms"]));
     let args = env.run("dee_aac_encoder");
-    assert_eq!(opt(&args, "--start"), "0.033333");
+    assert_eq!(opt(&args, "--start"), "0.034");
     assert!(!has(&args, "--add-silence"));
     ok(&env.deew(&["-i", "in.wav", "-f", "ac4", "-d", "+0ms"]));
     let args = env.run("dee_ac4_encoder");

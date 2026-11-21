@@ -1057,8 +1057,11 @@ fn build_job(
         Vec::new()
     } else {
         let delay = input_delay(file, ctx.args.delay.as_deref());
-        let delay = delay_options(&delay, format.encoder_delay())
-            .unwrap_or_else(|()| print_exit(ErrorKind::Delay, None));
+        let delay = delay_options(
+            &delay,
+            format.encoder_delay(ctx.bitrate.unwrap_or(0), ctx.layout.dee_downmix),
+        )
+        .unwrap_or_else(|()| print_exit(ErrorKind::Delay, None));
         encode_args(&EncodeParams {
             format,
             tool: &ctx.programs.dee,

@@ -151,16 +151,25 @@ impl Format {
     }
 
     /// The encoder's output delay in samples at 48 kHz that deew trims from
-    /// the start (measured: DD/DDP decode 256 samples late; DEE's AAC encoder
-    /// primes 1600 samples in ADTS; the AC-4 encoder's manifest gives an
-    /// offset of -2048).
-    pub fn encoder_delay(self) -> u32 {
-        match self {
+    /// the start (measured with DEE 6.7: DD/DDP decode 256 samples late; the
+    /// AC-4 encoder's manifest gives an offset of -2048; DEE's AAC encoder
+    /// has a codec delay, in its debug log, that depends on the bitrate:
+    /// 1710 up to 71 kbps, 1702 for 72..=87, 1600 from 88). When DEE itself
+    /// downmixes (`dee_downmix`) the output is 32 samples later for DD, DDP
+    /// and AAC (AC-4 is unverified, TrueHD and the Atmos formats have none).
+    pub fn encoder_delay(self, bitrate: u32, dee_downmix: bool) -> u32 {
+        let base = match self {
             Format::Dd | Format::Ddp | Format::DdpAtmos => 256,
             Format::Ac4 | Format::Ac4Atmos | Format::Ac4Ims => 2048,
-            Format::Aac => 1600,
+            Format::Aac => match bitrate {
+                ..=71 => 1710,
+                72..=87 => 1702,
+                _ => 1600,
+            },
             Format::Thd | Format::ThdAtmos => 0,
-        }
+        };
+        let extra = dee_downmix && matches!(self, Format::Dd | Format::Ddp | Format::Aac);
+        base + if extra { 32 } else { 0 }
     }
 
     /// Extension of the output file.
@@ -589,6 +598,9 @@ pub struct Layout {
     /// of the input (or DEE downmixes by itself, AAC).
     pub layout_arg: Option<&'static str>,
     pub lfe: Lfe,
+    /// DEE downmixes by itself (fewer output channels than the wav it gets),
+    /// which delays DD, DDP and AAC output by 32 samples.
+    pub dee_downmix: bool,
     /// What `-dl` did or could not do, as notes (markup).
     pub notes: Vec<String>,
 }
@@ -685,6 +697,7 @@ pub fn resolve_layout(
             outchannels: 0,
             layout_arg: None,
             lfe: Lfe::Normal,
+            dee_downmix: false,
             notes,
         });
     }
@@ -759,10 +772,16 @@ pub fn resolve_layout(
             }
         };
     }
+    let dee_downmix = match format {
+        Format::Dd | Format::Ddp => outchannels < slots,
+        Format::Aac => slots > 2,
+        _ => false,
+    };
     Ok(Layout {
         outchannels,
         layout_arg,
         lfe,
+        dee_downmix,
         notes,
     })
 }
@@ -1789,6 +1808,29 @@ mod tests {
     }
 
     #[test]
+    fn dee_downmix_is_set_when_dee_downmixes() {
+        let f = |format, dm, ch, dl| resolve_layout(format, dm, ch, dl).unwrap().dee_downmix;
+        assert!(f(Format::Dd, Some(2), 6, false));
+        assert!(f(Format::Ddp, Some(1), 6, false));
+        assert!(f(Format::Dd, None, 8, false));
+        assert!(f(Format::Ddp, Some(6), 8, false));
+        assert!(f(Format::Aac, None, 6, false));
+        assert!(f(Format::Aac, None, 8, false));
+        assert!(!f(Format::Ddp, None, 6, false));
+        assert!(!f(Format::Dd, None, 6, true));
+        assert!(!f(Format::Ddp, None, 6, true));
+        assert!(!f(Format::Aac, None, 2, false));
+        assert!(!f(Format::Thd, Some(2), 6, false));
+        assert!(!f(Format::Ac4, None, 8, false));
+        assert!(!f(Format::Ac4Ims, None, 6, false));
+        assert!(!f(Format::DdpAtmos, None, 6, false));
+        assert!(!f(Format::ThdAtmos, None, 8, false));
+        assert!(!f(Format::Ac4Atmos, None, 6, false));
+        assert!(!f(Format::Dd, None, 5, false));
+        assert!(!f(Format::Ddp, None, 7, false));
+    }
+
+    #[test]
     fn encoder_delay_per_format() {
         for (f, samples) in [
             (Format::Dd, 256),
@@ -1798,9 +1840,33 @@ mod tests {
             (Format::ThdAtmos, 0),
             (Format::Ac4, 2048),
             (Format::Ac4Atmos, 2048),
-            (Format::Aac, 1600),
+            (Format::Ac4Ims, 2048),
         ] {
-            assert_eq!(f.encoder_delay(), samples, "{f:?}");
+            assert_eq!(f.encoder_delay(256, false), samples, "{f:?}");
+            let extra = if matches!(f, Format::Dd | Format::Ddp) {
+                32
+            } else {
+                0
+            };
+            assert_eq!(f.encoder_delay(256, true), samples + extra, "{f:?}");
+        }
+        for (rate, samples) in [
+            (56, 1710),
+            (64, 1710),
+            (71, 1710),
+            (72, 1702),
+            (80, 1702),
+            (87, 1702),
+            (88, 1600),
+            (96, 1600),
+            (256, 1600),
+        ] {
+            assert_eq!(Format::Aac.encoder_delay(rate, false), samples, "{rate}");
+            assert_eq!(
+                Format::Aac.encoder_delay(rate, true),
+                samples + 32,
+                "{rate}"
+            );
         }
     }
 
@@ -1854,6 +1920,7 @@ mod tests {
             outchannels: 8,
             layout_arg: None,
             lfe,
+            dee_downmix: false,
             notes: Vec::new(),
         };
         let m = |fb: bool| {
@@ -1886,6 +1953,7 @@ mod tests {
             outchannels: 6,
             layout_arg: None,
             lfe: Lfe::Silent,
+            dee_downmix: false,
             notes: Vec::new(),
         };
         assert_eq!(check(Format::Ddp, &six, false, false, false), Ok(()));

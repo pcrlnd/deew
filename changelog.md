@@ -1,3 +1,16 @@
+# deew 5.5.1:
+- the encoder delay is trimmed correctly in two cases where the output
+  started late:
+  - AAC below 88 kbps: DEE's AAC encoder adds 1710 samples up to
+    71 kbps (56, 64) and 1702 for 72-87 kbps (80), not 1600 (110 and
+    102 samples late)
+  - downmixes done by DEE add 32 samples: DD/DDP with `-dm`, DD from a
+    7.1 or TrueHD Atmos source, `-dm` from an Atmos master and AAC from
+    5.1/7.1 (32 samples late, 64 kbps AAC from 5.1: 141)
+  - TrueHD, AC-4 IMS (ffmpeg downmixes) and DDP Atmos were already
+    sample-exact; AC-4 is unchanged (it can't be checked without an
+    AC-4 decoder)
+
 # deew 5.5.0:
 - new advanced `-wm, --warp-mode normal|warping|prologiciix|loro` and
   `-bc, --bed-conform on|off` for TrueHD Atmos sources: truehdd's warp
