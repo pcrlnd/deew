@@ -1,3 +1,12 @@
+# deew 5.5.2:
+- piped encodes (DD, DDP, AC4, AAC and `-mo` when ffmpeg feeds DEE
+  directly) show real progress instead of jumping from 0 to 100%: DEE
+  prints no progress while it reads a pipe, so deew follows ffmpeg's
+  position against the source's length, and in DEE's encoding step after
+  the measurement the size of the output file; when the length of the
+  source is unknown, the step that reads the source shows a spinner and
+  the length found there is used for the rest
+
 # deew 5.5.1:
 - the encoder delay is trimmed correctly in two cases where the output
   started late:

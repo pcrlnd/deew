@@ -1128,6 +1128,7 @@ fn build_job(
         loudness_path: names.loudness,
         dialnorm,
         skip_dialnorm,
+        bitrate: ctx.bitrate,
         output_path,
         temp_files,
         decoded_files: Default::default(),

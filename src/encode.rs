@@ -56,6 +56,9 @@ pub struct Job {
     pub dialnorm: i64,
     /// Custom dialnorm given to DEE with `skip:dialnorm=N` (not for AC4).
     pub skip_dialnorm: Option<i64>,
+    /// Bitrate in kbit/s of the encode, when known (sizes the progress of a
+    /// piped encode that follows a measurement).
+    pub bitrate: Option<u32>,
     pub output_path: String,
     /// Files in the temp directory that are removed afterwards (not with `-k`).
     pub temp_files: Vec<String>,
@@ -171,6 +174,60 @@ impl StepMap {
     }
 }
 
+/// Which part of a piped DEE process is running.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PipeStep {
+    /// DEE reads the stream from ffmpeg (a measurement, or a single encode step).
+    Reading,
+    /// DEE encodes what it kept after a measurement; ffmpeg is done.
+    Writing,
+}
+
+/// The length to size a piped step with: the probed one, else the one a
+/// finished ffmpeg of an earlier phase taught (`carried`) or of this phase
+/// (`own`, only once it ended successfully). -1 if unknown.
+pub fn effective_length(known: f64, carried: Option<f64>, own: Option<f64>) -> f64 {
+    [Some(known), carried, own]
+        .into_iter()
+        .flatten()
+        .find(|l| l.is_finite() && *l > 0.0)
+        .unwrap_or(-1.0)
+}
+
+/// What the bar shows during a piped DEE step, which prints no usable
+/// progress of its own. `seconds` is how far ffmpeg got while DEE reads; `size`
+/// is the output size so far while DEE encodes its kept copy (the output grows
+/// to `bitrate * length`, CBR). `length` in seconds, <= 0 if unknown.
+pub fn piped_shown(
+    step: PipeStep,
+    seconds: f64,
+    size: Option<u64>,
+    bitrate: Option<u32>,
+    length: f64,
+) -> Shown {
+    if length.is_nan() || length <= 0.0 || length.is_infinite() {
+        return Shown::Pulse;
+    }
+    match step {
+        PipeStep::Reading => {
+            let percent = seconds / length * 100.0;
+            Shown::Percent(if percent.is_nan() {
+                0.0
+            } else {
+                percent.clamp(0.0, 100.0)
+            })
+        }
+        PipeStep::Writing => match bitrate.filter(|&b| b > 0) {
+            None => Shown::Pulse,
+            Some(kbps) => {
+                let expected = f64::from(kbps) * 125.0 * length;
+                let percent = size.unwrap_or(0) as f64 / expected * 100.0;
+                Shown::Percent(percent.clamp(0.0, 99.0))
+            }
+        },
+    }
+}
+
 fn show(bar: &Bar, shown: Shown) {
     match shown {
         Shown::Percent(percent) => bar.percent(percent),
@@ -240,6 +297,15 @@ pub fn ffmpeg_percent(line: &str, length: f64) -> Option<f64> {
     let seconds = stamp_to_sec(&stamp[1])?;
     let percent = seconds / (length / 100.0);
     percent.is_finite().then(|| percent.clamp(0.0, 100.0))
+}
+
+/// Seconds of media reported by a line of the ffmpeg statistics.
+pub fn ffmpeg_seconds(line: &str) -> Option<f64> {
+    if !line.contains('=') {
+        return None;
+    }
+    let seconds = stamp_to_sec(&FFMPEG_TIME.captures(line)?[1])?;
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -985,6 +1051,24 @@ fn drain_stream<R: Read + Send + 'static>(reader: R, label: &str) -> JoinHandle<
     })
 }
 
+/// Like [`drain_stream`] for the stderr of a piped ffmpeg: also keeps its
+/// latest position (seconds, as f64 bits) in `progress`.
+fn drain_ffmpeg<R: Read + Send + 'static>(
+    reader: R,
+    progress: Arc<AtomicU64>,
+) -> JoinHandle<Stream> {
+    std::thread::spawn(move || {
+        let mut stream = Stream::new("ffmpeg stderr");
+        for_each_line(reader, |line| {
+            if let Some(seconds) = ffmpeg_seconds(line) {
+                progress.store(seconds.to_bits(), Ordering::Relaxed);
+            }
+            stream.push(line);
+        });
+        stream
+    })
+}
+
 fn joined(handle: JoinHandle<Stream>) -> Stream {
     handle.join().unwrap_or_default()
 }
@@ -1212,6 +1296,8 @@ struct Feeder {
     /// Shared with the watcher that stops DEE when ffmpeg fails.
     ffmpeg: Arc<Mutex<Tracked>>,
     stderr: Option<JoinHandle<Stream>>,
+    /// ffmpeg's latest position in seconds (f64 bits).
+    progress: Arc<AtomicU64>,
 }
 
 impl Feeder {
@@ -1275,10 +1361,15 @@ fn start_feeder(job: &Job) -> Result<(Feeder, Option<ChildStdout>), String> {
     };
     let mut ffmpeg = spawn(&job.ffmpeg_args, stdout, Stdio::piped())?;
     let out = ffmpeg.stdout.take();
-    let stderr = drain_stream(ffmpeg.stderr.take().expect("piped stderr"), "ffmpeg stderr");
+    let progress = Arc::new(AtomicU64::new(0f64.to_bits()));
+    let stderr = drain_ffmpeg(
+        ffmpeg.stderr.take().expect("piped stderr"),
+        progress.clone(),
+    );
     let feeder = Feeder {
         ffmpeg: Arc::new(Mutex::new(ffmpeg)),
         stderr: Some(stderr),
+        progress,
     };
     Ok((feeder, out))
 }
@@ -1344,6 +1435,7 @@ fn end_feeder(
     stopped: bool,
     job: &Job,
     log: &mut StageLog,
+    learned: &Mutex<Option<f64>>,
 ) -> Option<String> {
     let mut killed = false;
     let mut status = feeder.ffmpeg().try_wait().ok().flatten();
@@ -1369,6 +1461,13 @@ fn end_feeder(
     }
     let mut stream = feeder.stderr.take().map(joined).unwrap_or_default();
     let status = status?;
+    if status.success() && !killed {
+        // the position ffmpeg ended at is the length of the source
+        let seconds = f64::from_bits(feeder.progress.load(Ordering::Relaxed));
+        if seconds > 0.0 {
+            *learned.lock().expect("learned length") = Some(seconds);
+        }
+    }
     let lines = stream.lines.clone();
     stream.push(&match status.code() {
         Some(code) => format!("exit code {code}{}", if killed { " (killed)" } else { "" }),
@@ -1408,6 +1507,9 @@ struct Phase<'a> {
     details: bool,
     /// The job whose ffmpeg feeds this tool through the pipe.
     input: Option<&'a Job>,
+    /// The length a finished piped ffmpeg learned (of this phase, or of an
+    /// earlier phase of the job), for a source of unknown duration.
+    learned: &'a Mutex<Option<f64>>,
 }
 
 /// What DEE printed next to the loudness.
@@ -1498,90 +1600,137 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
         DeeParser::new()
     };
     let captured = log.stream("stdout");
-    for_each_line(stdout, |line| {
-        log.line(captured, line);
-        let events = parser.feed(line);
-        if events.is_empty() && !DeeParser::recognizes(line) {
-            let plain = crate::deewlog::strip_ansi(line);
-            if !plain.trim().is_empty() {
-                last_other = Some(plain.trim().to_string());
-            }
+    // piped: DEE's own progress is useless, a ticker follows ffmpeg (while
+    // DEE reads) or the output file (while it encodes the kept copy)
+    let writing = AtomicBool::new(false);
+    let finished = AtomicBool::new(false);
+    let ffmpeg_state = feeder
+        .as_ref()
+        .map(|f| (f.progress.clone(), f.ffmpeg.clone()));
+    std::thread::scope(|scope| {
+        if let (Some((job, _)), Some((ffmpeg_progress, ffmpeg))) = (piped, ffmpeg_state) {
+            let (writing, finished) = (&writing, &finished);
+            scope.spawn(move || {
+                while !finished.load(Ordering::SeqCst) {
+                    let step = if writing.load(Ordering::SeqCst) {
+                        PipeStep::Writing
+                    } else {
+                        PipeStep::Reading
+                    };
+                    let seconds = f64::from_bits(ffmpeg_progress.load(Ordering::Relaxed));
+                    let carried = *phase.learned.lock().expect("learned length");
+                    // a finished ffmpeg has read the whole source: its position is the length
+                    let own = (step == PipeStep::Writing
+                        && ffmpeg
+                            .lock()
+                            .expect("ffmpeg")
+                            .try_wait()
+                            .ok()
+                            .flatten()
+                            .is_some_and(|status| status.success()))
+                    .then_some(seconds);
+                    let length = effective_length(job.length, carried, own);
+                    let size = (step == PipeStep::Writing)
+                        .then(|| std::fs::metadata(&job.output_path).ok().map(|m| m.len()))
+                        .flatten();
+                    show(bar, piped_shown(step, seconds, size, job.bitrate, length));
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            });
         }
-        for event in events {
-            match event {
-                DeeEvent::Step(next) => {
-                    stage = next;
-                    bar.describe(stage, db);
-                    show(bar, map.step(stage));
-                }
-                DeeEvent::Measured(value) => {
-                    measured = Some(value);
-                    refresh(measured, &extra, &mut db, log);
-                    bar.describe(stage, db);
-                }
-                DeeEvent::Gating(value) => {
-                    extra.gating = phase.details.then_some(value);
-                    refresh(measured, &extra, &mut db, log);
-                    bar.describe(stage, db);
-                }
-                DeeEvent::Speech(value) => {
-                    extra.speech = phase.details.then_some(value);
-                    refresh(measured, &extra, &mut db, log);
-                    bar.describe(stage, db);
-                }
-                DeeEvent::Program(value) => {
-                    extra.program = phase.details.then_some(value);
-                    refresh(measured, &extra, &mut db, log);
-                    bar.describe(stage, db);
-                }
-                DeeEvent::Range(value) => {
-                    extra.lra = phase.details.then_some(value);
-                    refresh(measured, &extra, &mut db, log);
-                    bar.describe(stage, db);
-                }
-                DeeEvent::TruePeak(value) => {
-                    seen_peak = true;
-                    extra.true_peak = phase.details.then_some(value);
-                    refresh(measured, &extra, &mut db, log);
-                    bar.describe(stage, db);
-                }
-                DeeEvent::Progress(percent) => show(bar, map.progress(percent)),
-                DeeEvent::Error(message) => errors.push(message),
-                DeeEvent::Warning(message)
-                    if phase.input.is_some() && is_streaming_notice(&message) => {}
-                DeeEvent::Warning(message) => {
-                    log.warnings.push(message.clone());
-                    events::warning(&message);
-                    ui.say(&format!(
-                        "[bold yellow]WARNING:[/bold yellow] {}",
-                        escape(&message)
-                    ));
+        for_each_line(stdout, |line| {
+            log.line(captured, line);
+            let events = parser.feed(line);
+            if events.is_empty() && !DeeParser::recognizes(line) {
+                let plain = crate::deewlog::strip_ansi(line);
+                if !plain.trim().is_empty() {
+                    last_other = Some(plain.trim().to_string());
                 }
             }
-        }
-        if phase.stop_when_measured && measured.is_some() && timer.is_none() {
-            // Safety net: the rest of the block should follow at once.
-            let (pid, timed_out, exited) = (child.id(), timed_out.clone(), exited.clone());
-            timer = Some(std::thread::spawn(move || {
-                for _ in 0..MEASURED_GRACE_STEPS {
-                    if exited.load(Ordering::SeqCst) {
-                        return;
+            for event in events {
+                match event {
+                    DeeEvent::Step(next) => {
+                        writing.store(
+                            piped.is_some() && stage == Stage::Measure && next == Stage::Encode,
+                            Ordering::SeqCst,
+                        );
+                        stage = next;
+                        bar.describe(stage, db);
+                        show(bar, map.step(stage));
                     }
-                    std::thread::sleep(Duration::from_millis(100));
+                    DeeEvent::Measured(value) => {
+                        measured = Some(value);
+                        refresh(measured, &extra, &mut db, log);
+                        bar.describe(stage, db);
+                    }
+                    DeeEvent::Gating(value) => {
+                        extra.gating = phase.details.then_some(value);
+                        refresh(measured, &extra, &mut db, log);
+                        bar.describe(stage, db);
+                    }
+                    DeeEvent::Speech(value) => {
+                        extra.speech = phase.details.then_some(value);
+                        refresh(measured, &extra, &mut db, log);
+                        bar.describe(stage, db);
+                    }
+                    DeeEvent::Program(value) => {
+                        extra.program = phase.details.then_some(value);
+                        refresh(measured, &extra, &mut db, log);
+                        bar.describe(stage, db);
+                    }
+                    DeeEvent::Range(value) => {
+                        extra.lra = phase.details.then_some(value);
+                        refresh(measured, &extra, &mut db, log);
+                        bar.describe(stage, db);
+                    }
+                    DeeEvent::TruePeak(value) => {
+                        seen_peak = true;
+                        extra.true_peak = phase.details.then_some(value);
+                        refresh(measured, &extra, &mut db, log);
+                        bar.describe(stage, db);
+                    }
+                    DeeEvent::Progress(_) if piped.is_some() => {}
+                    DeeEvent::Progress(percent) => show(bar, map.progress(percent)),
+                    DeeEvent::Error(message) => errors.push(message),
+                    DeeEvent::Warning(message)
+                        if phase.input.is_some() && is_streaming_notice(&message) => {}
+                    DeeEvent::Warning(message) => {
+                        log.warnings.push(message.clone());
+                        events::warning(&message);
+                        ui.say(&format!(
+                            "[bold yellow]WARNING:[/bold yellow] {}",
+                            escape(&message)
+                        ));
+                    }
                 }
-                if !exited.load(Ordering::SeqCst) {
-                    timed_out.store(true, Ordering::SeqCst);
-                    interrupt::kill_tree(pid);
-                }
-            }));
-        }
-        // The block of the source loudness ends with the next step or with
-        // its last line, the true peak; then the rest is not needed.
-        if phase.stop_when_measured && !stopped && block_done(measured.is_some(), seen_peak, stage)
-        {
-            stopped = true;
-            let _ = child.kill();
-        }
+            }
+            if phase.stop_when_measured && measured.is_some() && timer.is_none() {
+                // Safety net: the rest of the block should follow at once.
+                let (pid, timed_out, exited) = (child.id(), timed_out.clone(), exited.clone());
+                timer = Some(std::thread::spawn(move || {
+                    for _ in 0..MEASURED_GRACE_STEPS {
+                        if exited.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    if !exited.load(Ordering::SeqCst) {
+                        timed_out.store(true, Ordering::SeqCst);
+                        interrupt::kill_tree(pid);
+                    }
+                }));
+            }
+            // The block of the source loudness ends with the next step or with
+            // its last line, the true peak; then the rest is not needed.
+            if phase.stop_when_measured
+                && !stopped
+                && block_done(measured.is_some(), seen_peak, stage)
+            {
+                stopped = true;
+                let _ = child.kill();
+            }
+        });
+        finished.store(true, Ordering::SeqCst);
     });
     let status = child.wait().map_err(|e| format!("{tool}: {e}"))?;
     exited.store(true, Ordering::SeqCst);
@@ -1595,7 +1744,9 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
     let stderr = joined(stderr);
     log.exit = status.code();
     let ffmpeg_failure = match (feeder.take(), phase.input) {
-        (Some(feeder), Some(job)) => end_feeder(feeder, status.success(), stopped, job, log),
+        (Some(feeder), Some(job)) => {
+            end_feeder(feeder, status.success(), stopped, job, log, phase.learned)
+        }
         _ => None,
     };
     let detail = errors
@@ -1675,6 +1826,7 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             })?;
         }
     }
+    let learned = Mutex::new(None);
     let measuring = !job.measure_args.is_empty();
     let encoding = !job.encode_args.is_empty();
     if measuring {
@@ -1692,6 +1844,7 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             stop_when_measured: job.stop_when_measured,
             details: job.measure_only,
             input: job.pipe.as_ref().map(|_| job),
+            learned: &learned,
         };
         staged(
             stages,
@@ -1724,6 +1877,7 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             // a measurement before it has read the pipe already, so the
             // encode gets an ffmpeg of its own
             input: job.pipe.as_ref().map(|_| job),
+            learned: &learned,
         };
         let result = staged(
             stages,
@@ -1910,6 +2064,45 @@ mod tests {
         assert_eq!(stamp_to_sec("00:00:x"), None);
         // Python: int('-00') is 0
         assert_eq!(stamp_to_sec("-00:00:00.03"), Some(0.03));
+    }
+
+    #[test]
+    fn piped_progress_follows_ffmpeg_while_reading() {
+        let r = |secs, len| piped_shown(PipeStep::Reading, secs, None, Some(1024), len);
+        assert_eq!(r(0.0, 300.0), Shown::Percent(0.0));
+        assert_eq!(r(150.0, 300.0), Shown::Percent(50.0));
+        assert_eq!(r(450.0, 300.0), Shown::Percent(100.0));
+        assert_eq!(r(f64::NAN, 300.0), Shown::Percent(0.0));
+        assert_eq!(r(42.5, -1.0), Shown::Pulse);
+        assert_eq!(r(42.5, 0.0), Shown::Pulse);
+    }
+
+    #[test]
+    fn piped_progress_follows_output_size_while_encoding() {
+        // 1024 kbit/s * 300 s = 38_400_000 bytes
+        let w = |size, rate, len| piped_shown(PipeStep::Writing, 300.0, size, rate, len);
+        assert_eq!(w(Some(19_200_000), Some(1024), 300.0), Shown::Percent(50.0));
+        assert_eq!(w(None, Some(1024), 300.0), Shown::Percent(0.0));
+        // clamped to 99 until DEE ends
+        assert_eq!(w(Some(38_400_000), Some(1024), 300.0), Shown::Percent(99.0));
+        assert_eq!(w(Some(99_000_000), Some(1024), 300.0), Shown::Percent(99.0));
+        assert_eq!(w(Some(1), None, 300.0), Shown::Pulse);
+        assert_eq!(w(Some(1), Some(0), 300.0), Shown::Pulse);
+        assert_eq!(w(Some(1), Some(1024), -1.0), Shown::Pulse);
+    }
+
+    #[test]
+    fn learned_length_fills_in_an_unknown_one() {
+        assert_eq!(effective_length(300.0, Some(10.0), Some(20.0)), 300.0);
+        assert_eq!(effective_length(-1.0, Some(10.0), Some(20.0)), 10.0);
+        assert_eq!(effective_length(-1.0, None, Some(20.0)), 20.0);
+        assert_eq!(effective_length(0.0, None, None), -1.0);
+        assert_eq!(effective_length(-1.0, Some(0.0), Some(f64::NAN)), -1.0);
+        assert_eq!(
+            ffmpeg_seconds("size=1kB time=00:00:01.50 bitrate=1"),
+            Some(1.5)
+        );
+        assert_eq!(ffmpeg_seconds("time=N/A"), None);
     }
 
     #[test]
