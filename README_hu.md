@@ -43,8 +43,8 @@ A [deew tool chain](https://deew.app/tool-chain) oldal megmutatja, hogyan köti 
 - ffmpeg
 - ffprobe
 - [Dolby Encoding Engine 6.7](https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670)
-- [truehdd](https://github.com/truehdd/truehdd) (csak az Atmos formátumok TrueHD Atmos forrásához: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; az Atmos masterekhez nem kell)
-- [dee_shim](https://github.com/truehdd/dee-shim) (csak a `ddp-atmos`-hoz, a `thd-atmos`-hoz, a TrueHD `none` DRC-hez, a 7.1 DDP standard profiljához és a 7.0 DDP-hez)
+- [truehdd](https://github.com/truehdd/truehdd) 0.6.3 vagy újabb (csak az Atmos formátumok TrueHD Atmos forrásához: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; az Atmos masterekhez nem kell)
+- [dee_shim](https://github.com/truehdd/dee-shim) 0.4.0 vagy újabb (csak a `ddp-atmos`-hoz, a `thd-atmos`-hoz, a TrueHD `none` DRC-hez és 96 kHz-hez, a 7.1 DDP standard profiljához, a 7.0 DDP-hez, az 5.0 DD-hez és DDP-hez és a 7.1/7.0 `-mo`-hoz); ha régebbi, deew nem indítja el a truehdd-t vagy dee_shim-et igénylő feladatot, a `deew -gt` lecseréli őket a legújabbra
   - told a deew mellé vagy a PATH-ba
   - a `ddp-atmos` és a `thd-atmos` használja, hogy a DEE ne simítsa másodszor is a TrueHD dekódolás objektumpozícióit, a TrueHD `none` DRC-vel (ez az alapértelmezett) azért, mert a TrueHD encodernek nincs `none` DRC presetje
 
@@ -52,16 +52,36 @@ A [deew tool chain](https://deew.app/tool-chain) oldal megmutatja, hogyan köti 
 A deew ebben a sorrendben keresi a programokat, a configban nincs mit beállítani:
 1. a deew futtatható fájlja mellett (a DEE eszközöket az mellette lévő `dee` mappában)
 2. a PATH-ban
+3. macOS-en a `/opt/homebrew/bin` és a `/usr/local/bin` mappában is (a Finderből indított app nem kapja meg a terminál PATH-ját)
+
+A `config.toml` és az alapértelmezett `temp` mappa is a deew futtatható fájlja mellett van. A deew-gui és a deew-web a maga mellett keresi a CLI-t, és annak a configját használja; a macOS-es `deew-gui.app` az app mellett keresi (a CLI nincs benne), vagy a `~/Library/Application Support/deew/` mappában, ha az Applications mappában van (lásd lent).
+
+<details>
+<summary><b>macOS: a deew-gui.app az Applications mappában</b></summary>
+
+Ha a `deew-gui.app` az `/Applications` (vagy a `~/Applications`) mappában van, a deew mappa az app melletti mappa helyett a `~/Library/Application Support/deew/`: itt van a `deew-macos`, a `config.toml`, a `dee/` (a DEE eszközök, kézzel told ide), az ffmpeg, az ffprobe, a truehdd, a dee_shim és a `temp/`. Az eszközöket először itt keresi, aztán a PATH-ban, aztán a `/opt/homebrew/bin` és a `/usr/local/bin` mappában.
+- A Utilities → Update and install all letölti ide a `deew-macos`-t, ha hiányzik; a `deew -gt` (Utilities → Download tools) ide tölti le az eszközöket; az ebből a CLI-ből indított `-u` az `/Applications/deew-gui.app`-ot is frissíti.
+- A CLI terminálból így használható: `~/Library/Application Support/deew/deew-macos`, vagy linkeld: `ln -s ~/Library/Application\ Support/deew/deew-macos /usr/local/bin/deew`.
+- Ha a `deew-gui.app` bármely más mappában van (hordozható), minden az app mellett marad.
+
+</details>
 
 A `deew -v` megmutatja, mit talált meg és hol.
 
 A `deew -gt` / `deew --get-tools` a DEE kivételével mindent letölt a deew mellé: az ffmpeg-et, az ffprobe-ot, a truehdd-t és a dee_shim-et (az ffmpeg a legújabb stabil GPL build, Windowson/Linuxon a [BtbN](https://github.com/BtbN/FFmpeg-Builds)-től, macOS-en a [martin-riedl.de](https://ffmpeg.martin-riedl.de/)-ről). A DEE nem tölthető le, azt kézzel kell telepíteni (lásd lent).
 
-```
-deew(.exe)
-ffmpeg(.exe), ffprobe(.exe), truehdd(.exe), dee_shim(.exe)
-dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
-```
+A `deew -u` / `deew --update` a legújabb kiadásra frissíti a deew-t, valamint a deew-gui-t és a deew-web-et, ha ott vannak mellette (megmutatja, mi változik, és előbb rákérdez, az `-np` kihagyja a kérdést). A `deew -u all` a hiányzókat is telepíti. macOS-en a deew-gui.app-ot az /Applications (vagy a ~/Applications) mappában is megtalálja.
+
+Minden egy mappába kerül:
+
+| | Windows | Linux | macOS |
+|:--|:--|:--|:--|
+| CLI | `deew.exe` | `deew` | `deew-macos` |
+| GUI (opcionális) | `deew-gui.exe` | `deew-gui` | `deew-gui.app` (a `deew-gui-macos.zip`-ből) |
+| web UI (opcionális) | `deew-web.exe` | `deew-web` | `deew-web-macos` |
+| eszközök | `ffmpeg.exe`, `ffprobe.exe`, `truehdd.exe`, `dee_shim.exe` | `ffmpeg`, `ffprobe`, `truehdd`, `dee_shim` | `ffmpeg`, `ffprobe`, `truehdd`, `dee_shim` |
+
+valamint a `config.toml`, a `dee/` (`dee_ddp_encoder`, `dee_dthd_encoder`, ... `license.lic`) és a `temp/`.
 
 # Dolby Encoding Engine telepítése
 - Windowson telepítsd fel a [VisualCppRedist AIO](https://github.com/abbodi1406/vcredist/releases)-t
@@ -79,7 +99,7 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 *(terminálból futtasd, duplaklikk nem fog működni)*
 - az első futtatáskor készíteni fog egy config fájlt (az eszközöket told a deew mellé vagy a PATH-ba, lásd fent)
 - a `deew -gt` a DEE kivételével mindent letölt a deew mellé (ffmpeg, ffprobe, truehdd, dee_shim)
-- frissítés: tölsd le a legfrissebb buildet innen: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases)
+- frissítés: futtasd a `deew -u` parancsot, vagy töltsd le a legfrissebb buildet innen: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases)
 
 ### forrásból buildelve (Windows/Linux/macOS):
 - telepítsd a Rustot, ha még nincs fent: [https://rustup.rs](https://rustup.rs)
@@ -93,18 +113,20 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 - `deew -fh` (a `deew -h` ugyanezt mutatja a haladó `-sps`, `-lpf`, `-s3a`, `-wm` és `-bc` nélkül)
 
 ```
-USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-on NAME] [-ot TEMPLATE] [-f FORMAT] [--ddp-mode MODE]
-            [--ddp-atmos-mode MODE] [--ac4-ims-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH]
-            [-wm MODE] [-bc SWITCH] [-d DELAY] [-r DRC] [-dn DIALNORM]
-            [-in NUMBER] [-p MODE] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl]
-            [-cl] [-c] [-gc] [-gt]
+USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
+            [-o DIRECTORY] [-oi] [-on NAME] [-ot TEMPLATE] [-f FORMAT]
+            [--ddp-mode MODE] [--ddp-atmos-mode MODE] [--ac4-ims-mode MODE]
+            [-b BITRATE] [-dm CHANNELS] [-dl] [-sps SWITCH] [-lpf SWITCH]
+            [-s3a SWITCH] [-wm MODE] [-bc SWITCH] [-d DELAY] [-r DRC]
+            [-dn DIALNORM] [-in NUMBER] [-p MODE] [-k] [-kl] [-mo] [-lb] [-la]
+            [-np] [-pl] [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
   -fh, --full-help          show all options, including the advanced ones
   -v, --version             show version and the versions of the tools.
+  -u, --update [all]        update deew and the deew-gui/deew-web next to it,
+                            all also installs the missing ones
   -i, --input [INPUT ...]   audio file(s) or folder(s)
                             wildcards (*, ?, **) work, quoted or not
                             ADM BWF and DAMF (.atmos) Atmos masters work for
@@ -241,8 +263,9 @@ blue: uses dee_shim
 ```
 
 # GUI
-- tölsd le a `deew-gui` / `deew-gui.exe` / `deew-gui-macos` fájlt innen: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases), és told a CLI binárisod mellé ugyanabba a mappába (a mellette lévő `deew` fájlt keresi, Windowson `deew.exe`-t)
-- Linuxon/macOS-en tedd futtathatóvá a binárisokat: `chmod +x deew deew-gui` (macOS-en `chmod +x deew-macos deew-gui-macos`)
+- tölsd le a `deew-gui` / `deew-gui.exe` / `deew-gui-macos.zip` fájlt innen: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases), és told a CLI binárisod mellé ugyanabba a mappába (a mellette lévő `deew` fájlt keresi, Windowson `deew.exe`-t)
+- Linuxon tedd futtathatóvá a binárisokat: `chmod +x deew deew-gui`
+- macOS-en csomagold ki a `deew-gui-macos.zip` fájlt. Vagy told a `deew-gui.app`-ot a deew mappájába, a `deew-macos` mellé (hordozható; `chmod +x deew-macos`), vagy az Applications mappába: ekkor a CLI, a `config.toml`, a `dee/` és az eszközök a `~/Library/Application Support/deew/` mappában vannak, és a Utilities → Update and install all ide tölti le a CLI-t. Az app nem tartalmazza a CLI-t, lásd: [Hol keresi deew a programokat](#hol-keresi-deew-a-programokat). Az app nincs aláírva: első indításkor használd a Rendszerbeállítások → Adatvédelem és biztonság → "Mindenképp megnyitás" gombot, vagy futtasd: `xattr -dr com.apple.quarantine deew-gui.app`
 - Linuxon szükség van a WebKitGTK runtime-ra: `libwebkit2gtk-4.1-0` (Debian/Ubuntu), `webkit2gtk4.1` (Fedora), `webkit2gtk-4.1` (Arch)
 - Windows 10/11 már tartalmazza a szükséges `WebView2` runtime-ot
 - a GUI saját verziószámot használ, a CLI-tól függetlenül

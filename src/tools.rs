@@ -6,8 +6,7 @@ use crate::error::print_exit;
 use regex::Regex;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, OnceLock};
-use std::time::Duration;
+use std::sync::LazyLock;
 
 /// Executable suffix of the platform.
 const EXE_SUFFIX: &str = if cfg!(windows) { ".exe" } else { "" };
@@ -21,6 +20,27 @@ fn exe_name(name: &str) -> String {
     }
 }
 
+/// Extra directories searched after the `PATH`. An app started from Finder
+/// only gets `/usr/bin:/bin:/usr/sbin:/sbin`, so on macOS the Homebrew
+/// locations are tried too.
+#[cfg(target_os = "macos")]
+const EXTRA_PATH_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
+#[cfg(not(target_os = "macos"))]
+const EXTRA_PATH_DIRS: &[&str] = &[];
+
+/// `which::which`, then the [`EXTRA_PATH_DIRS`].
+fn which_extra(name: &str) -> Option<PathBuf> {
+    which::which(name)
+        .ok()
+        .or_else(|| find_in_dirs(name, EXTRA_PATH_DIRS))
+}
+
+fn find_in_dirs(name: &str, dirs: &[&str]) -> Option<PathBuf> {
+    dirs.iter()
+        .map(|dir| Path::new(dir).join(name))
+        .find(|path| path.is_file())
+}
+
 /// A program by its fixed name: first next to the deew executable
 /// (`exe_dir`), then in the `PATH`. `None` if it does not exist.
 pub fn find_program(name: &str, exe_dir: &Path, cwd: &Path) -> Option<String> {
@@ -28,7 +48,7 @@ pub fn find_program(name: &str, exe_dir: &Path, cwd: &Path) -> Option<String> {
     if local.is_file() {
         return Some(abspath(&local.to_string_lossy(), cwd));
     }
-    let path = which::which(name).ok()?;
+    let path = which_extra(name)?;
     Some(abspath(&path.to_string_lossy(), cwd))
 }
 
@@ -59,9 +79,7 @@ pub fn dee_tool(tool: &str, cwd: &Path, exe_dir: &Path) -> Option<String> {
     if local.is_file() {
         return Some(abspath(&local.to_string_lossy(), cwd));
     }
-    which::which(tool)
-        .ok()
-        .map(|p| abspath(&p.to_string_lossy(), cwd))
+    which_extra(tool).map(|p| abspath(&p.to_string_lossy(), cwd))
 }
 
 /// Like [`dee_tool`] but exits with an error when the tool is missing.
@@ -100,76 +118,11 @@ fn shim_at(run: &Path, cwd: &Path) -> Option<Shim> {
     })
 }
 
-/// The input of the dry-run that tells whether dee_shim keeps a DEE
-/// `named_pipe://` input as it is.
-const SHIM_PROBE_INPUT: &str = r"named_pipe://\\.\pipe\deew-probe";
-/// How long the dry-run may take.
-const SHIM_PROBE_SECONDS: u64 = 5;
-
-/// Whether the output of `dee_shim ... --dry-run` has `input` as the value of
-/// the native `-i`. dee_shim 0.1.0 takes `named_pipe://...` for a relative path
-/// and prints `-i <current directory>\named_pipe://...`.
-pub fn shim_keeps_input(dry_run_output: &str, input: &str) -> bool {
-    dry_run_output
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("native arguments:"))
-        .and_then(|args| args.split_once(" -i ").map(|(_, rest)| rest))
-        .and_then(|rest| rest.strip_prefix(input))
-        .is_some_and(|after| after.is_empty() || after.starts_with(' '))
-}
-
-/// Run the dry-run once and look at the printed command. Any failure counts
-/// as "does not keep it".
-fn probe_shim(shim: &str, binary: &str) -> bool {
-    let mut command = Command::new(shim);
-    command
-        .args(["ddp_encoder", "--binary", binary])
-        .args([
-            "--layout",
-            "7.1/eac3",
-            "--bitrate",
-            "1536",
-            "--dry-run",
-            "--",
-        ])
-        .args(["--progress", "1", "--input-format"])
-        .arg("pcm_s24le:sample_rate=48000:channels=8:streaming=1")
-        .args(["-i", SHIM_PROBE_INPUT, "-o", "probe.ec3"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let Ok(child) = command.spawn() else {
-        return false;
-    };
-    let pid = child.id();
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(child.wait_with_output());
-    });
-    match receiver.recv_timeout(Duration::from_secs(SHIM_PROBE_SECONDS)) {
-        Ok(Ok(output)) => {
-            output.status.success()
-                && shim_keeps_input(&String::from_utf8_lossy(&output.stdout), SHIM_PROBE_INPUT)
-        }
-        _ => {
-            crate::interrupt::kill_tree(pid);
-            false
-        }
-    }
-}
-
-/// Whether dee_shim passes a `named_pipe://` input to DEE unchanged, so its
-/// layouts can read the pipe. Asked once per run.
-pub fn shim_takes_named_pipe(shim: &str, binary: &str) -> bool {
-    static KEEPS: OnceLock<bool> = OnceLock::new();
-    *KEEPS.get_or_init(|| probe_shim(shim, binary))
-}
-
 /// Look for dee_shim: `dee_shim` next to the deew executable, else in the
 /// `PATH`.
 pub fn find_shim(cwd: &Path, exe_dir: &Path) -> Option<Shim> {
     let run_name = format!("dee_shim{EXE_SUFFIX}");
-    shim_at(&exe_dir.join(&run_name), cwd).or_else(|| shim_at(&which::which(&run_name).ok()?, cwd))
+    shim_at(&exe_dir.join(&run_name), cwd).or_else(|| shim_at(&which_extra(&run_name)?, cwd))
 }
 
 /// `os.path.abspath`: absolute and lexically normalised. On Windows both
@@ -298,6 +251,62 @@ pub fn parse_shim_version(output: &str) -> Option<String> {
     (!version.is_empty()).then(|| version.to_string())
 }
 
+/// The oldest dee_shim deew works with: it passes a DEE `named_pipe://` URI on
+/// (0.2.0), has `measure_loudness` with `--layout` (0.3.0) and
+/// `--unpadded-wav` (0.4.0).
+pub const MIN_SHIM: [u64; 3] = [0, 4, 0];
+/// The oldest truehdd deew works with.
+pub const MIN_TRUEHDD: [u64; 3] = [0, 6, 3];
+
+/// `[0, 1, 0]` from `0.1.0+282-g0301b3e`: the numbers before the first `+`
+/// or `-` (build metadata and pre-release tags are ignored). Missing parts
+/// are 0, anything that is not a number is `None`.
+pub fn version_numbers(version: &str) -> Option<[u64; 3]> {
+    let core = version.split(['+', '-']).next()?;
+    let mut numbers = [0; 3];
+    let mut parts = core.split('.');
+    for number in &mut numbers {
+        match parts.next() {
+            Some(part) => *number = part.parse().ok()?,
+            None => break,
+        }
+    }
+    parts.next().is_none().then_some(numbers)
+}
+
+/// `Ok` if `version` is at least `min`; else `Err` with the version when it
+/// is too old, or `None` when it is unknown or not a version number.
+pub fn check_min_version(version: &Version, min: [u64; 3]) -> Result<(), Option<String>> {
+    let Version::Found(text) = version else {
+        return Err(None);
+    };
+    match version_numbers(text) {
+        Some(numbers) if numbers >= min => Ok(()),
+        Some(_) => Err(Some(text.clone())),
+        None => Err(None),
+    }
+}
+
+/// Exits with an error if dee_shim is older than [`MIN_SHIM`] or its version
+/// can't be read. Run once, for a run that uses it.
+pub fn require_shim_version(shim: &Shim) {
+    match check_min_version(&shim_version(shim), MIN_SHIM) {
+        Ok(()) => {}
+        Err(Some(found)) => print_exit(ErrorKind::ShimOld, Some(&found)),
+        Err(None) => print_exit(ErrorKind::ShimVersion, None),
+    }
+}
+
+/// Exits with an error if truehdd is older than [`MIN_TRUEHDD`] or its
+/// version can't be read. Run once, for a run that uses it.
+pub fn require_truehdd_version(truehdd: &str) {
+    match check_min_version(&truehdd_version(truehdd), MIN_TRUEHDD) {
+        Ok(()) => {}
+        Err(Some(found)) => print_exit(ErrorKind::TruehddOld, Some(&found)),
+        Err(None) => print_exit(ErrorKind::TruehddVersion, None),
+    }
+}
+
 /// Version of the DEE tools, read from the `--help` of one of them.
 pub fn dee_version(tool: &str) -> Version {
     Version::from_output(output_of(tool, &["--help"]), parse_dee_version)
@@ -330,59 +339,113 @@ pub fn probe_versions(
     ffmpeg: &str,
     ffprobe: &str,
 ) -> Versions {
-    std::thread::scope(|scope| {
-        let dee = scope.spawn(|| dee.map_or(Version::NotFound, dee_version));
-        let truehdd = scope.spawn(|| truehdd.map_or(Version::NotFound, truehdd_version));
-        let shim = scope.spawn(|| shim.map_or(Version::NotFound, shim_version));
-        let ffmpeg = scope.spawn(|| version_of(ffmpeg, &["-version"]));
-        let ffprobe = scope.spawn(|| version_of(ffprobe, &["-version"]));
-        let get = |h: std::thread::ScopedJoinHandle<Version>| h.join().unwrap_or_default();
-        Versions {
-            dee: get(dee),
-            truehdd: get(truehdd),
-            shim: get(shim),
-            ffmpeg: get(ffmpeg),
-            ffprobe: get(ffprobe),
+    let found = std::sync::Mutex::new(Versions::default());
+    probe_versions_each(dee, truehdd, shim, ffmpeg, ffprobe, |index, version| {
+        let mut all = found.lock().expect("versions");
+        match index {
+            0 => all.dee = version,
+            1 => all.truehdd = version,
+            2 => all.shim = version,
+            3 => all.ffmpeg = version,
+            _ => all.ffprobe = version,
         }
-    })
+    });
+    found.into_inner().expect("versions")
+}
+
+/// Like [`probe_versions`], but `done(index, version)` is called from the
+/// probe's thread as soon as each probe finishes (`index` in the order of
+/// [`Versions`]). Returns when all are done.
+pub fn probe_versions_each(
+    dee: Option<&str>,
+    truehdd: Option<&str>,
+    shim: Option<&Shim>,
+    ffmpeg: &str,
+    ffprobe: &str,
+    done: impl Fn(usize, Version) + Sync,
+) {
+    let done = &done;
+    std::thread::scope(|scope| {
+        scope.spawn(move || done(0, dee.map_or(Version::NotFound, dee_version)));
+        scope.spawn(move || done(1, truehdd.map_or(Version::NotFound, truehdd_version)));
+        scope.spawn(move || done(2, shim.map_or(Version::NotFound, shim_version)));
+        scope.spawn(move || done(3, version_of(ffmpeg, &["-version"])));
+        scope.spawn(move || done(4, version_of(ffprobe, &["-version"])));
+    });
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_shim_dry_run_tells_whether_the_pipe_is_kept() {
-        let pipe = r"named_pipe://\\.\pipe\deew-probe";
-        let head = "host X:\\dee\\dee_ddp_encoder.exe in-process\nlevers: DDP_ACMOD=21\n";
-        // dee_shim 0.1.0 prefixes the working directory
-        let mangled = format!(
-            "{head}native arguments: -e ddp --data-rate 768 --progress 1 --input-format pcm_s24le:channels=8:streaming=1 -i X:\\tools\\{pipe} -o X:\\probe.ec3\n"
+    fn find_in_dirs_checks_each_dir() {
+        let dir = temp_dir("extra_dirs");
+        let d = dir.to_str().unwrap();
+        assert_eq!(find_in_dirs("deew_extra_tool", &[d]), None);
+        std::fs::write(dir.join("deew_extra_tool"), "").unwrap();
+        assert_eq!(
+            find_in_dirs("deew_extra_tool", &["/nonexistent", d]),
+            Some(dir.join("deew_extra_tool"))
         );
-        assert!(!super::shim_keeps_input(&mangled, pipe));
-        // a shim that passes it through
-        let kept = format!(
-            "{head}native arguments: -e ddp --data-rate 768 --progress 1 --input-format pcm_s24le:channels=8:streaming=1 -i {pipe} -o X:\\probe.ec3\n"
-        );
-        assert!(super::shim_keeps_input(&kept, pipe));
-        // the input last, no output option
-        assert!(super::shim_keeps_input(
-            &format!("native arguments: -i {pipe}"),
-            pipe
-        ));
-        // no such line, an error, a longer value, nothing
-        assert!(!super::shim_keeps_input("ERROR: Could not open", pipe));
-        assert!(!super::shim_keeps_input(
-            &format!("native arguments: -i {pipe}x -o a"),
-            pipe
-        ));
-        assert!(!super::shim_keeps_input("", pipe));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn a_shim_that_does_not_exist_does_not_keep_the_pipe() {
-        assert!(!super::probe_shim("/no/such/dee_shim", "/no/such/dee"));
+    #[cfg(target_os = "macos")]
+    fn macos_extra_dirs_are_homebrew() {
+        assert_eq!(EXTRA_PATH_DIRS, ["/opt/homebrew/bin", "/usr/local/bin"]);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn other_systems_have_no_extra_dirs() {
+        assert!(EXTRA_PATH_DIRS.is_empty());
     }
 
     use super::*;
+
+    #[test]
+    fn version_numbers_ignore_the_build() {
+        assert_eq!(version_numbers("0.1.0+282-g0301b3e"), Some([0, 1, 0]));
+        assert_eq!(version_numbers("0.4.0+g790d050"), Some([0, 4, 0]));
+        assert_eq!(version_numbers("0.10.2"), Some([0, 10, 2]));
+        assert_eq!(version_numbers("1.0.0-rc1"), Some([1, 0, 0]));
+        assert_eq!(version_numbers("0.6"), Some([0, 6, 0]));
+        assert_eq!(version_numbers("1.2.3.4"), None);
+        assert_eq!(version_numbers("x.y.z"), None);
+        assert_eq!(version_numbers(""), None);
+    }
+
+    #[test]
+    fn minimum_versions_are_compared_by_number() {
+        let found = |v: &str| Version::Found(v.to_string());
+        assert_eq!(check_min_version(&found("0.4.0"), MIN_SHIM), Ok(()));
+        assert_eq!(
+            check_min_version(&found("0.4.0+g790d050"), MIN_SHIM),
+            Ok(())
+        );
+        // 10 is more than 4, not a text comparison
+        assert_eq!(check_min_version(&found("0.10.0"), MIN_SHIM), Ok(()));
+        assert_eq!(check_min_version(&found("1.0.0"), MIN_SHIM), Ok(()));
+        assert_eq!(
+            check_min_version(&found("0.3.0+12-gabc"), MIN_SHIM),
+            Err(Some("0.3.0+12-gabc".to_string()))
+        );
+        assert_eq!(
+            check_min_version(&found("0.2.1+gc1141a0"), MIN_SHIM),
+            Err(Some("0.2.1+gc1141a0".to_string()))
+        );
+        assert_eq!(check_min_version(&found("0.6.3"), MIN_TRUEHDD), Ok(()));
+        assert_eq!(
+            check_min_version(&found("0.6.2"), MIN_TRUEHDD),
+            Err(Some("0.6.2".to_string()))
+        );
+        assert_eq!(check_min_version(&Version::NotFound, MIN_SHIM), Err(None));
+        assert_eq!(
+            check_min_version(&Version::CouldntParse, MIN_TRUEHDD),
+            Err(None)
+        );
+        assert_eq!(check_min_version(&found("dev"), MIN_SHIM), Err(None));
+    }
 
     #[test]
     fn static_regexes_compile() {

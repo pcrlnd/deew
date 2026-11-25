@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 PLATFORMS = [
     ("🐧", ["deew", "deew-gui", "deew-web"]),
     ("🪟", ["deew.exe", "deew-gui.exe", "deew-web.exe"]),
-    ("🍎", ["deew-macos", "deew-gui-macos", "deew-web-macos"]),
+    ("🍎", ["deew-macos", "deew-gui-macos.zip", "deew-web-macos"]),
 ]
 
 ROWS = [
     ("🪟", "Windows", ["deew.exe", "deew-gui.exe", "deew-web.exe"]),
     ("🐧", "Linux", ["deew", "deew-gui", "deew-web"]),
-    ("🍎", "macOS", ["deew-macos", "deew-gui-macos", "deew-web-macos"]),
+    ("🍎", "macOS", ["deew-macos", "deew-gui-macos.zip", "deew-web-macos"]),
 ]
 
 

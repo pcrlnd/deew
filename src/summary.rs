@@ -73,7 +73,7 @@ pub struct SummaryData<'a> {
     pub temp_path: &'a str,
 }
 
-fn version_cell(version: &Version) -> String {
+pub fn version_cell(version: &Version) -> String {
     match version {
         Version::Found(version) => escape(version),
         Version::NotFound => NOT_FOUND.to_string(),

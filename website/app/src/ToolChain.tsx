@@ -1105,11 +1105,8 @@ export default function ToolChain() {
                     pipe, <code>pipe = false</code> turns it off. TrueHD and AC4
                     IMS always write an RF64 wav (their encoders don't read the
                     pipe), which is skipped when it is already in TEMP from a
-                    run with <code>-k</code>. On Windows the dee_shim layouts (7.1
-                    standard, 7.0) also read the wav, unless the installed
-                    dee_shim passes a named pipe through unchanged. The{" "}
-                    <code>Piping</code> row of the summary shows what was
-                    decided.
+                    run with <code>-k</code>. The <code>Piping</code> row of the
+                    summary shows what was decided.
                   </p>
                 </div>
                 <div className="ports">
@@ -1212,7 +1209,7 @@ export default function ToolChain() {
                           </td>
                         </tr>
                         <tr>
-                          <td>5.0 input</td>
+                          <td>5.0 input, DD/DDP through the pipe</td>
                           <td className="wrapcode">
                             <code>
                               pan=5.1|c0=c0|c1=c1|c2=c2|c3=0*c0|c4=c3|c5=c4
@@ -1231,6 +1228,38 @@ export default function ToolChain() {
                           </td>
                           <td>
                             <code>NAME.wav</code>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td>
+                            5.0 input, DD/DDP written to a wav: 5.0 layout of
+                            dee_shim, no LFE slot, 5 channels
+                          </td>
+                          <td className="wrapcode">
+                            <code>pan=5.0|c0=c0|c1=c1|c2=c2|c3=c3|c4=c4</code>
+                          </td>
+                          <td>
+                            <code>NAME.5ch.wav</code>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td>
+                            7.0 DDP layouts of dee_shim (7.0 input, or 7.1 with{" "}
+                            <code>-dl</code>), written to a wav: no LFE slot, 7
+                            channels
+                          </td>
+                          <td className="wrapcode">
+                            <code>
+                              pan=7.0|c0=c0|c1=c1|c2=c2|c3=c5|c4=c6|c5=c3|c6=c4
+                            </code>{" "}
+                            (7.0 input),{" "}
+                            <code>
+                              pan=7.0|c0=c0|c1=c1|c2=c2|c3=c6|c4=c7|c5=c4|c6=c5
+                            </code>{" "}
+                            (7.1 input)
+                          </td>
+                          <td>
+                            <code>NAME.7ch.wav</code>
                           </td>
                         </tr>
                         <tr>
@@ -1397,7 +1426,7 @@ export default function ToolChain() {
                     <span className="p">{"truehdd"}</span>
                     {" decode --presentation 3 --json "}
                     <span className="c">
-                      {"[--warp-mode M] [--bed-conform]"}
+                      {"[--progress, file IN only] [--warp-mode M] [--bed-conform]"}
                     </span>
                     {" --output-path "}
                     <span className="v">{"TEMP/NAME"}</span>{" "}
@@ -1474,7 +1503,9 @@ export default function ToolChain() {
                   <p>
                     A separate loudness pass, used by <code>-mo</code> and AC4{" "}
                     <code>-dn</code> (see <a href="#loudness">Loudness</a>).
-                    Doesn't take 7.1, and has no <code>--temp-dir</code>.
+                    Doesn't take 7.1 (deew runs it through{" "}
+                    <code>dee_shim measure_loudness --layout 7.1</code>), and
+                    has no <code>--temp-dir</code>.
                   </p>
                 </div>
                 <div className="ports">
@@ -1785,21 +1816,21 @@ export default function ToolChain() {
                   </pre>
                   <h4>-mo, 7.1</h4>
                   <pre className="argv">
-                    <span className="p">{"dee_ddp_encoder"}</span>
-                    {" --progress 1 --overwrite 1 --input-format "}
+                    <span className="p">{"dee_shim"}</span>
+                    {" measure_loudness --binary "}
+                    <span className="v">{"dee/dee_measure_loudness"}</span>
+                    {" --layout 7.1 "}
+                    <span className="s">{"--"}</span>
+                    {"\n         --progress 1 --overwrite 1 --input-format "}
                     <span className="v">{"PCMFMT"}</span>
                     {" -i "}
                     <span className="v">{"PIPE"}</span>
-                    {"\n                -o "}
-                    <span className="v">
-                      {"TEMP/dee-PID-INDEX/measure.ec3"}
-                    </span>
-                    {
-                      " -e bluray:drc_profile=none --data-rate 1024\n                --loudness-management measure_only --temp-dir "
-                    }
-                    <span className="v">{"TEMP/dee-PID-INDEX"}</span>
+                    {"\n         --output-manifest "}
+                    <span className="v">{"TEMP/NAME.loudness.json"}</span>
                     {"   "}
-                    <span className="m">{"# killed once measured"}</span>
+                    <span className="m">
+                      {"# exits on its own; 7.0 is padded to 7.1 with a silent LFE (not measured)"}
+                    </span>
                   </pre>
                   <div className="table-wrap">
                     <table>
@@ -1891,6 +1922,15 @@ export default function ToolChain() {
                       <li>ddp-atmos, thd-atmos</li>
                       <li>TrueHD with DRC none, 96 kHz TrueHD (all DRC)</li>
                       <li>7.1 DDP standard profile, 7.0 DDP</li>
+                      <li>5.0 DD and DDP (a 5.0 source, not downmixed)</li>
+                      <li>
+                        <code>-mo</code> of 7.1 and 7.0 (
+                        <code>measure_loudness</code>)
+                      </li>
+                      <li>
+                        dee_shim 0.4.0 or newer (deew checks it, and truehdd
+                        0.6.3 or newer, <code>-gt</code> downloads the latest)
+                      </li>
                     </ul>
                   </div>
                   <div className="port">
@@ -1988,18 +2028,22 @@ export default function ToolChain() {
                     {" --temp-dir "}
                     <span className="v">{"TEMP/dee-PID-INDEX"}</span>
                   </pre>
-                  <h4>7.1 DDP standard · 7.0 DDP</h4>
+                  <h4>7.1 DDP standard · 7.0 DDP · 5.0 DD/DDP</h4>
                   <pre className="argv">
                     <span className="p">{"dee_shim"}</span>
                     {" ddp_encoder --binary "}
                     <span className="v">{"dee/dee_ddp_encoder"}</span>
                     {" --layout "}
-                    <span className="v">{"7.1/eac3|7.0/eac3|7.0"}</span>
+                    <span className="v">{"7.1/eac3|7.0/eac3|7.0|5.0"}</span>
+                    {" "}
+                    <span className="c">{"[--mode dd]"}</span>
+                    {" "}
+                    <span className="c">{"[--unpadded-wav]"}</span>
                     {" --bitrate "}
                     <span className="v">{"B"}</span>{" "}
                     <span className="s">{"--"}</span>
                     {"\n         --progress 1 --overwrite 1 -e "}
-                    <span className="v">{"ddp|bluray"}</span>
+                    <span className="v">{"ddp|dd|bluray"}</span>
                     {":drc_profile="}
                     <span className="v">{"P"}</span>
                     {"\n         --input-format "}
@@ -2019,6 +2063,10 @@ export default function ToolChain() {
                     {"\n         "}
                     <span className="m">
                       {"# -sps off adds :surround_90deg_phase_shift=0 to -e, -lpf off :lfe_filter=0, -s3a on :surround_3dB_attenuation=1"}
+                    </span>
+                    {"\n         "}
+                    <span className="m">
+                      {"# --unpadded-wav only for a wav: it holds just the layout's channels (7 for 7.0, 8 for 7.1); the pipe is raw PCM of 8 channels (DEE takes none of 7), the 7.0 LFE slot silent. 5.0 DD/DDP: the wav has 5 channels, the pipe 6 (DEE takes no raw PCM of 5), -e ddp|dd:drc_profile=P:lfe_on=0"}
                     </span>
                   </pre>
                   <div className="table-wrap">
@@ -2073,6 +2121,30 @@ export default function ToolChain() {
                           </td>
                           <td>AC-3 core + E-AC-3 dependent</td>
                           <td>.eb3</td>
+                        </tr>
+                        <tr>
+                          <td>5.0 DDP (5.0 source, no downmix)</td>
+                          <td>
+                            <code>5.0</code>
+                          </td>
+                          <td>
+                            <code>ddp:lfe_on=0</code>
+                          </td>
+                          <td>E-AC-3 independent</td>
+                          <td>.ec3</td>
+                        </tr>
+                        <tr>
+                          <td>
+                            5.0 DD (<code>--mode dd</code>)
+                          </td>
+                          <td>
+                            <code>5.0</code>
+                          </td>
+                          <td>
+                            <code>dd:lfe_on=0</code>
+                          </td>
+                          <td>AC-3</td>
+                          <td>.ac3</td>
                         </tr>
                         <tr>
                           <td>DDP Atmos streaming</td>

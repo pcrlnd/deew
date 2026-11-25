@@ -8,11 +8,46 @@ use crate::probe::TrackIndex;
 use crate::tools::Shim;
 use crate::util::shell_quote;
 
+/// What the LFE slot of the intermediate wav holds. `bool` converts to it
+/// (`true`: [`LfeSlot::Silent`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LfeSlot {
+    /// The LFE channel of the source (silent for a 5.0 / 7.0 source).
+    Source,
+    /// A silent channel: the encoder can't leave the LFE out (5.1 / 7.1).
+    Silent,
+    /// No slot: a 5-channel wav (L R C Ls Rs) or a 7-channel one (L R C Ls Rs
+    /// Lrs Rrs) for the 5.0 and 7.0 layouts of dee_shim, which read it with
+    /// `--unpadded-wav`.
+    Dropped,
+}
+
+impl From<bool> for LfeSlot {
+    fn from(silent: bool) -> Self {
+        if silent { Self::Silent } else { Self::Source }
+    }
+}
+
 /// Which pan filter an input needs: DEE wants the slots L R C LFE Ls Rs (Lrs
 /// Rrs), where Ls/Rs are the side and Lrs/Rrs the back surrounds, whatever
 /// the mask of the wav says. ffmpeg's 7.1 has the back pair first. 5.0 and 7.0
-/// inputs get a silent LFE, and `silent_lfe` empties it for 5.1 and 7.1.
-pub fn channel_pan(channels: i64, silent_lfe: bool) -> Option<String> {
+/// inputs get a silent LFE, and `silent_lfe` empties it for 5.1 and 7.1. A
+/// 5.0, 7.0 or 7.1 input with [`LfeSlot::Dropped`] gets no LFE slot at all.
+pub fn channel_pan(channels: i64, silent_lfe: impl Into<LfeSlot>) -> Option<String> {
+    let slot = silent_lfe.into();
+    match (slot, channels) {
+        (LfeSlot::Dropped, 5) => {
+            return Some("pan=5.0|c0=c0|c1=c1|c2=c2|c3=c3|c4=c4".to_string());
+        }
+        (LfeSlot::Dropped, 7) => {
+            return Some("pan=7.0|c0=c0|c1=c1|c2=c2|c3=c5|c4=c6|c5=c3|c6=c4".to_string());
+        }
+        (LfeSlot::Dropped, 8) => {
+            return Some("pan=7.0|c0=c0|c1=c1|c2=c2|c3=c6|c4=c7|c5=c4|c6=c5".to_string());
+        }
+        _ => {}
+    }
+    let silent_lfe = slot == LfeSlot::Silent;
     let lfe = if silent_lfe || [5, 7].contains(&channels) {
         "0*c0"
     } else {
@@ -117,9 +152,11 @@ pub fn intermediate_variant(
     format: Format,
     samplerate: i64,
     channels: i64,
-    silent_lfe: bool,
+    silent_lfe: impl Into<LfeSlot>,
     downmix: Option<i64>,
 ) -> String {
+    let slot = silent_lfe.into();
+    let silent_lfe = slot == LfeSlot::Silent;
     let mut parts = Vec::new();
     if resample_rate(format, samplerate) != resample_rate(Format::Ddp, samplerate) {
         parts.push("thd".to_string());
@@ -131,6 +168,12 @@ pub fn intermediate_variant(
     if silent_lfe && [6, 8].contains(&channels) && downmix != Some(2) {
         parts.push("dl".to_string());
     }
+    if slot == LfeSlot::Dropped && channels == 5 {
+        parts.push("5ch".to_string());
+    }
+    if slot == LfeSlot::Dropped && [7, 8].contains(&channels) {
+        parts.push("7ch".to_string());
+    }
     parts.join(".")
 }
 
@@ -140,15 +183,16 @@ pub fn audio_plan(
     channels: i64,
     bit_depth: u32,
     track_index: impl Into<TrackIndex>,
-    silent_lfe: bool,
+    silent_lfe: impl Into<LfeSlot>,
     downmix: Option<i64>,
 ) -> AudioPlan {
+    let slot = silent_lfe.into();
     let track_index = track_index.into();
     let ti = track_index.filter_label();
     // Only TrueHD and AC4 IMS downmix here, the other encoders do it themselves.
     let pan = match downmix.filter(|_| ffmpeg_downmixes(format)) {
-        Some(out) => downmix_chain(channels, out, silent_lfe),
-        None => channel_pan(channels, silent_lfe),
+        Some(out) => downmix_chain(channels, out, slot == LfeSlot::Silent),
+        None => channel_pan(channels, slot),
     };
     let rate = resample_rate(format, samplerate);
     let bit_depth = if rate.is_some() { 32 } else { bit_depth };
@@ -435,6 +479,9 @@ pub struct EncodeParams<'a> {
     pub atmos_mode: DdpAtmosMode,
     /// The output has no LFE channel (`lfe_on=0`, or a 7.0 layout of dee_shim).
     pub lfe_removed: bool,
+    /// DD/DDP of a 5.0 source, encoded by dee_shim's 5.0 layout (needs `shim`;
+    /// `--unpadded-wav` for a wav of 5 channels).
+    pub five_zero: bool,
     /// DD/DDP: turn off DEE's 90 degree phase shift of the surround channels
     /// (`-e` option); DDP Atmos: dee_shim's `--phase90 off`.
     pub no_phase_shift: bool,
@@ -639,8 +686,10 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
         Format::Ddp if p.outchannels == 8 && (!p.bluray || p.lfe_removed) => {
             // The standard 7.1 profile (E-AC-3 independent and dependent
             // substreams) is a dee_shim layout, which supplies the -e. So are
-            // both 7.0 profiles (7.0 is the Blu-ray AC-3 core), they discard
-            // the LFE slot.
+            // both 7.0 profiles (7.0 is the Blu-ray AC-3 core). With
+            // --unpadded-wav the wav holds the channels of the layout in the
+            // order of `dee_shim ddp_encoder --list`: 8 for 7.1 (L R C LFE Ls
+            // Rs Lrs Rrs), 7 for 7.0 (no LFE slot).
             let shim = p
                 .shim
                 .expect("standard 7.1 and 7.0 DDP are encoded with dee_shim");
@@ -656,10 +705,14 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                 p.tool,
                 "--layout",
                 layout,
-                "--bitrate",
-                &bitrate,
-                "--",
             ]));
+            // only a wav is read unpadded: DEE takes no raw PCM of 7 channels,
+            // the pipe carries the slots as they are (the LFE slot of 7.0
+            // silent) and the switch would change nothing
+            if p.input_format == "wav" {
+                args.push("--unpadded-wav".to_string());
+            }
+            args.extend(strings(&["--bitrate", &bitrate, "--"]));
             args.extend(strings(&common));
             // DRC is DEE's own sub-option; the shim keeps it and sets the
             // mode of the layout (`ddp` for /eac3, `bluray` for 7.0).
@@ -682,7 +735,30 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             }
         }
         Format::Dd | Format::Ddp | Format::Ac4 | Format::Aac => {
-            args.push(p.tool.to_string());
+            match p.shim.filter(|_| p.five_zero) {
+                Some(shim) => {
+                    // The mode and DEE's options are the native ones, but the
+                    // shim takes the data rate. A wav holds the 5 channels of
+                    // the layout (L R C Ls Rs), the pipe carries raw PCM as
+                    // it is.
+                    args.extend(strings(&[
+                        &shim.run,
+                        "ddp_encoder",
+                        "--binary",
+                        p.tool,
+                        "--layout",
+                        "5.0",
+                    ]));
+                    if p.format == Format::Dd {
+                        args.extend(strings(&["--mode", "dd"]));
+                    }
+                    if p.input_format == "wav" {
+                        args.push("--unpadded-wav".to_string());
+                    }
+                    args.extend(strings(&["--bitrate", &bitrate, "--"]));
+                }
+                None => args.push(p.tool.to_string()),
+            }
             args.extend(strings(&common));
             args.extend(strings(&["--input-format", p.input_format, "-i", p.input]));
             args.extend(strings(&["-o", p.output]));
@@ -696,7 +772,10 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                     args.extend(strings(&["-e", "aaclc", "--data-rate", &bitrate]));
                 }
                 _ => {
-                    args.extend(strings(&["-e", &ddp_encoder(p), "--data-rate", &bitrate]));
+                    args.extend(strings(&["-e", &ddp_encoder(p)]));
+                    if !(p.five_zero && p.shim.is_some()) {
+                        args.extend(strings(&["--data-rate", &bitrate]));
+                    }
                 }
             }
             if let Some(layout) = p.layout_arg {
@@ -750,37 +829,32 @@ pub fn measure_args(tool: &str, input_format: &str, wav: &str, manifest: &str) -
     ])
 }
 
-/// `-mo` for 8-channel input, which `dee_measure_loudness` rejects: the DDP
-/// encoder in the Blu-ray profile with `measure_only`. The caller stops it
-/// once it has printed the loudness, `output` is a throwaway file.
-pub fn measure_with_encoder_args(
+/// `-mo` for 8-channel input, which `dee_measure_loudness` rejects:
+/// `dee_shim measure_loudness --layout 7.1` opens the layout, the native
+/// arguments are those of [`measure_args`]. The 8 channels are in the order
+/// of `dee_shim measure_loudness --list` (L R C LFE Ls Rs Lrs Rrs).
+pub fn measure_shim_args(
+    shim: &str,
     tool: &str,
     input_format: &str,
     wav: &str,
-    output: &str,
-    temp: &str,
+    manifest: &str,
 ) -> Vec<String> {
-    strings(&[
+    let mut args = strings(&[
+        shim,
+        "measure_loudness",
+        "--binary",
         tool,
-        "--progress",
-        "1",
-        "--overwrite",
-        "1",
-        "--input-format",
-        input_format,
-        "-i",
-        wav,
-        "-o",
-        output,
-        "-e",
-        "bluray:drc_profile=none",
-        "--data-rate",
-        "1024",
-        "--loudness-management",
-        "measure_only",
-        "--temp-dir",
-        temp,
-    ])
+        "--layout",
+        "7.1",
+        "--",
+    ]);
+    args.extend(
+        measure_args(tool, input_format, wav, manifest)
+            .into_iter()
+            .skip(1),
+    );
+    args
 }
 
 /// `-mo` of a TrueHD Atmos source: `dee_measure_loudness` on the decoded
@@ -802,7 +876,10 @@ pub fn measure_atmos_args(tool: &str, atmos: &str) -> Vec<String> {
 
 /// truehdd: decodes the Atmos presentation to `<output_prefix>.atmos` (and
 /// `.atmos.metadata`, `.atmos.audio`). `warp_mode` and `bed_conform` are
-/// passed only when set.
+/// passed only when set. For a file input (not `-`) `--progress` is added:
+/// truehdd only counts the frames, which deew uses for the progress of raw
+/// inputs, when a progress bar is asked for; it draws nothing when stderr is
+/// not a terminal.
 pub fn decode_args(
     truehdd: &str,
     input: &str,
@@ -811,6 +888,9 @@ pub fn decode_args(
     bed_conform: bool,
 ) -> Vec<String> {
     let mut args = strings(&[truehdd, "decode", "--presentation", "3", "--json"]);
+    if input != "-" {
+        args.push("--progress".to_string());
+    }
     if let Some(mode) = warp_mode {
         args.push("--warp-mode".to_string());
         args.push(mode.name().to_string());
@@ -1147,6 +1227,24 @@ mod tests {
         assert_eq!(v(Format::Thd, 48000, 7, true, None), "");
         // other formats downmix in DEE
         assert_eq!(v(Format::Ddp, 48000, 8, false, Some(2)), "");
+        // a 5-channel wav is not the 6-channel one
+        assert_eq!(
+            intermediate_variant(Format::Ddp, 48000, 5, LfeSlot::Dropped, None),
+            "5ch"
+        );
+        // a 7-channel wav is not the 8-channel one
+        assert_eq!(
+            intermediate_variant(Format::Ddp, 48000, 7, LfeSlot::Dropped, None),
+            "7ch"
+        );
+        assert_eq!(
+            intermediate_variant(Format::Ddp, 48000, 8, LfeSlot::Dropped, None),
+            "7ch"
+        );
+        assert_eq!(
+            intermediate_variant(Format::Ddp, 48000, 6, LfeSlot::Dropped, None),
+            ""
+        );
     }
 
     #[test]
@@ -1268,6 +1366,7 @@ mod tests {
             surround_3db: false,
             ims_music: false,
             apodise_off: false,
+            five_zero: false,
         }
     }
 
@@ -1349,6 +1448,25 @@ mod tests {
             channel_pan(8, true).unwrap(),
             "pan=7.1|c0=c0|c1=c1|c2=c2|c3=0*c0|c4=c6|c5=c7|c6=c4|c7=c5"
         );
+        // the 7.0 layouts of dee_shim read 7 channels, L R C Ls Rs Lrs Rrs
+        assert_eq!(
+            channel_pan(7, LfeSlot::Dropped).unwrap(),
+            "pan=7.0|c0=c0|c1=c1|c2=c2|c3=c5|c4=c6|c5=c3|c6=c4"
+        );
+        assert_eq!(
+            channel_pan(8, LfeSlot::Dropped).unwrap(),
+            "pan=7.0|c0=c0|c1=c1|c2=c2|c3=c6|c4=c7|c5=c4|c6=c5"
+        );
+        // and the 5.0 layout 5 channels, L R C Ls Rs
+        assert_eq!(
+            channel_pan(5, LfeSlot::Dropped).unwrap(),
+            "pan=5.0|c0=c0|c1=c1|c2=c2|c3=c3|c4=c4"
+        );
+        let plan = audio_plan(Format::Ddp, 48000, 7, 24, 0, LfeSlot::Dropped, None);
+        assert_eq!(
+            plan.swap_args[1],
+            "[a:0]pan=7.0|c0=c0|c1=c1|c2=c2|c3=c5|c4=c6|c5=c3|c6=c4"
+        );
         // 5.1 needs no filter unless the LFE is emptied
         assert_eq!(channel_pan(6, false), None);
         assert_eq!(
@@ -1380,6 +1498,48 @@ mod tests {
         let plan = audio_plan(Format::Thd, 48000, 6, 24, 0, true, None);
         assert!(plan.map_args.is_empty());
         assert!(plan.swap_args[1].starts_with("[a:0]pan=5.1|"));
+    }
+
+    #[test]
+    fn five_zero_dd_and_ddp_by_the_shim_layout() {
+        let shim = Shim {
+            run: "/shim/dee_shim".into(),
+        };
+        let mut p = params(Format::Ddp);
+        p.lfe_removed = true;
+        p.five_zero = true;
+        p.shim = Some(&shim);
+        p.bitrate = 1024;
+        // a wav of 5 channels
+        let args = encode_args(&p);
+        assert_eq!(
+            args[..9],
+            [
+                "/shim/dee_shim",
+                "ddp_encoder",
+                "--binary",
+                "/dee/tool",
+                "--layout",
+                "5.0",
+                "--unpadded-wav",
+                "--bitrate",
+                "1024"
+            ]
+        );
+        assert_eq!(args[9], "--");
+        // DEE's own options stay, the data rate is the shim's
+        assert!(args.contains(&"ddp:drc_profile=music_light:lfe_on=0".to_string()));
+        assert!(!args.contains(&"--data-rate".to_string()));
+        // DD
+        p.format = Format::Dd;
+        let args = encode_args(&p);
+        assert_eq!(args[4..8], ["--layout", "5.0", "--mode", "dd"]);
+        assert!(args.contains(&"dd:drc_profile=music_light:lfe_on=0".to_string()));
+        // the pipe carries raw PCM: no --unpadded-wav
+        p.input_format = "pcm_s24le:sample_rate=48000:channels=6:streaming=1";
+        let args = encode_args(&p);
+        assert!(!args.contains(&"--unpadded-wav".to_string()));
+        assert!(args.contains(&"--bitrate".to_string()));
     }
 
     #[test]
@@ -1644,6 +1804,7 @@ mod tests {
                 "/dee/tool",
                 "--layout",
                 "7.1/eac3",
+                "--unpadded-wav",
                 "--bitrate",
                 "1792",
                 "--",
@@ -1667,6 +1828,10 @@ mod tests {
                 "/t"
             ])
         );
+        // the pipe carries raw PCM: nothing to unpad
+        p.input_format = "pcm_s24le:sample_rate=48000:channels=8:streaming=1";
+        assert!(!encode_args(&p).contains(&"--unpadded-wav".to_string()));
+        p.input_format = "wav";
         // Blu-ray: native, also when dee_shim is there
         p.bluray = true;
         p.drc = "music_light";
@@ -2129,6 +2294,7 @@ mod tests {
                 "--presentation",
                 "3",
                 "--json",
+                "--progress",
                 "--output-path",
                 "/t/a",
                 "/in/a.thd"
@@ -2148,12 +2314,20 @@ mod tests {
                 "--presentation",
                 "3",
                 "--json",
+                "--progress",
                 "--warp-mode",
                 "prologiciix",
                 "--output-path",
                 "/t/a",
                 "/in/a.thd"
             ])
+        );
+        assert!(
+            decode_args("truehdd", "/in/a.thd", "/t/a", None, false)
+                .contains(&"--progress".to_string())
+        );
+        assert!(
+            !decode_args("truehdd", "-", "/t/a", None, false).contains(&"--progress".to_string())
         );
         assert_eq!(
             decode_args("truehdd", "-", "/t/a", None, true),
@@ -2254,17 +2428,23 @@ mod tests {
     }
 
     #[test]
-    fn measuring_with_the_encoder() {
+    fn measuring_8_channels_with_the_shim() {
         assert_eq!(
-            measure_with_encoder_args(
-                "/dee/dee_ddp_encoder",
+            measure_shim_args(
+                "/shim/dee_shim",
+                "/dee/dee_measure_loudness",
                 "wav",
                 "/t/a.wav",
-                "/t/d/m.ec3",
-                "/t/d"
+                "/t/a.loudness.json"
             ),
             v(&[
-                "/dee/dee_ddp_encoder",
+                "/shim/dee_shim",
+                "measure_loudness",
+                "--binary",
+                "/dee/dee_measure_loudness",
+                "--layout",
+                "7.1",
+                "--",
                 "--progress",
                 "1",
                 "--overwrite",
@@ -2273,16 +2453,8 @@ mod tests {
                 "wav",
                 "-i",
                 "/t/a.wav",
-                "-o",
-                "/t/d/m.ec3",
-                "-e",
-                "bluray:drc_profile=none",
-                "--data-rate",
-                "1024",
-                "--loudness-management",
-                "measure_only",
-                "--temp-dir",
-                "/t/d",
+                "--output-manifest",
+                "/t/a.loudness.json",
             ])
         );
     }

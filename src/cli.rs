@@ -53,6 +53,10 @@ pub struct Args {
     pub print_logos: bool,
     pub changelog: bool,
     pub get_tools: bool,
+    /// `-u [all]`: update deew and the programs next to it
+    pub update: bool,
+    /// `-u all`: also install the missing ones
+    pub update_all: bool,
     pub config: bool,
     pub generate_config: bool,
 }
@@ -93,6 +97,8 @@ impl Default for Args {
             print_logos: false,
             changelog: false,
             get_tools: false,
+            update: false,
+            update_all: false,
             config: false,
             generate_config: false,
         }
@@ -111,6 +117,8 @@ enum Kind {
     /// `-ti`: `N`, `a:N` or `s:N`
     Track,
     Flag,
+    /// `nargs='?'`, `choices=['all']`
+    OptionalAll,
 }
 
 /// (short, long, kind)
@@ -118,6 +126,7 @@ const OPTIONS: &[(&str, &str, Kind)] = &[
     ("-h", "--help", Kind::Help),
     ("-fh", "--full-help", Kind::FullHelp),
     ("-v", "--version", Kind::Version),
+    ("-u", "--update", Kind::OptionalAll),
     ("-i", "--input", Kind::Many),
     ("-ti", "--track-index", Kind::Track),
     ("-o", "--output", Kind::Str),
@@ -371,6 +380,25 @@ fn try_parse(argv: &[String]) -> Result<Args, Outcome> {
                     Kind::Version => return Err(Outcome::Version),
                     _ => set_flag(&mut args, opt.1),
                 }
+            }
+            Kind::OptionalAll => {
+                let value = match explicit {
+                    Some(value) => Some(value),
+                    None if i < argv.len() && toks[i] == Tok::Arg => {
+                        i += 1;
+                        Some(argv[i - 1].as_str())
+                    }
+                    None => None,
+                };
+                if let Some(value) = value
+                    && value != "all"
+                {
+                    return Err(Outcome::Error(format!(
+                        "argument {name}: invalid choice: '{value}' (choose from 'all')"
+                    )));
+                }
+                args.update = true;
+                args.update_all = value.is_some();
             }
             Kind::Many => {
                 if let Some(value) = explicit {

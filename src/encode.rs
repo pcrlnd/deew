@@ -41,9 +41,6 @@ pub struct Job {
     pub measure_args: Vec<String>,
     /// The encoder (empty for `-mo`).
     pub encode_args: Vec<String>,
-    /// The measurement is run by the DDP encoder (8 channels), which is
-    /// stopped when it has printed the loudness.
-    pub stop_when_measured: bool,
     /// `-mo`: the result shows the gating and the speech share too.
     pub measure_only: bool,
     /// The wav, or the `.atmos` file, already exists.
@@ -444,12 +441,6 @@ impl DeeParser {
 fn tenths(re: &Regex, line: &str) -> Option<i64> {
     let value = re.captures(line)?[1].parse::<f64>().ok()?;
     value.is_finite().then(|| (value * 10.0).round() as i64)
-}
-
-/// Whether the block of the source loudness is over: its last line
-/// (`true_peak`) is in, or the next step began.
-fn block_done(measured: bool, true_peak: bool, stage: Stage) -> bool {
-    measured && (stage == Stage::Encode || true_peak)
 }
 
 impl DeeParser {
@@ -1428,11 +1419,10 @@ fn watch_ffmpeg(
 
 /// The DEE tool has ended: wait for ffmpeg (or stop it) and keep its log.
 /// The result is ffmpeg's failure if that is the reason the job failed.
-/// `dee_ok`: DEE ended successfully, `stopped`: DEE was ended on purpose.
+/// `dee_ok`: DEE ended successfully.
 fn end_feeder(
     mut feeder: Feeder,
     dee_ok: bool,
-    stopped: bool,
     job: &Job,
     log: &mut StageLog,
     learned: &Mutex<Option<f64>>,
@@ -1441,8 +1431,8 @@ fn end_feeder(
     let mut status = feeder.ffmpeg().try_wait().ok().flatten();
     if status.is_none() {
         // DEE has read what it wanted, so ffmpeg is about to end; if DEE
-        // failed or was stopped, ffmpeg has nobody to write to
-        let patience = if dee_ok && !stopped {
+        // failed, ffmpeg has nobody to write to
+        let patience = if dee_ok {
             Duration::from_secs(FFMPEG_END_SECONDS)
         } else {
             Duration::ZERO
@@ -1474,12 +1464,11 @@ fn end_feeder(
         None => "terminated by a signal".to_string(),
     });
     log.streams.push(stream);
-    if stopped || status.success() {
+    if status.success() {
         return None;
     }
     if killed {
-        return (dee_ok && !stopped)
-            .then(|| "ffmpeg failed: it did not end after DEE finished.".to_string());
+        return dee_ok.then(|| "ffmpeg failed: it did not end after DEE finished.".to_string());
     }
     // a failed DEE closes the pipe, which makes ffmpeg fail too
     if !dee_ok && is_pipe_closed(&lines) {
@@ -1487,10 +1476,6 @@ fn end_feeder(
     }
     Some(ffmpeg_failure(&lines, status, &temp_of(job)))
 }
-
-/// How long (in 100 ms) a tool may go on after it printed the loudness, before
-/// it is ended even though the rest of the block did not come.
-const MEASURED_GRACE_STEPS: u32 = 30;
 
 /// One run of a DEE tool.
 struct Phase<'a> {
@@ -1501,8 +1486,6 @@ struct Phase<'a> {
     first: FirstStep,
     /// The dialnorm shown, when DEE does not measure it.
     db: Option<i64>,
-    /// Kill the tool as soon as it printed the loudness; that is a success.
-    stop_when_measured: bool,
     /// Show the gating and the speech share next to the loudness.
     details: bool,
     /// The job whose ffmpeg feeds this tool through the pipe.
@@ -1577,17 +1560,12 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
     let mut stage = phase.stage;
     let mut db = phase.db.map(Level::new);
     let mut errors: Vec<String> = Vec::new();
-    let mut stopped = false;
-    // set by the timer that ends a tool that went on after its measurement
-    let timed_out = Arc::new(AtomicBool::new(false));
     let exited = Arc::new(AtomicBool::new(false));
     let watchdog = feeder
         .as_ref()
         .filter(|_| pipe::NAMED)
         .map(|f| watch_ffmpeg(f.ffmpeg.clone(), child.id(), exited.clone()));
-    let mut timer = None;
     let mut measured = None;
-    let mut seen_peak = false;
     let mut extra = Extra::default();
     // the last line of stdout that is none of the output the parser knows
     let mut last_other: Option<String> = None;
@@ -1684,7 +1662,6 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                         bar.describe(stage, db);
                     }
                     DeeEvent::TruePeak(value) => {
-                        seen_peak = true;
                         extra.true_peak = phase.details.then_some(value);
                         refresh(measured, &extra, &mut db, log);
                         bar.describe(stage, db);
@@ -1704,49 +1681,18 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
                     }
                 }
             }
-            if phase.stop_when_measured && measured.is_some() && timer.is_none() {
-                // Safety net: the rest of the block should follow at once.
-                let (pid, timed_out, exited) = (child.id(), timed_out.clone(), exited.clone());
-                timer = Some(std::thread::spawn(move || {
-                    for _ in 0..MEASURED_GRACE_STEPS {
-                        if exited.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                    if !exited.load(Ordering::SeqCst) {
-                        timed_out.store(true, Ordering::SeqCst);
-                        interrupt::kill_tree(pid);
-                    }
-                }));
-            }
-            // The block of the source loudness ends with the next step or with
-            // its last line, the true peak; then the rest is not needed.
-            if phase.stop_when_measured
-                && !stopped
-                && block_done(measured.is_some(), seen_peak, stage)
-            {
-                stopped = true;
-                let _ = child.kill();
-            }
         });
         finished.store(true, Ordering::SeqCst);
     });
     let status = child.wait().map_err(|e| format!("{tool}: {e}"))?;
     exited.store(true, Ordering::SeqCst);
-    if let Some(timer) = timer {
-        let _ = timer.join();
-    }
     if let Some(watchdog) = watchdog {
         let _ = watchdog.join();
     }
-    stopped |= timed_out.load(Ordering::SeqCst);
     let stderr = joined(stderr);
     log.exit = status.code();
     let ffmpeg_failure = match (feeder.take(), phase.input) {
-        (Some(feeder), Some(job)) => {
-            end_feeder(feeder, status.success(), stopped, job, log, phase.learned)
-        }
+        (Some(feeder), Some(job)) => end_feeder(feeder, status.success(), job, log, phase.learned),
         _ => None,
     };
     let detail = errors
@@ -1763,11 +1709,6 @@ fn run_dee(phase: &Phase, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), 
     if let Some(message) = ffmpeg_failure {
         // ffmpeg's error is the reason, DEE only complains about short input
         return Err(message);
-    }
-    if stopped {
-        // killed on purpose, the measurement is what was wanted
-        bar.percent(100.0);
-        return Ok(());
     }
     if !status.success() {
         return Err(failure_message(tool, status, detail.as_deref()));
@@ -1834,14 +1775,8 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
         let phase = Phase {
             args: &job.measure_args,
             stage: Stage::Measure,
-            first: if job.stop_when_measured && !job.format.is_atmos() {
-                // the DDP encoder's measurement is the first half of its progress
-                FirstStep::EndsAt(50.0)
-            } else {
-                FirstStep::EndsAt(100.0)
-            },
+            first: FirstStep::EndsAt(100.0),
             db: None,
-            stop_when_measured: job.stop_when_measured,
             details: job.measure_only,
             input: job.pipe.as_ref().map(|_| job),
             learned: &learned,
@@ -1872,7 +1807,6 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             },
             first: FirstStep::of_format(job.format),
             db: job.skip_dialnorm,
-            stop_when_measured: false,
             details: false,
             // a measurement before it has read the pipe already, so the
             // encode gets an ffmpeg of its own
@@ -1969,12 +1903,11 @@ pub fn run_job(job: &Job, options: &Options, bar: &Bar, ui: &Ui) -> Outcome {
     let started = SystemTime::now();
     bar.describe(Stage::Starting, None);
     let mut stages = Vec::new();
-    if job.stop_when_measured
-        || job
-            .encode_args
-            .iter()
-            .chain(&job.measure_args)
-            .any(|a| a == "--temp-dir")
+    if job
+        .encode_args
+        .iter()
+        .chain(&job.measure_args)
+        .any(|a| a == "--temp-dir")
     {
         let _ = std::fs::create_dir_all(&job.dee_temp);
     }
@@ -2284,15 +2217,6 @@ mod tests {
         assert_eq!(p.feed(&l("dialogue_loudness=-19.7")), []);
         assert!(DeeParser::recognizes(&l("true_peak=-4.9")));
         assert!(DeeParser::recognizes(&l("loudness_range=1.0")));
-    }
-
-    #[test]
-    fn block_is_done_at_the_true_peak_or_the_next_step() {
-        assert!(!block_done(true, false, Stage::Measure));
-        assert!(block_done(true, true, Stage::Measure));
-        assert!(block_done(true, false, Stage::Encode));
-        assert!(!block_done(false, true, Stage::Measure));
-        assert!(!block_done(false, false, Stage::Encode));
     }
 
     #[test]

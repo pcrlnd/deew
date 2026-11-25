@@ -101,11 +101,13 @@ function WindowControls() {
 export function TitleBar({
   encoding,
   utilityRunning,
+  cliMissing = false,
   onRunInfo,
   onThemeChange,
 }: {
   encoding: boolean
   utilityRunning: boolean
+  cliMissing?: boolean
   onRunInfo: (flag: InfoFlag) => void
   onThemeChange: (mode: ThemeMode) => void
 }) {
@@ -142,6 +144,7 @@ export function TitleBar({
         <UtilitiesMenu
           encoding={encoding}
           utilityRunning={utilityRunning}
+          cliMissing={cliMissing}
           onRun={onRunInfo}
         />
         <ThemeMenu onChange={onThemeChange} />

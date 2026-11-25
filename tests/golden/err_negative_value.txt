@@ -1,7 +1,7 @@
-deew 5.5.3
+deew 5.6.0
 
-USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-on NAME] [-f FORMAT] [-b BITRATE] [-dm CHANNELS] [-d DELAY]
-            [-r DRC] [-dn DIALNORM] [-k] [-mo] [-lb] [-np] [-cl] [-c] [-gc]
-            [-gt]
+USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
+            [-o DIRECTORY] [-oi] [-on NAME] [-f FORMAT] [-b BITRATE]
+            [-dm CHANNELS] [-d DELAY] [-r DRC] [-dn DIALNORM] [-k] [-mo] [-lb]
+            [-np] [-cl] [-c] [-gc] [-gt]
 deew: error: argument -d/--delay: expected one argument

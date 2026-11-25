@@ -31,7 +31,7 @@ const NAME_WIDTH: usize = 8;
 /// Width of the status column (`downloading...`).
 const STATUS_WIDTH: usize = 14;
 /// Share of the bar that is the download, the rest is the unpacking.
-const DOWNLOAD_SHARE: f64 = 0.9;
+pub(crate) const DOWNLOAD_SHARE: f64 = 0.9;
 /// A transfer that gets no data for this long fails.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const CHUNK: usize = 64 * 1024;
@@ -60,7 +60,7 @@ pub struct Platform {
 }
 
 impl Platform {
-    fn current() -> Platform {
+    pub fn current() -> Platform {
         let os = if cfg!(target_os = "linux") {
             Os::Linux
         } else if cfg!(target_os = "windows") {
@@ -80,7 +80,7 @@ impl Platform {
         Platform { os, arch }
     }
 
-    fn describe(self) -> String {
+    pub fn describe(self) -> String {
         let os = match self.os {
             Os::Linux => "Linux",
             Os::Windows => "Windows",
@@ -165,7 +165,7 @@ fn macos_url(platform: Platform, tool: &str) -> Option<String> {
 
 // --- checksums ---
 
-fn is_sha256(s: &str) -> bool {
+pub(crate) fn is_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -196,7 +196,7 @@ fn url_file_name(url: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02x}");
         s
@@ -247,7 +247,7 @@ pub fn overall_fraction(status: Status, done: u64, total: Option<u64>) -> Option
 /// `truehdd  │ unpacking...   │ bar 95.00% - ~0:03 left`, or below 80
 /// columns `truehdd  │ unpacking...` with the bar on a line of its own.
 /// `secs` moves a pulsing bar and is the base of the remaining time.
-fn row_lines(
+pub(crate) fn row_lines(
     name: &str,
     status: Status,
     fraction: Option<f64>,
@@ -276,18 +276,28 @@ fn row_lines(
 }
 
 /// One tool and its progress line.
-struct Row {
-    name: &'static str,
-    file: String,
+pub(crate) struct Row {
+    pub(crate) name: &'static str,
+    pub(crate) file: String,
     /// When the row was created; drives the pulsing bar.
     started: Instant,
     /// When the size became known; the base of the remaining time.
     sized: Mutex<Option<Instant>>,
-    state: Mutex<(Status, Option<f64>)>,
+    pub(crate) state: Mutex<(Status, Option<f64>)>,
 }
 
 impl Row {
-    fn set(&self, status: Status, fraction: Option<f64>) {
+    pub(crate) fn new(name: &'static str, file: String) -> Row {
+        Row {
+            name,
+            file,
+            started: Instant::now(),
+            sized: Mutex::new(None),
+            state: Mutex::new((Status::Downloading, None)),
+        }
+    }
+
+    pub(crate) fn set(&self, status: Status, fraction: Option<f64>) {
         // only a finished tool shows 100 %
         let fraction = fraction.map(|f| {
             if status == Status::Done {
@@ -306,7 +316,7 @@ impl Row {
     }
 
     /// The lines of the row on a terminal `width` columns wide.
-    fn lines(&self, width: usize, color: bool) -> Vec<String> {
+    pub(crate) fn lines(&self, width: usize, color: bool) -> Vec<String> {
         let (status, fraction) = *self.state.lock().expect("row state");
         let since = self
             .sized
@@ -317,11 +327,11 @@ impl Row {
         row_lines(self.name, status, fraction, secs, width, color)
     }
 
-    fn progress(&self, status: Status, done: u64, total: Option<u64>) {
+    pub(crate) fn progress(&self, status: Status, done: u64, total: Option<u64>) {
         self.set(status, overall_fraction(status, done, total));
     }
 
-    fn finish(&self, ok: bool) {
+    pub(crate) fn finish(&self, ok: bool) {
         if ok {
             self.set(Status::Done, Some(1.0));
         } else {
@@ -334,12 +344,16 @@ impl Row {
 // --- files ---
 
 /// A file that is removed when dropped, unless it was renamed into place.
-struct TempFile {
-    path: PathBuf,
+pub(crate) struct TempFile {
+    pub(crate) path: PathBuf,
 }
 
 impl TempFile {
-    fn new(dir: &Path, tag: &str, ext: &str) -> TempFile {
+    pub(crate) fn at(path: PathBuf) -> TempFile {
+        TempFile { path }
+    }
+
+    pub(crate) fn new(dir: &Path, tag: &str, ext: &str) -> TempFile {
         TempFile {
             path: dir.join(format!(".deew-gt-{}-{tag}.{ext}", std::process::id())),
         }
@@ -352,7 +366,7 @@ impl Drop for TempFile {
     }
 }
 
-fn check_interrupt() -> Result<(), String> {
+pub(crate) fn check_interrupt() -> Result<(), String> {
     if interrupt::is_interrupted() {
         Err("interrupted".to_string())
     } else {
@@ -361,19 +375,19 @@ fn check_interrupt() -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> io::Result<()> {
+pub(crate) fn make_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> io::Result<()> {
+pub(crate) fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
 // --- download ---
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(15)))
         .timeout_recv_response(Some(Duration::from_secs(30)))
@@ -391,7 +405,7 @@ fn get(agent: &ureq::Agent, url: &str) -> Result<ureq::http::Response<ureq::Body
         .map_err(|e| e.to_string())
 }
 
-fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, String> {
+pub(crate) fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, String> {
     get(agent, url)?
         .body_mut()
         .read_to_string()
@@ -399,13 +413,24 @@ fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, String> {
 }
 
 #[derive(Debug, Clone)]
-struct Asset {
-    name: String,
-    url: String,
-    digest: Option<String>,
+pub(crate) struct Asset {
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) digest: Option<String>,
+}
+
+/// The latest release of a GitHub repo.
+pub(crate) struct Release {
+    pub(crate) tag: String,
+    pub(crate) url: Option<String>,
+    pub(crate) assets: Vec<Asset>,
 }
 
 fn release_assets(agent: &ureq::Agent, repo: &str) -> Result<Vec<Asset>, String> {
+    latest_release(agent, repo).map(|r| r.assets)
+}
+
+pub(crate) fn latest_release(agent: &ureq::Agent, repo: &str) -> Result<Release, String> {
     let text = get_text(agent, &format!("{GITHUB_API}/{repo}/releases/latest"))
         .map_err(|e| format!("cannot read the latest release of {repo}: {e}"))?;
     let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -415,7 +440,7 @@ fn release_assets(agent: &ureq::Agent, repo: &str) -> Result<Vec<Asset>, String>
         .ok_or_else(|| format!("the latest release of {repo} has no assets"))?;
     let field =
         |a: &serde_json::Value, key: &str| a.get(key).and_then(|v| v.as_str()).map(str::to_string);
-    Ok(assets
+    let assets = assets
         .iter()
         .filter_map(|a| {
             Some(Asset {
@@ -424,11 +449,16 @@ fn release_assets(agent: &ureq::Agent, repo: &str) -> Result<Vec<Asset>, String>
                 digest: field(a, "digest"),
             })
         })
-        .collect())
+        .collect();
+    Ok(Release {
+        tag: field(&json, "tag_name").unwrap_or_default(),
+        url: field(&json, "html_url"),
+        assets,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Archive {
+pub(crate) enum Archive {
     TarGz,
     TarXz,
     Zip,
@@ -449,7 +479,7 @@ impl Archive {
 }
 
 /// Where the expected SHA256 of an archive comes from.
-enum Checksum {
+pub(crate) enum Checksum {
     None,
     Known(String),
     /// A text file with the hash.
@@ -461,10 +491,10 @@ enum Checksum {
     NextToFinalUrl,
 }
 
-struct Plan {
-    url: String,
-    archive: Archive,
-    checksum: Checksum,
+pub(crate) struct Plan {
+    pub(crate) url: String,
+    pub(crate) archive: Archive,
+    pub(crate) checksum: Checksum,
 }
 
 /// The plan for an asset of a GitHub release: a `.sha256` file next to it,
@@ -544,7 +574,7 @@ fn spawn_reader(body: ureq::Body) -> mpsc::Receiver<io::Result<Vec<u8>>> {
 }
 
 /// Download the plan's archive into `dest`, verify its SHA256.
-fn fetch_archive(
+pub(crate) fn fetch_archive(
     agent: &ureq::Agent,
     plan: &Plan,
     dest: &Path,
@@ -903,24 +933,11 @@ fn exe(name: &str) -> String {
     }
 }
 
-/// `-gt`: download the tools into `exe_dir` and exit.
-pub fn run(exe_dir: &Path) -> ! {
-    let platform = Platform::current();
-    let rows: Vec<Arc<Row>> = ["truehdd", "dee_shim", "ffmpeg", "ffprobe"]
-        .iter()
-        .map(|&name| {
-            Arc::new(Row {
-                name,
-                file: exe(name),
-                started: Instant::now(),
-                sized: Mutex::new(None),
-                state: Mutex::new((Status::Downloading, None)),
-            })
-        })
-        .collect();
-
+/// Show the progress `rows` while `work` runs, then finish the display. Exits
+/// with the interrupt status when the user stopped the work.
+pub(crate) fn with_live_rows(rows: &[Arc<Row>], work: impl FnOnce()) {
     let live = {
-        let rows = rows.clone();
+        let rows = rows.to_vec();
         let color = color_enabled();
         Live::new(move |width| {
             rows.iter()
@@ -933,30 +950,15 @@ pub fn run(exe_dir: &Path) -> ! {
         print(&crate::markup::render(markup, color_enabled()));
     });
 
-    let outcomes: Vec<Mutex<Option<Result<(), String>>>> =
-        rows.iter().map(|_| Mutex::new(None)).collect();
-    std::thread::scope(|scope| {
-        for job in jobs(platform) {
-            let (rows, outcomes) = (&rows, &outcomes);
-            scope.spawn(move || {
-                let job_rows: Vec<&Row> = job.rows.iter().map(|&i| rows[i].as_ref()).collect();
-                let results = run_job(exe_dir, platform, &job.source, &job_rows);
-                for ((&i, row), result) in job.rows.iter().zip(&job_rows).zip(results) {
-                    row.finish(result.is_ok());
-                    *outcomes[i].lock().expect("outcome") = Some(result);
-                }
-            });
-        }
-    });
+    work();
     interrupt::jobs_ended();
 
     // Finish the display before anything else is printed. `process::exit`
     // runs no destructors, so the ticker has to be stopped here.
     let hidden = live.is_hidden();
-    let names: Vec<&'static str> = rows.iter().map(|r| r.name).collect();
     let finals: Vec<_> = rows
         .iter()
-        .map(|r| *r.state.lock().expect("row state"))
+        .map(|r| (r.name, *r.state.lock().expect("row state")))
         .collect();
     live.finish(true);
     let _ = std::io::stdout().flush();
@@ -968,12 +970,40 @@ pub fn run(exe_dir: &Path) -> ! {
     // Without a terminal nothing was drawn: print the final lines.
     if hidden {
         let width = console_width();
-        for (name, (status, fraction)) in names.iter().zip(&finals) {
-            for line in row_lines(name, *status, *fraction, 0.0, width, false) {
+        for (name, (status, fraction)) in finals {
+            for line in row_lines(name, status, fraction, 0.0, width, false) {
                 println!("{line}");
             }
         }
     }
+}
+
+/// `-gt`: download the tools into `exe_dir` and exit.
+pub fn run(exe_dir: &Path) -> ! {
+    let platform = Platform::current();
+    let rows: Vec<Arc<Row>> = ["truehdd", "dee_shim", "ffmpeg", "ffprobe"]
+        .iter()
+        .map(|&name| Arc::new(Row::new(name, exe(name))))
+        .collect();
+
+    let outcomes: Vec<Mutex<Option<Result<(), String>>>> =
+        rows.iter().map(|_| Mutex::new(None)).collect();
+    with_live_rows(&rows, || {
+        std::thread::scope(|scope| {
+            for job in jobs(platform) {
+                let (rows, outcomes) = (&rows, &outcomes);
+                scope.spawn(move || {
+                    let job_rows: Vec<&Row> = job.rows.iter().map(|&i| rows[i].as_ref()).collect();
+                    let results = run_job(exe_dir, platform, &job.source, &job_rows);
+                    for ((&i, row), result) in job.rows.iter().zip(&job_rows).zip(results) {
+                        row.finish(result.is_ok());
+                        *outcomes[i].lock().expect("outcome") = Some(result);
+                    }
+                });
+            }
+        });
+    });
+    let names: Vec<&'static str> = rows.iter().map(|r| r.name).collect();
 
     let mut failed = false;
     let mut saved = Vec::new();

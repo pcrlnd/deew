@@ -141,8 +141,14 @@ pub enum ErrorKind {
     ShimAtmos,
     ShimThd,
     ShimThd96,
+    ShimOld,
+    ShimVersion,
+    TruehddOld,
+    TruehddVersion,
     ShimDdp71,
     ShimDdp70,
+    ShimDdp50,
+    ShimMeasure,
     ThdMonoInput,
     Drc,
     LinuxDthd,
@@ -235,11 +241,29 @@ impl ErrorKind {
             Self::ShimThd96 => {
                 "dee_shim is required for 96 kHz TrueHD (DEE's own encoder applies its apodising filter, so it wouldn't be lossless), put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
             }
+            Self::ShimOld => {
+                "dee_shim [bold yellow]🤠[/bold yellow] is too old, deew needs 0.4.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
+            }
+            Self::ShimVersion => {
+                "can't read the version of dee_shim, deew needs 0.4.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
+            }
+            Self::TruehddOld => {
+                "truehdd [bold yellow]🤠[/bold yellow] is too old, deew needs 0.6.3 or newer: update it with [bold yellow]-gt[/bold yellow]"
+            }
+            Self::TruehddVersion => {
+                "can't read the version of truehdd, deew needs 0.6.3 or newer: update it with [bold yellow]-gt[/bold yellow]"
+            }
             Self::ShimDdp71 => {
                 "dee_shim is required for 7.1 DDP with the standard profile, put dee_shim next to deew or in your PATH, or use [bold yellow]--ddp-mode bluray[/bold yellow] (768-1664 kbps)"
             }
             Self::ShimDdp70 => {
                 "dee_shim is required for 7.0 DDP, put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
+            }
+            Self::ShimDdp50 => {
+                "dee_shim is required for 5.0 DD and DDP, put dee_shim next to deew or in your PATH, or get it with [bold yellow]-gt[/bold yellow] (https://github.com/truehdd/dee-shim)"
+            }
+            Self::ShimMeasure => {
+                "dee_shim is required for [bold yellow]-mo[/bold yellow] of 7.1 and 7.0 input (DEE's own loudness meter refuses 8 channels), put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
             }
             Self::Ac4DialnormChannels => {
                 "custom dialnorm ([bold yellow]-dn[/bold yellow]) doesn't work for [bold yellow]AC4[/bold yellow] with 7.1 input, DEE's AC4 encoder downmixes it to 5.1 itself."

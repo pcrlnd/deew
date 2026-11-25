@@ -11,9 +11,8 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
-use deew_gui_core::cli;
+use deew_gui_core::info::InfoSession;
 use deew_gui_core::info::spawn_info;
-use deew_gui_core::pty_session::PtySession;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,7 +70,7 @@ async fn info_connection(state: Shared, mut socket: WebSocket) {
     // Bounded: a slow socket slows the reader thread of the pty down.
     let (tx, mut rx) = mpsc::channel::<RunEvent>(256);
     // Dropping the session (when the socket goes away) terminates the command.
-    let mut session: Option<(u64, PtySession)> = None;
+    let mut session: Option<(u64, InfoSession)> = None;
     loop {
         tokio::select! {
             event = rx.recv() => {
@@ -115,7 +114,7 @@ async fn info_connection(state: Shared, mut socket: WebSocket) {
 async fn handle_message(
     state: &AppState,
     tx: &mpsc::Sender<RunEvent>,
-    session: &mut Option<(u64, PtySession)>,
+    session: &mut Option<(u64, InfoSession)>,
     text: &str,
 ) -> Option<String> {
     let message: ClientMessage = match serde_json::from_str(text) {
@@ -131,10 +130,6 @@ async fn handle_message(
             let exit_tx = tx.clone();
             // Spawning may block briefly.
             let started = tokio::task::spawn_blocking(move || {
-                let program = match program {
-                    Some(program) => program,
-                    None => cli::sidecar_path()?,
-                };
                 spawn_info(
                     &gate,
                     program,

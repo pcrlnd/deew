@@ -9,11 +9,13 @@ import type { InfoFlag } from "@/lib/deew-args"
 export function WebToolbar({
   encoding,
   utilityRunning,
+  cliMissing = false,
   onRunInfo,
   onLogout,
 }: {
   encoding: boolean
   utilityRunning: boolean
+  cliMissing?: boolean
   onRunInfo: (flag: InfoFlag) => void
   onLogout?: () => void
 }) {
@@ -22,6 +24,7 @@ export function WebToolbar({
       <UtilitiesMenu
         encoding={encoding}
         utilityRunning={utilityRunning}
+        cliMissing={cliMissing}
         onRun={onRunInfo}
       />
       <ThemeMenu />

@@ -96,6 +96,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/version", get(version))
+        .route("/api/cli-found", get(cli_found))
         .route("/api/default-bitrates", get(default_bitrates))
         .route("/api/settings", get(get_settings).post(set_settings))
         .route("/api/probe", post(probe))
@@ -279,6 +280,14 @@ async fn version() -> Result<axum::Json<serde_json::Value>, ApiError> {
         .map_err(|e| ApiError::internal(format!("version check failed: {e}")))?
         .map_err(ApiError::internal)?;
     Ok(axum::Json(json!({ "version": version })))
+}
+
+async fn cli_found(State(state): State<Shared>) -> axum::Json<serde_json::Value> {
+    let found = state.program.is_some()
+        || tokio::task::spawn_blocking(cli::cli_found)
+            .await
+            .unwrap_or(true);
+    axum::Json(json!({ "found": found }))
 }
 
 async fn default_bitrates() -> axum::Json<std::collections::BTreeMap<String, i64>> {

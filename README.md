@@ -43,24 +43,44 @@ The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects 
 - ffmpeg
 - ffprobe
 - [Dolby Encoding Engine 6.7](https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670)
-- [truehdd](https://github.com/truehdd/truehdd) (only for TrueHD Atmos sources of the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; Atmos masters don't need it)
-- [dee_shim](https://github.com/truehdd/dee-shim) (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP and 7.0 DDP)
+- [truehdd](https://github.com/truehdd/truehdd) 0.6.3 or newer (only for TrueHD Atmos sources of the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; Atmos masters don't need it)
+- [dee_shim](https://github.com/truehdd/dee-shim) 0.4.0 or newer (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP, 7.0 DDP, 5.0 DD and DDP and `-mo` of 7.1/7.0); deew refuses a job that needs truehdd or dee_shim when it is older, `deew -gt` replaces them with the latest
   - `ddp-atmos` and `thd-atmos` use it so DEE doesn't smooth the object positions of the TrueHD decode a second time, TrueHD with DRC `none` (the default) uses it because the TrueHD encoder has no `none` DRC preset; 96 kHz TrueHD (any DRC) is encoded through it with `--apodise off` so it stays lossless (DEE's own encoder applies its apodising filter to 96 kHz input, which changes every sample, so dee_shim is required for it)
 
 # Where deew looks for the programs
 deew looks for the programs in this order, there is nothing to set in the config:
 1. next to the deew executable (the DEE tools in the `dee` folder next to it)
 2. your PATH
+3. on macOS also `/opt/homebrew/bin` and `/usr/local/bin` (an app started from Finder doesn't get the PATH of your terminal)
+
+`config.toml` and the default `temp` folder are next to the deew executable too. deew-gui and deew-web look for the CLI next to themselves and use its config; the macOS `deew-gui.app` looks next to the app (the CLI is not inside it), or in `~/Library/Application Support/deew/` when it is in Applications (see below).
+
+<details>
+<summary><b>macOS: deew-gui.app in Applications</b></summary>
+
+With `deew-gui.app` in `/Applications` (or `~/Applications`) the deew folder is `~/Library/Application Support/deew/` instead of the folder next to the app: `deew-macos`, `config.toml`, `dee/` (the DEE tools, put there by hand), ffmpeg, ffprobe, truehdd, dee_shim and `temp/` all live there. The tools are looked up there first, then in the PATH, then in `/opt/homebrew/bin` and `/usr/local/bin`.
+- Utilities → Update and install all downloads `deew-macos` there if it is missing; `deew -gt` (Utilities → Download tools) downloads the tools there; `-u` from that CLI also updates `/Applications/deew-gui.app`.
+- To use the CLI in a terminal run `~/Library/Application Support/deew/deew-macos`, or link it: `ln -s ~/Library/Application\ Support/deew/deew-macos /usr/local/bin/deew`.
+- With `deew-gui.app` in any other folder (portable) everything stays next to the app.
+
+</details>
 
 `deew -v` shows what it found and where.
 
 `deew -gt` / `deew --get-tools` downloads everything except DEE next to deew: ffmpeg, ffprobe, truehdd and dee_shim (ffmpeg is the latest stable GPL build from [BtbN](https://github.com/BtbN/FFmpeg-Builds) on Windows/Linux and from [martin-riedl.de](https://ffmpeg.martin-riedl.de/) on macOS). DEE can't be downloaded, install it by hand (see below).
 
-```
-deew(.exe)
-ffmpeg(.exe), ffprobe(.exe), truehdd(.exe), dee_shim(.exe)
-dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
-```
+`deew -u` / `deew --update` updates deew, and deew-gui and deew-web if they are next to it, to the latest release (it shows what will change and asks first, `-np` skips the question). `deew -u all` also installs the missing ones. On macOS it also finds deew-gui.app in /Applications (or ~/Applications).
+
+One folder holds everything:
+
+| | Windows | Linux | macOS |
+|:--|:--|:--|:--|
+| CLI | `deew.exe` | `deew` | `deew-macos` |
+| GUI (optional) | `deew-gui.exe` | `deew-gui` | `deew-gui.app` (from `deew-gui-macos.zip`) |
+| web UI (optional) | `deew-web.exe` | `deew-web` | `deew-web-macos` |
+| tools | `ffmpeg.exe`, `ffprobe.exe`, `truehdd.exe`, `dee_shim.exe` | `ffmpeg`, `ffprobe`, `truehdd`, `dee_shim` | `ffmpeg`, `ffprobe`, `truehdd`, `dee_shim` |
+
+plus `config.toml`, `dee/` (`dee_ddp_encoder`, `dee_dthd_encoder`, ... `license.lic`) and `temp/`.
 
 # Dolby Encoding Engine installation
 - install [VisualCppRedist AIO](https://github.com/abbodi1406/vcredist/releases) on Windows
@@ -78,7 +98,7 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 *(run the binary from terminal, doubleclicking it won't work)*
 - on the first run it will create a config file (the tools go next to deew or in your PATH, see above)
 - run `deew -gt` to download everything except DEE (ffmpeg, ffprobe, truehdd, dee_shim) next to deew
-- updating: grab the latest build from: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases)
+- updating: run `deew -u`, or grab the latest build from: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases)
 
 ### build from source (Windows/Linux/macOS):
 - install Rust if you don't have it already: [https://rustup.rs](https://rustup.rs)
@@ -92,18 +112,20 @@ dee/  (dee_ddp_encoder, dee_dthd_encoder, ... license.lic)
 - `deew -fh` (`deew -h` shows the same without the advanced `-sps`, `-lpf`, `-s3a`, `-wm` and `-bc`)
 
 ```
-USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-on NAME] [-ot TEMPLATE] [-f FORMAT] [--ddp-mode MODE]
-            [--ddp-atmos-mode MODE] [--ac4-ims-mode MODE] [-b BITRATE]
-            [-dm CHANNELS] [-dl] [-sps SWITCH] [-lpf SWITCH] [-s3a SWITCH]
-            [-wm MODE] [-bc SWITCH] [-d DELAY] [-r DRC] [-dn DIALNORM]
-            [-in NUMBER] [-p MODE] [-k] [-kl] [-mo] [-lb] [-la] [-np] [-pl]
-            [-cl] [-c] [-gc] [-gt]
+USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
+            [-o DIRECTORY] [-oi] [-on NAME] [-ot TEMPLATE] [-f FORMAT]
+            [--ddp-mode MODE] [--ddp-atmos-mode MODE] [--ac4-ims-mode MODE]
+            [-b BITRATE] [-dm CHANNELS] [-dl] [-sps SWITCH] [-lpf SWITCH]
+            [-s3a SWITCH] [-wm MODE] [-bc SWITCH] [-d DELAY] [-r DRC]
+            [-dn DIALNORM] [-in NUMBER] [-p MODE] [-k] [-kl] [-mo] [-lb] [-la]
+            [-np] [-pl] [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
   -fh, --full-help          show all options, including the advanced ones
   -v, --version             show version and the versions of the tools.
+  -u, --update [all]        update deew and the deew-gui/deew-web next to it,
+                            all also installs the missing ones
   -i, --input [INPUT ...]   audio file(s) or folder(s)
                             wildcards (*, ?, **) work, quoted or not
                             ADM BWF and DAMF (.atmos) Atmos masters work for
@@ -240,8 +262,9 @@ blue: uses dee_shim
 ```
 
 # GUI
-- download `deew-gui` / `deew-gui.exe` / `deew-gui-macos` from [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases) and put it in the same folder as the CLI binary (it looks for `deew` next to itself, `deew.exe` on Windows)
-- on Linux/macOS make the binaries executable: `chmod +x deew deew-gui` (`chmod +x deew-macos deew-gui-macos` on macOS)
+- download `deew-gui` / `deew-gui.exe` / `deew-gui-macos.zip` from [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases) and put it in the same folder as the CLI binary (it looks for `deew` next to itself, `deew.exe` on Windows)
+- on Linux make the binaries executable: `chmod +x deew deew-gui`
+- on macOS unzip `deew-gui-macos.zip`. Either keep `deew-gui.app` in the deew folder, next to `deew-macos` (portable; `chmod +x deew-macos`), or put it in Applications: then the CLI, `config.toml`, `dee/` and the tools live in `~/Library/Application Support/deew/` and Utilities → Update and install all downloads the CLI there. The app does not contain the CLI, see [Where deew looks for the programs](#where-deew-looks-for-the-programs). The app is not signed: on the first launch use System Settings → Privacy & Security → "Open Anyway", or run `xattr -dr com.apple.quarantine deew-gui.app`
 - Linux needs the WebKitGTK runtime: `libwebkit2gtk-4.1-0` (Debian/Ubuntu), `webkit2gtk4.1` (Fedora), `webkit2gtk-4.1` (Arch)
 - Windows 10/11 already include the needed `WebView2` runtime
 - the GUI has its own version number, independent from the CLI

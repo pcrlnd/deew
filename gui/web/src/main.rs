@@ -100,7 +100,9 @@ async fn run(args: Options) -> Result<(), String> {
             "[bold cyan]deew CLI:[/bold cyan] {}",
             path_markup(path)
         )),
-        Err(_) => warning("deew CLI not found next to deew-web"),
+        Err(_) => warning(
+            "deew CLI not found next to deew-web (Utilities -> Update and install all downloads it)",
+        ),
     }
     match &config_path {
         Some(path) => cmdline::out(&format!(

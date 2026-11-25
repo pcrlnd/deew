@@ -14,10 +14,15 @@ export const activeTab = (
 ): OutputTab => (utilitiesShown ? "utilities" : view)
 
 /** Commands that overwrite user data: they only run after an explicit confirmation. */
-export const needsConfirmation = (flag: InfoFlag): boolean => flag === "-gc"
+export const needsConfirmation = (flag: InfoFlag): boolean =>
+  flag === "-gc" || isUpdate(flag)
+
+/** The self-update entries (`-u`, `-u all`). */
+export const isUpdate = (flag: InfoFlag): boolean =>
+  flag === "-u" || flag === "-u all"
 
 /** The commands that must not run next to an encode (and vice versa). */
-const ENCODE_EXCLUSIVE: readonly InfoFlag[] = ["-gt", "-gc"]
+const ENCODE_EXCLUSIVE: readonly InfoFlag[] = ["-gt", "-gc", "-u", "-u all"]
 
 export const excludesEncode = (flag: InfoFlag): boolean =>
   ENCODE_EXCLUSIVE.includes(flag)
@@ -26,7 +31,14 @@ const ENCODE_REASON: Partial<Record<InfoFlag, string>> = {
   "-gt":
     "Not while an encode is running: it replaces ffmpeg, truehdd and dee_shim, which the encode is using.",
   "-gc": "Not while an encode is running: it rewrites config.toml.",
+  "-u": "Not while an encode is running: it replaces deew, which the encode is using.",
+  "-u all":
+    "Not while an encode is running: it replaces deew, which the encode is using.",
 }
+
+/** Tooltip of the greyed-out entries while there is no deew CLI. */
+export const CLI_MISSING_REASON =
+  "deew CLI not found: use Update and install all to download it"
 
 /**
  * Why `flag` cannot run now (shown as the tooltip of the greyed-out menu
@@ -34,9 +46,10 @@ const ENCODE_REASON: Partial<Record<InfoFlag, string>> = {
  */
 export function utilityBlock(
   flag: InfoFlag,
-  state: { encoding: boolean; utilityRunning: boolean }
+  state: { encoding: boolean; utilityRunning: boolean; cliMissing?: boolean }
 ): string | null {
   if (state.utilityRunning) return "Another utility command is still running."
+  if (state.cliMissing && flag !== "-u all") return CLI_MISSING_REASON
   if (state.encoding && excludesEncode(flag)) return ENCODE_REASON[flag] ?? null
   return null
 }

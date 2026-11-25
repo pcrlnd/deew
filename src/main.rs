@@ -27,6 +27,7 @@ mod term;
 mod toml_highlight;
 mod tools;
 mod ui;
+mod update;
 mod util;
 
 /// Exit quietly (like a process killed by SIGPIPE) when stdout is closed,
@@ -43,6 +44,7 @@ fn exit_quietly_on_broken_pipe() {
 
 fn main() {
     exit_quietly_on_broken_pipe();
+    update::cleanup_leftovers();
     events::init();
     interrupt::install();
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -68,6 +70,10 @@ fn main() {
     }
     if args.print_logos {
         info::print_logos();
+    }
+
+    if args.update {
+        update::run(&paths.exe_dir, args.update_all, args.no_prompt);
     }
 
     if args.get_tools {

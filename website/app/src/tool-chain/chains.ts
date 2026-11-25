@@ -98,7 +98,7 @@ export const chains: Chain[] = [
   },
   {
     title: "-mo with 7.1",
-    note: "dee_ddp_encoder measure_only, stopped as soon as the loudness is known",
+    note: "dee_shim measure_loudness --layout 7.1 · DEE's own meter refuses 8 channels",
     flow: [
       file("IN"),
       arrow(),
@@ -106,8 +106,10 @@ export const chains: Chain[] = [
       arrow("raw PCM →"),
       pcm(),
       arrow(),
-      tool("dee_ddp_encoder measure_only"),
-      arrow("measured loudness, then killed →"),
+      tool("dee_shim measure_loudness"),
+      arrow("--binary →"),
+      tool("dee_measure_loudness"),
+      arrow("measured loudness →"),
       step("loudness in the bar"),
     ],
   },
@@ -155,8 +157,8 @@ export const chains: Chain[] = [
     ],
   },
   {
-    title: "ddp 7.1 standard · ddp 7.0",
-    note: "‑‑ddp-mode standard (the default) · 7.0 in both modes",
+    title: "ddp 7.1 standard · ddp 7.0 · dd/ddp 5.0",
+    note: "‑‑ddp-mode standard (the default) · 7.0 in both modes · a 5.0 source without downmix (5.0 layout, --mode dd for DD)",
     flow: [
       file("IN"),
       arrow(),
@@ -334,8 +336,10 @@ export const loudnessTrees: LoudnessTree[] = [
         flow: [
           pcm(),
           arrow(),
-          tool("dee_ddp_encoder measure_only"),
-          arrow("killed once measured →"),
+          tool("dee_shim measure_loudness --layout 7.1"),
+          arrow("--binary →"),
+          tool("dee_measure_loudness"),
+          arrow("measured loudness →"),
           step("loudness in the bar"),
         ],
       },

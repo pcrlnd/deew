@@ -21,10 +21,12 @@ import { utilityBlock } from "@/lib/utilities"
 export function UtilitiesMenu({
   encoding,
   utilityRunning,
+  cliMissing = false,
   onRun,
 }: {
   encoding: boolean
   utilityRunning: boolean
+  cliMissing?: boolean
   onRun: (flag: InfoFlag) => void
 }) {
   return (
@@ -43,7 +45,11 @@ export function UtilitiesMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-52">
         {INFO_COMMANDS.map(({ flag, label, group }, i) => {
-          const block = utilityBlock(flag, { encoding, utilityRunning })
+          const block = utilityBlock(flag, {
+            encoding,
+            utilityRunning,
+            cliMissing,
+          })
           return (
             <Fragment key={flag}>
               {i > 0 && INFO_COMMANDS[i - 1].group !== group && (

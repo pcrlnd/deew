@@ -203,8 +203,12 @@ ablakban és a webes fájlböngészőben nincs kiterjesztés-szűrő, minden `.w
 indexű streamje (hangstreamnek kell lennie, különben hibát mutat az input). A GUI
 ugyanazt a streamet vizsgálja, amelyet a CLI használni fog.
 
-macOS-en a `deew-gui-macos` / `deew-web-macos` release binárisokat használd
-(`chmod +x`, mint Linuxon).
+macOS-en a `deew-gui-macos.zip` fájlt (kicsomagolva a `deew-gui.app`-ot kapod) és a
+`deew-web-macos` release binárist használd (`chmod +x`, mint Linuxon). Az app nem
+tartalmazza a CLI-t: vagy tartsd a `deew-macos`-t a `deew-gui.app` mellett (a
+`config.toml`, a `dee/` és az eszközök mellett), vagy told az appot az
+Applications mappába: ekkor a deew mappa a `~/Library/Application Support/deew/`,
+és a Utilities → Update and install all ide tölti le a CLI-t.
 
 ## Felépítés
 

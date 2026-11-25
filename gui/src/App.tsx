@@ -11,6 +11,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview"
 
 import { CommandBar } from "@/components/command-bar"
 import { ConfirmConfigDialog } from "@/components/confirm-config-dialog"
+import { ConfirmUpdateDialog } from "@/components/confirm-update-dialog"
 import { NoteLine } from "@/components/note-line"
 import { ProgressPane } from "@/components/progress-pane"
 import { PromptDialog } from "@/components/prompt-dialog"
@@ -72,12 +73,14 @@ import { useProbe } from "@/lib/use-probe"
 import {
   activeTab,
   encodeBlock,
+  isUpdate,
   needsConfirmation,
   utilityBlock,
   type OutputTab,
 } from "@/lib/utilities"
 import { errorMessage } from "@/lib/web-api"
 import {
+  cliFound,
   cliVersion,
   connectRunEvents,
   defaultBitrates,
@@ -146,6 +149,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const utilityStoppedRef = useRef(false)
   const [utilityUsed, setUtilityUsed] = useState(false)
   const [confirmConfig, setConfirmConfig] = useState(false)
+  const [confirmUpdate, setConfirmUpdate] = useState<InfoFlag | null>(null)
   const runningRef = useRef(false)
   const stoppedRef = useRef(false)
   // When this tab started the job; null for a job it only attached to.
@@ -162,6 +166,9 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const [view, setView] = useState<OutputView>("cli")
   const viewRef = useRef<OutputView>("cli")
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [translocated, setTranslocated] = useState(false)
+  const [cliMissing, setCliMissing] = useState(false)
+  const cliMissingRef = useRef(false)
   // The output directory as last loaded from / sent to the config.
   const savedOutputRef = useRef("")
   const outputTouchedRef = useRef(false)
@@ -332,6 +339,26 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     return Array.isArray(selected) ? selected : [selected]
   }
 
+  // Without the CLI only "Update and install all" is offered; look again
+  // whenever something may have installed it.
+  const refreshCli = useCallback(() => {
+    return cliFound().then((found) => {
+      cliMissingRef.current = !found
+      setCliMissing(!found)
+    })
+  }, [])
+  useEffect(() => {
+    let cancelled = false
+    cliFound().then((found) => {
+      if (cancelled) return
+      cliMissingRef.current = !found
+      setCliMissing(!found)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const loadVersion = useCallback(async () => {
     if (versionRef.current) return
     try {
@@ -346,6 +373,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     guiSettings()
       .then((settings) => {
         if (cancelled) return
+        setTranslocated(settings.translocated === true)
         if (settings.useSystemFont) {
           document.documentElement.dataset.font = "system"
         }
@@ -770,14 +798,20 @@ export function App({ onLogout }: { onLogout?: () => void }) {
         await term.flush()
         if (term.cursorX() !== 0) term.write("\r\n")
       }
+      // An update changes the version of deew: read it again for the prompt.
+      if (isUpdate(flag)) {
+        versionRef.current = null
+        await loadVersion()
+      }
+      void refreshCli()
       // Like the CLI tab: a blank line and a fresh prompt.
       term.write(`\r\n${prompt(versionRef.current)}`)
       utilityRef.current = null
       setUtility(null)
       // -gc / -gt change the config and the tools.
-      if (flag === "-gc" || flag === "-gt") refreshDefaults()
+      if (flag === "-gc" || flag === "-gt" || isUpdate(flag)) refreshDefaults()
     },
-    [writeStatus, refreshDefaults]
+    [writeStatus, refreshDefaults, loadVersion, refreshCli]
   )
 
   const runUtility = useCallback(
@@ -790,6 +824,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
         utilityBlock(flag, {
           encoding: runningRef.current,
           utilityRunning: false,
+          cliMissing: cliMissingRef.current,
         })
       )
         return
@@ -816,9 +851,10 @@ export function App({ onLogout }: { onLogout?: () => void }) {
     [endUtility, loadVersion]
   )
 
-  // "Generate config" overwrites config.toml: always ask first.
+  // "Generate config" and the updates change files: always ask first.
   const requestUtility = (flag: InfoFlag) => {
-    if (needsConfirmation(flag)) setConfirmConfig(true)
+    if (isUpdate(flag)) setConfirmUpdate(flag)
+    else if (needsConfirmation(flag)) setConfirmConfig(true)
     else void runUtility(flag)
   }
 
@@ -842,6 +878,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
           <TitleBar
             encoding={running}
             utilityRunning={utility !== null}
+            cliMissing={cliMissing}
             onRunInfo={requestUtility}
             onThemeChange={saveTheme}
           />
@@ -871,6 +908,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
                   <WebToolbar
                     encoding={running}
                     utilityRunning={utility !== null}
+                    cliMissing={cliMissing}
                     onRunInfo={requestUtility}
                     onLogout={onLogout}
                   />
@@ -906,6 +944,12 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               view={activeTab(view, utilitiesShown)}
               onViewChange={changeTab}
             />
+            {translocated && (
+              <NoteLine
+                tone="warning"
+                text="macOS runs deew-gui from a temporary copy. Move deew-gui.app to Applications (or your deew folder) with Finder."
+              />
+            )}
             {saveError !== null && (
               <NoteLine
                 tone="warning"
@@ -952,6 +996,17 @@ export function App({ onLogout }: { onLogout?: () => void }) {
         onConfirm={() => {
           setConfirmConfig(false)
           void runUtility("-gc", true)
+        }}
+      />
+      <ConfirmUpdateDialog
+        request={
+          confirmUpdate === null ? null : { all: confirmUpdate === "-u all" }
+        }
+        onCancel={() => setConfirmUpdate(null)}
+        onConfirm={() => {
+          const flag = confirmUpdate
+          setConfirmUpdate(null)
+          if (flag !== null) void runUtility(flag, true)
         }}
       />
       <FileBrowserDialog request={browseRequest} />

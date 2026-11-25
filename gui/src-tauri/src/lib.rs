@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use deew_gui_core::cli;
-use deew_gui_core::info::{self, Gate};
+use deew_gui_core::info::{self, Gate, InfoSession};
 use deew_gui_core::probe::ProbeResult;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
 use deew_gui_core::settings::{GuiSettings, SettingsView, ThemeMode};
@@ -39,7 +39,12 @@ struct Runner(Mutex<Option<ActiveSession>>);
 /// The one running Utilities command (`deew -v` and the like), if any. It has
 /// its own pseudo-terminal, independent of the encode's.
 #[derive(Default)]
-struct InfoRunner(Mutex<Option<ActiveSession>>);
+struct InfoRunner(Mutex<Option<ActiveInfo>>);
+
+struct ActiveInfo {
+    id: u64,
+    session: InfoSession,
+}
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -50,9 +55,7 @@ fn lock(runner: &Runner) -> Result<std::sync::MutexGuard<'_, Option<ActiveSessio
         .map_err(|_| "internal error: state poisoned".to_string())
 }
 
-fn info_lock(
-    runner: &InfoRunner,
-) -> Result<std::sync::MutexGuard<'_, Option<ActiveSession>>, String> {
+fn info_lock(runner: &InfoRunner) -> Result<std::sync::MutexGuard<'_, Option<ActiveInfo>>, String> {
     runner
         .0
         .lock()
@@ -147,7 +150,7 @@ async fn run_info(
     let exit_app = app.clone();
     let session = info::spawn_info(
         &gate,
-        cli::sidecar_path()?,
+        None,
         &flag,
         (cols, rows),
         app.path().home_dir().ok(),
@@ -163,7 +166,7 @@ async fn run_info(
             let _ = on_output.send(RunEvent::Exit { code: Some(code) });
         },
     )?;
-    *active = Some(ActiveSession { id, session });
+    *active = Some(ActiveInfo { id, session });
     Ok(())
 }
 
@@ -265,6 +268,15 @@ async fn save_gui_theme(theme: ThemeMode) -> Result<(), String> {
         .map_err(|e| format!("saving the theme failed: {e}"))?
 }
 
+/// Whether the deew CLI is present (the Utilities menu greys out most
+/// entries without it).
+#[tauri::command]
+async fn cli_found() -> bool {
+    tauri::async_runtime::spawn_blocking(cli::cli_found)
+        .await
+        .unwrap_or(true)
+}
+
 /// The version of the deew CLI that the GUI runs (`deew -v`).
 #[tauri::command]
 async fn cli_version() -> Result<String, String> {
@@ -329,6 +341,7 @@ pub fn run() {
             probe_inputs,
             default_bitrates,
             cli_version,
+            cli_found,
             gui_settings,
             save_gui_settings,
             save_gui_theme

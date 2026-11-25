@@ -193,17 +193,17 @@ export function GetStarted({ platform }: { platform: Platform }) {
           />
           <DownloadRow
             title="GUI"
-            desc="The desktop app. Put it in the same folder as the CLI."
-            file="deew-gui-macos"
+            desc="The desktop app, a zipped app. Unzip it and put deew-gui.app in the same folder as deew-macos (the app does not contain the CLI)."
+            file="deew-gui-macos.zip"
           />
           <DownloadRow
             title="Web UI"
             desc="The GUI in your browser. Put it in the same folder as the CLI."
             file="deew-web-macos"
           />
-          <Note>Make the downloads executable:</Note>
+          <Note>Make the downloads executable (not the app):</Note>
           <CopyBlock
-            text="chmod +x deew-macos deew-gui-macos deew-web-macos"
+            text="chmod +x deew-macos deew-web-macos"
             label="chmod command"
           />
           <Note>On Apple silicon the macOS DEE tools need Rosetta 2.</Note>

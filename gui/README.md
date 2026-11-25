@@ -198,8 +198,12 @@ dialog and the web file browser, there is no extension filter.
 with index N of the container (it has to be an audio stream, otherwise the input
 shows an error). The GUI probes the same stream that the CLI will use.
 
-On macOS use the `deew-gui-macos` / `deew-web-macos` release binaries
-(`chmod +x` them, like on Linux).
+On macOS use `deew-gui-macos.zip` (unzip it to get `deew-gui.app`) and the
+`deew-web-macos` release binary (`chmod +x` it, like on Linux). The app does not
+contain the CLI: either keep `deew-macos` next to `deew-gui.app` (with
+`config.toml`, `dee/` and the tools), or put the app in Applications, where the
+deew folder is `~/Library/Application Support/deew/` and Utilities → Update and install all
+downloads the CLI there.
 
 ## Layout
 

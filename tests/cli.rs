@@ -93,6 +93,12 @@ impl Sandbox {
         Sandbox { dir, bin }
     }
 
+    /// Replace the path of the sandboxed deew (as deew shows it) with `[deew]`.
+    fn hide_exe(&self, text: &str) -> String {
+        let exe = self.bin.canonicalize().unwrap();
+        text.replace(exe.to_str().unwrap(), "[deew]")
+    }
+
     fn config(&self) -> std::path::PathBuf {
         self.dir.path().join("config.toml")
     }
@@ -201,20 +207,27 @@ mod linux {
         for flag in ["-v", "--version"] {
             let out = sb.run_without_path(&[flag]);
             assert_eq!(out.status.code(), Some(0));
-            assert_eq!(stdout(&out).as_bytes(), golden("version.txt"), "{flag}");
+            assert_eq!(
+                sb.hide_exe(&stdout(&out)).as_bytes(),
+                golden("version.txt"),
+                "{flag}"
+            );
             assert!(out.stderr.is_empty());
         }
         // the first line is what deew-gui parses
         let first = stdout(&sb.run_without_path(&["-v"]));
         assert_eq!(
-            first.lines().next().unwrap(),
-            format!("deew {}", env!("CARGO_PKG_VERSION"))
+            sb.hide_exe(first.lines().next().unwrap()),
+            format!("deew     {}  [deew]", env!("CARGO_PKG_VERSION"))
         );
         // no config at all: still works, and no config is created
         let sb2 = Sandbox::new();
         let out = sb2.run_without_path(&["-v"]);
         assert_eq!(out.status.code(), Some(0));
-        assert!(stdout(&out).starts_with(&format!("deew {}\n", env!("CARGO_PKG_VERSION"))));
+        assert!(
+            sb2.hide_exe(&stdout(&out))
+                .starts_with(&format!("deew     {}  [deew]\n", env!("CARGO_PKG_VERSION")))
+        );
         assert!(stdout(&out).contains("truehdd  not found"));
         assert!(!sb2.config().exists());
     }

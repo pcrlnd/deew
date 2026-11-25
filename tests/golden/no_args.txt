@@ -1,14 +1,16 @@
-deew 5.5.3
+deew 5.6.0
 
-USAGE: deew [-h] [-fh] [-v] [-i [INPUT ...]] [-ti INDEX] [-o DIRECTORY] [-oi]
-            [-on NAME] [-f FORMAT] [-b BITRATE] [-dm CHANNELS] [-d DELAY]
-            [-r DRC] [-dn DIALNORM] [-k] [-mo] [-lb] [-np] [-cl] [-c] [-gc]
-            [-gt]
+USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
+            [-o DIRECTORY] [-oi] [-on NAME] [-f FORMAT] [-b BITRATE]
+            [-dm CHANNELS] [-d DELAY] [-r DRC] [-dn DIALNORM] [-k] [-mo] [-lb]
+            [-np] [-cl] [-c] [-gc] [-gt]
 
 FLAGS:
   -h, --help                show this help message.
   -fh, --full-help          show all options, including the advanced ones
   -v, --version             show version and the versions of the tools.
+  -u, --update [all]        update deew and the deew-gui/deew-web next to it,
+                            all also installs the missing ones
   -i, --input [INPUT ...]   audio file(s) or folder(s)
                             wildcards (*, ?, **) work, quoted or not
                             ADM BWF and DAMF (.atmos) Atmos masters work for

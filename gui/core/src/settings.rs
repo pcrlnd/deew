@@ -152,6 +152,8 @@ pub struct SettingsView {
     pub truehdd_bed_conform: bool,
     /// `output.template` of the config (`{stem}` when missing, empty or not a string).
     pub output_template: String,
+    /// macOS runs this app from a temporary copy (see `cli::is_translocated`).
+    pub translocated: bool,
 }
 
 impl Default for SettingsView {
@@ -168,6 +170,7 @@ impl Default for SettingsView {
             truehdd_warp_mode: String::new(),
             truehdd_bed_conform: false,
             output_template: DEFAULT_OUTPUT_TEMPLATE.to_string(),
+            translocated: false,
         }
     }
 }
@@ -273,6 +276,7 @@ impl SettingsView {
             truehdd_warp_mode,
             truehdd_bed_conform,
             output_template,
+            translocated: crate::cli::is_translocated(),
             default_output: std::env::home_dir()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
@@ -556,7 +560,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system","defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}"}"#
+            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system","defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}","translocated":false}"#
         );
         let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","toInput":true}"#).unwrap();
         assert!(o.to_input);

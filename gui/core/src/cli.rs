@@ -3,7 +3,7 @@
 use crate::settings::{GuiSettings, SettingsView};
 use std::path::{Path, PathBuf};
 
-/// File names under which the deew CLI is looked up next to the executable.
+/// File names under which the deew CLI is looked up in the deew folder.
 ///
 /// Tauri places the bundled `externalBin` sidecar next to the main executable
 /// without the target triple, so it is named `deew` (`deew.exe` on Windows).
@@ -30,23 +30,102 @@ pub fn find_sidecar(dir: &Path, windows: bool) -> Result<PathBuf, String> {
                 .map(|path| format!("\n  {}", path.display()))
                 .collect();
             Err(format!(
-                "the deew CLI was not found next to this program. Looked for:{tried}"
+                "the deew CLI was not found in {}. Looked for:{tried}\nUse Utilities \u{2192} Update and install all to download it.",
+                dir.display()
             ))
         }
     }
 }
 
-/// Path of the deew CLI, located next to the running executable (see
+/// Path of the deew CLI, located in the deew folder (see [`deew_dir`] and
 /// [`sidecar_candidates`] for the accepted names).
 pub fn sidecar_path() -> Result<PathBuf, String> {
+    find_sidecar(&deew_dir()?, cfg!(windows))
+}
+
+/// Whether the deew CLI is present in the deew folder.
+pub fn cli_found() -> bool {
+    sidecar_path().is_ok()
+}
+
+/// The deew folder: where the CLI, `config.toml`, `dee/`, the tools and
+/// `temp` live. See [`deew_dir_for`] for the rules.
+pub fn deew_dir() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate the app: {e}"))?;
     let dir = exe
         .parent()
         .ok_or_else(|| "cannot locate the app directory".to_string())?;
-    find_sidecar(dir, cfg!(windows))
+    Ok(deew_dir_for(dir, std::env::home_dir().as_deref()))
 }
 
-/// The config next to the CLI (the only config location); `None` without a CLI.
+/// The deew folder for a program in `exe_dir`:
+/// - not inside a macOS app bundle (`<name>.app/Contents/MacOS`): `exe_dir`
+///   itself (Windows, Linux, deew-web);
+/// - in a bundle in `/Applications` or `$HOME/Applications`, or run
+///   translocated by macOS (a path with an `AppTranslocation` component):
+///   `$HOME/Library/Application Support/deew`;
+/// - in a bundle elsewhere (portable): the folder containing the `.app`.
+///
+/// Without a home folder the last rule applies to every bundle.
+pub fn deew_dir_for(exe_dir: &Path, home: Option<&Path>) -> PathBuf {
+    if let Some(app) = app_bundle(exe_dir)
+        && let Some(home) = home
+        && !home.as_os_str().is_empty()
+    {
+        let parent = app.parent();
+        let installed = parent == Some(Path::new("/Applications"))
+            || parent == Some(&home.join("Applications"));
+        if installed || is_translocated_dir(exe_dir) {
+            return home.join("Library/Application Support/deew");
+        }
+    }
+    outside_app_bundle(exe_dir)
+}
+
+/// Whether `dir` is under the random folder macOS moves a downloaded,
+/// quarantined app to when it is run from where it was unpacked.
+pub fn is_translocated_dir(dir: &Path) -> bool {
+    dir.components()
+        .any(|c| c.as_os_str() == "AppTranslocation")
+}
+
+/// Whether this program runs translocated (macOS only in practice).
+pub fn is_translocated() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(is_translocated_dir))
+        .unwrap_or(false)
+}
+
+/// The `.app` folder when `dir` is the `Contents/MacOS` of an app bundle.
+fn app_bundle(dir: &Path) -> Option<&Path> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let contents = dir.parent();
+    let app = contents.and_then(Path::parent)?;
+    (name(dir).as_deref() == Some("MacOS")
+        && contents.and_then(name).as_deref() == Some("Contents")
+        && name(app).is_some_and(|n| n.len() > ".app".len() && n.ends_with(".app")))
+    .then_some(app)
+}
+
+/// The directory containing the app, for a program in `dir`: `dir` itself,
+/// except inside a macOS app bundle (`<name>.app/Contents/MacOS`), where it
+/// is the directory containing the `.app`.
+pub fn outside_app_bundle(dir: &Path) -> PathBuf {
+    if let Some(app) = app_bundle(dir)
+        && let Some(outside) = app.parent()
+    {
+        return if outside.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            outside.to_path_buf()
+        };
+    }
+    dir.to_path_buf()
+}
+
+/// The config next to the CLI (the only config location); `None` without a
+/// CLI. The CLI is never inside an app bundle, so its folder is used as is.
 pub fn config_path() -> Option<PathBuf> {
     let cli_dir = sidecar_path()
         .ok()
@@ -54,14 +133,17 @@ pub fn config_path() -> Option<PathBuf> {
     crate::probe::config_path(cli_dir.as_deref())
 }
 
-/// Parses the output of `deew -v` (`deew X.Y.Z`) into the version.
+/// Parses the output of `deew -v` (`deew X.Y.Z`, or `deew     X.Y.Z  /path`)
+/// into the version.
 pub fn parse_cli_version(stdout: &str) -> Option<String> {
     stdout.lines().find_map(|line| {
-        let version = line.trim().strip_prefix("deew ")?.trim();
-        let valid = !version.is_empty()
-            && version.starts_with(|c: char| c.is_ascii_digit())
-            && !version.contains(char::is_whitespace);
-        valid.then(|| version.to_string())
+        let rest = line.trim().strip_prefix("deew")?;
+        // "deew" must be followed by whitespace, not be the start of a word
+        rest.starts_with(char::is_whitespace).then_some(())?;
+        let version = rest.split_whitespace().next()?;
+        version
+            .starts_with(|c: char| c.is_ascii_digit())
+            .then(|| version.to_string())
     })
 }
 
@@ -143,7 +225,119 @@ pub fn probe_inputs(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cli_lookup_dir_is_outside_the_app() {
+        let dir = outside_app_bundle(Path::new("/Users/x/deew/deew-gui.app/Contents/MacOS"));
+        assert_eq!(dir, PathBuf::from("/Users/x/deew"));
+        let candidates = sidecar_candidates(&dir, false);
+        assert!(candidates.contains(&PathBuf::from("/Users/x/deew/deew-macos")));
+        assert!(
+            candidates
+                .iter()
+                .all(|c| !c.starts_with("/Users/x/deew/deew-gui.app"))
+        );
+    }
+
+    #[test]
+    fn app_bundle_dir_maps_to_its_parent() {
+        let p = |s: &str| outside_app_bundle(Path::new(s));
+        assert_eq!(p("/opt/tools"), PathBuf::from("/opt/tools"));
+        assert_eq!(
+            p("/Users/x/deew/deew-gui.app/Contents/MacOS"),
+            PathBuf::from("/Users/x/deew")
+        );
+        assert_eq!(p("/deew-gui.app/Contents/MacOS"), PathBuf::from("/"));
+        assert_eq!(
+            p("/a/b/Contents/MacOS"),
+            PathBuf::from("/a/b/Contents/MacOS")
+        );
+        assert_eq!(
+            p("/a/x.app/Contents/Other"),
+            PathBuf::from("/a/x.app/Contents/Other")
+        );
+        assert_eq!(
+            p("/a/.app/Contents/MacOS"),
+            PathBuf::from("/a/.app/Contents/MacOS")
+        );
+        assert_eq!(p("/"), PathBuf::from("/"));
+        assert_eq!(p("MacOS"), PathBuf::from("MacOS"));
+    }
+
     use super::*;
+
+    #[test]
+    fn deew_dir_rules() {
+        let home = Path::new("/Users/x");
+        let d = |exe: &str, home: Option<&Path>| deew_dir_for(Path::new(exe), home);
+        let support = PathBuf::from("/Users/x/Library/Application Support/deew");
+        // not a bundle: unchanged
+        assert_eq!(d("/opt/deew", Some(home)), PathBuf::from("/opt/deew"));
+        assert_eq!(
+            d("/Applications", Some(home)),
+            PathBuf::from("/Applications")
+        );
+        // installed
+        assert_eq!(
+            d("/Applications/deew-gui.app/Contents/MacOS", Some(home)),
+            support
+        );
+        assert_eq!(
+            d(
+                "/Users/x/Applications/deew-gui.app/Contents/MacOS",
+                Some(home)
+            ),
+            support
+        );
+        // translocated
+        assert_eq!(
+            d(
+                "/private/var/folders/ab/T/AppTranslocation/1234/d/deew-gui.app/Contents/MacOS",
+                Some(home)
+            ),
+            support
+        );
+        // portable
+        assert_eq!(
+            d("/Users/x/deew/deew-gui.app/Contents/MacOS", Some(home)),
+            PathBuf::from("/Users/x/deew")
+        );
+        assert_eq!(
+            d("/Applications/sub/deew-gui.app/Contents/MacOS", Some(home)),
+            PathBuf::from("/Applications/sub")
+        );
+        assert_eq!(
+            d(
+                "/Users/y/Applications/deew-gui.app/Contents/MacOS",
+                Some(home)
+            ),
+            PathBuf::from("/Users/y/Applications")
+        );
+        // no home: portable rule
+        assert_eq!(
+            d("/Applications/deew-gui.app/Contents/MacOS", None),
+            PathBuf::from("/Applications")
+        );
+        assert_eq!(
+            d("/tmp/AppTranslocation/1/d/x.app/Contents/MacOS", None),
+            PathBuf::from("/tmp/AppTranslocation/1/d")
+        );
+        // a plain folder named Applications is no bundle
+        assert_eq!(
+            d("/Applications/Contents/MacOS", Some(home)),
+            PathBuf::from("/Applications/Contents/MacOS")
+        );
+    }
+
+    #[test]
+    fn translocation_is_detected_by_component() {
+        assert!(is_translocated_dir(Path::new(
+            "/private/var/folders/x/AppTranslocation/1/d/a.app/Contents/MacOS"
+        )));
+        assert!(!is_translocated_dir(Path::new(
+            "/Applications/AppTranslocationX"
+        )));
+        assert!(!is_translocated_dir(Path::new("/Applications/a.app")));
+    }
 
     #[test]
     fn parses_cli_version() {
@@ -152,6 +346,12 @@ mod tests {
             parse_cli_version("\r\n deew 1.0.0-rc1 \r\n"),
             Some("1.0.0-rc1".into())
         );
+        assert_eq!(
+            parse_cli_version("deew     5.6.0  /some path/deew\nDEE      6.7.0  /x\n"),
+            Some("5.6.0".into())
+        );
+        assert_eq!(parse_cli_version("deew     5.6.0\n"), Some("5.6.0".into()));
+        assert_eq!(parse_cli_version("deewx 1.0\n"), None);
         assert_eq!(parse_cli_version("deew\n"), None);
         assert_eq!(parse_cli_version("deew x y\n"), None);
         assert_eq!(parse_cli_version("other 1.2.3"), None);
@@ -230,7 +430,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "the deew CLI was not found next to this program. Looked for:\n  {d}/deew\n  {d}/deew-macos\n  {d}/deew-linux\n  {d}/deew_linux"
+                "the deew CLI was not found in {d}. Looked for:\n  {d}/deew\n  {d}/deew-macos\n  {d}/deew-linux\n  {d}/deew_linux\nUse Utilities \u{2192} Update and install all to download it."
             )
         );
     }

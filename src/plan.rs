@@ -938,14 +938,35 @@ pub fn check_shim_for_ddp(
     mode: DdpMode,
     measure_only: bool,
     shim_found: bool,
+    source_channels: i64,
 ) -> Result<(), Fail> {
-    if measure_only || shim_found || format != Format::Ddp || layout.outchannels != 8 {
+    if measure_only || shim_found {
+        return Ok(());
+    }
+    // a 5.0 source is encoded by the 5.0 layout of dee_shim
+    if matches!(format, Format::Dd | Format::Ddp)
+        && source_channels == 5
+        && layout.outchannels == 6
+        && layout.lfe == Lfe::Removed
+    {
+        return Err(Fail::new(ErrorKind::ShimDdp50));
+    }
+    if format != Format::Ddp || layout.outchannels != 8 {
         return Ok(());
     }
     if layout.lfe == Lfe::Removed {
         Err(Fail::new(ErrorKind::ShimDdp70))
     } else if mode == DdpMode::Standard {
         Err(Fail::new(ErrorKind::ShimDdp71))
+    } else {
+        Ok(())
+    }
+}
+
+/// `-mo` of 8-channel input (not Atmos) is measured through dee_shim.
+pub fn check_shim_for_measure(by_shim: bool, shim_found: bool) -> Result<(), Fail> {
+    if by_shim && !shim_found {
+        Err(Fail::new(ErrorKind::ShimMeasure))
     } else {
         Ok(())
     }
@@ -1814,6 +1835,13 @@ mod tests {
         assert_eq!(needs_shim(Format::Ddp, "none", false), None);
         assert_eq!(needs_shim(Format::Ac4Atmos, "music_light", false), None);
         assert_eq!(needs_shim(Format::Thd, "none", true), None);
+        // -mo of 8 channels (not Atmos) is measured through dee_shim
+        assert_eq!(
+            check_shim_for_measure(true, false),
+            Err(Fail::new(ErrorKind::ShimMeasure))
+        );
+        assert_eq!(check_shim_for_measure(true, true), Ok(()));
+        assert_eq!(check_shim_for_measure(false, false), Ok(()));
     }
 
     #[test]
@@ -1939,7 +1967,7 @@ mod tests {
                 DdpMode::Standard
             }
         };
-        let check = |f, l: &Layout, fb, mo, shim| check_shim_for_ddp(f, l, m(fb), mo, shim);
+        let check = |f, l: &Layout, fb, mo, shim| check_shim_for_ddp(f, l, m(fb), mo, shim, 8);
         let sil = lay(Lfe::Silent);
         let rem = lay(Lfe::Removed);
         assert_eq!(

@@ -61,5 +61,8 @@ export const HELP = {
     "-gc": "Generate a new config next to the deew CLI.",
     "-gt":
       "Download ffmpeg, ffprobe, truehdd and dee_shim next to the deew CLI (everything except DEE).",
+    "-u": "Update deew, and deew-gui and deew-web next to it, to the latest release.",
+    "-u all":
+      "Update deew and install deew-gui and deew-web too if they are missing.",
   },
 } as const

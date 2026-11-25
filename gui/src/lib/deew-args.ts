@@ -372,12 +372,18 @@ export const INFO_COMMANDS = [
   { flag: "-c", label: "Show config", group: 2 },
   { flag: "-gc", label: "Generate config", group: 2 },
   { flag: "-gt", label: "Download tools", group: 3 },
+  { flag: "-u", label: "Update", group: 3 },
+  { flag: "-u all", label: "Update and install all", group: 3 },
 ] as const
 export type InfoFlag = (typeof INFO_COMMANDS)[number]["flag"]
 
 export function infoArgs(flag: InfoFlag): string[] {
+  // `flag` is also the id of the entry: "-u all" is two argv tokens.
+  const args = flag.split(" ")
   // The dialog has asked already, so the CLI must not ask again.
-  return flag === "-gc" ? [flag, "-np"] : [flag]
+  return flag === "-gc" || flag === "-u" || flag === "-u all"
+    ? [...args, "-np"]
+    : args
 }
 
 // Bitrate tables, copied from src/data.rs (a test keeps them in sync).

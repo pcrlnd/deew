@@ -244,6 +244,17 @@ export const cliVersion = async (): Promise<string> =>
     ? (await requestJson<{ version: string }>("/api/version")).version
     : invoke("cli_version")
 
+/** Whether the deew CLI is present; true when it cannot be told. */
+export const cliFound = async (): Promise<boolean> => {
+  try {
+    return inWeb()
+      ? (await requestJson<{ found: boolean }>("/api/cli-found")).found
+      : await invoke<boolean>("cli_found")
+  } catch {
+    return true
+  }
+}
+
 /** The config's `[default_bitrates]` (key -> kbps); empty if unavailable. */
 export const defaultBitrates = (): Promise<Record<string, number>> =>
   inWeb() ? requestJson("/api/default-bitrates") : invoke("default_bitrates")
@@ -270,6 +281,8 @@ export interface LoadedGuiSettings extends GuiSettings {
   useSystemFont: boolean
   /** `gui.theme`: 'system', 'light' or 'dark' (deew-gui only; deew-web ignores it). */
   theme: ThemeMode
+  /** macOS runs deew-gui from a temporary copy (App Translocation). */
+  translocated: boolean
   /** The folder deew runs in (the home folder), empty when unknown. */
   defaultOutput: string
   /** `default_modes.ddp` of the config. */

@@ -2,11 +2,10 @@
 
 use crate::cli::Args;
 use crate::commands::{
-    AudioPlan, EncodeParams, INTERMEDIATE_EXISTS_PRINT, audio_plan, decode_args, encode_args,
-    ffmpeg_args, ffmpeg_pipe_args, ffmpeg_pipe_print, ffmpeg_pipe_print_short, ffmpeg_print,
-    ffmpeg_print_short, intermediate_variant, measure_args, measure_atmos_args,
-    measure_with_encoder_args, pcm_input_format, pcm_rate, pipe_args, pipe_sample_count,
-    print_command,
+    AudioPlan, EncodeParams, INTERMEDIATE_EXISTS_PRINT, LfeSlot, audio_plan, decode_args,
+    encode_args, ffmpeg_args, ffmpeg_pipe_args, ffmpeg_pipe_print, ffmpeg_pipe_print_short,
+    ffmpeg_print, ffmpeg_print_short, intermediate_variant, measure_args, measure_atmos_args,
+    measure_shim_args, pcm_input_format, pcm_rate, pipe_args, pipe_sample_count, print_command,
 };
 use crate::config::{Ac4ImsMode, Config, DdpAtmosMode, Paths, PipeMode, WarpMode};
 use crate::data::ErrorKind;
@@ -212,7 +211,7 @@ fn find_programs(
 ) -> Programs {
     let cwd = std::env::current_dir().unwrap_or_default();
     let dee = |tool: &str| tools::require_dee_tool(tool, &cwd, exe_dir);
-    // `-mo` picks its tool once the channels are known, see `measure_tool`.
+    // `-mo` finds its tool once the sources are known (Atmos sources have their own)
     let measure = (needs_measure && !measure_only).then(|| dee("dee_measure_loudness"));
     let encoder = if measure_only {
         String::new()
@@ -237,18 +236,6 @@ fn find_programs(
     }
 }
 
-/// The tool of `-mo`: `dee_measure_loudness` does not take 8 channels, the
-/// DDP encoder measures those.
-fn measure_tool(exe_dir: &Path, channels: i64) -> String {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let tool = if measure_by_encoder(true, channels) {
-        "dee_ddp_encoder"
-    } else {
-        "dee_measure_loudness"
-    };
-    tools::require_dee_tool(tool, &cwd, exe_dir)
-}
-
 /// Whether `-mo` measures this source as Atmos: an Atmos master, or TrueHD
 /// with an Atmos presentation.
 fn atmos_source(probe: &Probe) -> bool {
@@ -262,9 +249,52 @@ fn needs_truehdd(format: Format, probe: &Probe) -> bool {
         && (format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe)))
 }
 
-/// Whether `-mo` of this input is run by the DDP encoder.
-fn measure_by_encoder(measure_only: bool, channels: i64) -> bool {
+/// Shown after the `-mo` of 7.1 and 7.0 input.
+const NOTE_MEASURE_71: &str = "7.1 loudness of all channels; a 7.1 or 7.0 DDP encode sets its dialnorm from its 5.1 downmix, which can measure lower";
+
+/// Whether `-mo` of this input is run through dee_shim: `dee_measure_loudness`
+/// refuses 8 channels, `dee_shim measure_loudness --layout 7.1` measures them.
+fn measure_by_shim(measure_only: bool, channels: i64) -> bool {
     measure_only && plan::wav_channels(channels) == 8
+}
+
+/// Whether a DD/DDP encode of a 5.0 source goes through dee_shim's 5.0 layout
+/// (always: dee_shim is required). A wav (no pipe) then holds the 5 channels,
+/// read with `--unpadded-wav`.
+fn five_zero_by_shim(
+    format: Format,
+    layout: &Layout,
+    source_channels: i64,
+    measure_only: bool,
+) -> bool {
+    matches!(format, Format::Dd | Format::Ddp)
+        && !measure_only
+        && source_channels == 5
+        && layout.lfe == Lfe::Removed
+        && layout.outchannels == 6
+}
+
+/// Whether the run encodes or measures with dee_shim (`-v` aside). `by_shim`:
+/// `-mo` of non-Atmos 8-channel input. `five_zero`: see [`five_zero_by_shim`].
+#[allow(clippy::too_many_arguments)]
+fn uses_shim(
+    format: Format,
+    drc: &str,
+    apodise_off: bool,
+    layout: &Layout,
+    profile: Option<Profile71>,
+    measure_only: bool,
+    by_shim: bool,
+    five_zero: bool,
+) -> bool {
+    if measure_only {
+        return by_shim;
+    }
+    matches!(format, Format::DdpAtmos | Format::ThdAtmos)
+        || (format == Format::Thd && (drc == "none" || apodise_off))
+        || profile == Some(Profile71::Standard)
+        || (format == Format::Ddp && layout.lfe == Lfe::Removed && layout.outchannels == 8)
+        || five_zero
 }
 
 /// Before anything runs: two inputs must not make the same output file, and
@@ -737,12 +767,13 @@ fn log_spec(
                 && ctx.layout.lfe == Lfe::Removed
                 && ctx.layout.outchannels == 8)
             || matches!(format, Format::DdpAtmos | Format::ThdAtmos)
-            || (format == Format::Thd && ctx.validated.drc == "none"));
+            || (format == Format::Thd && ctx.validated.drc == "none")
+            || five_zero_by_shim(format, ctx.layout, ctx.info.channels, ctx.args.measure_only));
     let settings = if ctx.args.measure_only {
         let meter = if atmos_source(probe) {
             "dee_measure_loudness (Atmos master)"
-        } else if measure_by_encoder(true, ctx.info.channels) {
-            "DDP encoder (dee_ddp_encoder)"
+        } else if measure_by_shim(true, ctx.info.channels) {
+            "dee_shim measure_loudness (dee_measure_loudness)"
         } else {
             "dee_measure_loudness"
         };
@@ -879,15 +910,6 @@ fn dee_temp_dir(temp: &str, pid: u32, index: usize) -> String {
     join(temp, &format!("dee-{pid}-{index}"))
 }
 
-/// The installed dee_shim passes a `named_pipe://` input on unchanged (asked
-/// once per run, see `tools::shim_takes_named_pipe`).
-fn shim_takes_named_pipe(ctx: &Context) -> bool {
-    ctx.programs
-        .shim
-        .as_ref()
-        .is_some_and(|shim| tools::shim_takes_named_pipe(&shim.run, &ctx.programs.dee))
-}
-
 /// The downmix that ffmpeg does for the encoders that can't: TrueHD (`-dm`)
 /// and AC4 IMS (7.x input to its 5.1).
 fn ffmpeg_downmix(ctx: &Context) -> Option<i64> {
@@ -922,12 +944,26 @@ fn build_job(
     } else {
         ffmpeg_downmix(ctx)
     };
-    let silent_lfe = ctx.layout.lfe == Lfe::Silent;
+    // the 7.0 layouts of dee_shim read a wav of 7 channels, without the LFE
+    // slot (`--unpadded-wav`). DEE takes no raw PCM of 7 channels, the pipe
+    // keeps the silent LFE slot.
+    let five_zero = five_zero_by_shim(plan_format, ctx.layout, ctx.info.channels, measure_only);
+    let lfe_slot = if (five_zero && !ctx.pipe)
+        || (ctx.layout.lfe == Lfe::Removed
+            && plan_format == Format::Ddp
+            && ctx.layout.outchannels == 8
+            && !measure_only
+            && !ctx.pipe)
+    {
+        LfeSlot::Dropped
+    } else {
+        (ctx.layout.lfe == Lfe::Silent).into()
+    };
     let variant = intermediate_variant(
         plan_format,
         ctx.info.samplerate,
         ctx.info.channels,
-        silent_lfe,
+        lfe_slot,
         downmix,
     );
     let names = temp_names(
@@ -957,20 +993,12 @@ fn build_job(
     // reads wav only), nor for the Atmos formats. When the audio is read
     // twice (AC4's manifest for a custom dialnorm: the measurement and then
     // the encode), ffmpeg feeds each DEE run
-    // Windows: dee_shim 0.1.0 makes the `-i` path absolute and breaks
-    // `named_pipe://`, so its layouts (standard 7.1, both 7.0) read the wav
-    // unless the installed dee_shim keeps the value (asked once, only here)
-    let shim_layout = !measure_only
-        && format == Format::Ddp
-        && ctx.layout.outchannels == 8
-        && (ctx.profile == Some(Profile71::Standard) || ctx.layout.lfe == Lfe::Removed);
     let pcm_pipe = ctx.pipe
         && !atmos
         && !master
         && plan_format != Format::Thd
         // DEE's AC4 IMS reads no raw PCM
-        && plan_format != Format::Ac4Ims
-        && !(pipe::NAMED && shim_layout && !shim_takes_named_pipe(ctx));
+        && plan_format != Format::Ac4Ims;
     let pipe_path = pcm_pipe.then(|| pipe::path(index));
     let intermediate_exists = !pcm_pipe && !master && Path::new(intermediate).exists();
     let plan = (!atmos && !master).then(|| {
@@ -980,7 +1008,7 @@ fn build_job(
             ctx.info.channels,
             bit_depth,
             ctx.validated.track_index,
-            ctx.layout.lfe == Lfe::Silent,
+            lfe_slot,
             // the TrueHD and AC4 IMS encoders can't downmix, ffmpeg does
             downmix,
         )
@@ -990,7 +1018,11 @@ fn build_job(
         pcm_input_format(
             plan.as_ref().map_or(24, |plan| plan.bit_depth),
             rate,
-            plan::wav_channels(ctx.info.channels),
+            if lfe_slot == LfeSlot::Dropped {
+                7
+            } else {
+                plan::wav_channels(ctx.info.channels)
+            },
             pipe_sample_count(probe.duration, rate),
         )
     });
@@ -1040,15 +1072,15 @@ fn build_job(
     let measuring = measure_only || via_manifest;
     let skip_dialnorm =
         (dialnorm != 0 && !measure_only && !format.dialnorm_via_manifest()).then_some(dialnorm);
-    let by_encoder = !measure_atmos && measure_by_encoder(measure_only, ctx.info.channels);
+    let by_shim = !measure_atmos && measure_by_shim(measure_only, ctx.info.channels);
     let measure_args = match (&ctx.programs.measure, measuring) {
         _ if measure_atmos => {
             let tool = ctx.programs.measure_atmos.as_deref().unwrap_or_default();
             measure_atmos_args(tool, intermediate)
         }
-        (Some(tool), true) if by_encoder => {
-            let throwaway = join(&dee_temp, "measure.ec3");
-            measure_with_encoder_args(tool, input_format, dee_input, &throwaway, &dee_temp)
+        (Some(tool), true) if by_shim => {
+            let shim = ctx.programs.shim.as_ref().map_or("", |shim| &shim.run);
+            measure_shim_args(shim, tool, input_format, dee_input, &names.loudness)
         }
         (Some(tool), true) => measure_args(tool, input_format, dee_input, &names.loudness),
         _ => Vec::new(),
@@ -1080,12 +1112,13 @@ fn build_job(
             shim: ctx.programs.shim.as_ref().filter(|_| {
                 matches!(
                     format,
-                    Format::Ddp | Format::DdpAtmos | Format::Thd | Format::ThdAtmos
+                    Format::Dd | Format::Ddp | Format::DdpAtmos | Format::Thd | Format::ThdAtmos
                 )
             }),
             bluray: ctx.profile != Some(Profile71::Standard),
             atmos_mode: ctx.validated.atmos_mode,
             lfe_removed: ctx.layout.lfe == Lfe::Removed,
+            five_zero,
             no_phase_shift: phase_shift_off(ctx),
             no_lfe_filter: low_pass_filter_off(ctx),
             surround_3db: surround_3db_on(ctx),
@@ -1102,7 +1135,7 @@ fn build_job(
     } else {
         vec![names.wav.clone()]
     };
-    if !measure_args.is_empty() && !by_encoder && !measure_atmos {
+    if !measure_args.is_empty() && !measure_atmos {
         temp_files.push(names.loudness.clone());
     }
     if matches!(format, Format::Ac4 | Format::Ac4Atmos) && !encode_args.is_empty() {
@@ -1121,7 +1154,6 @@ fn build_job(
         decode_args,
         measure_args,
         encode_args,
-        stop_when_measured: by_encoder,
         measure_only,
         intermediate_exists,
         intermediate: intermediate.to_string(),
@@ -1372,6 +1404,7 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         validated.ddp_mode,
         args.measure_only,
         programs.shim.is_some(),
+        info.channels,
     )
     .unwrap_or_else(|fail| fail.exit());
     if !args.measure_only {
@@ -1398,7 +1431,12 @@ pub fn run(args: Args, config: Config, paths: Paths) {
             }
         }
         if !probes.iter().all(atmos_source) {
-            let tool = measure_tool(&paths.exe_dir, info.channels);
+            plan::check_shim_for_measure(
+                measure_by_shim(true, info.channels),
+                programs.shim.is_some(),
+            )
+            .unwrap_or_else(|fail| fail.exit());
+            let tool = tools::require_dee_tool("dee_measure_loudness", &cwd, &paths.exe_dir);
             programs.dee = tool.clone();
             programs.measure = Some(tool);
         }
@@ -1412,6 +1450,12 @@ pub fn run(args: Args, config: Config, paths: Paths) {
     } else {
         profile_71(format, layout.outchannels, validated.ddp_mode)
     };
+    if let Some(truehdd) = &programs.truehdd
+        && (probes.iter().any(|p| needs_truehdd(format, p))
+            || (args.measure_only && probes.iter().any(|p| p.master.is_none() && atmos_source(p))))
+    {
+        tools::require_truehdd_version(truehdd);
+    }
     if !args.measure_only {
         let ignored = [
             (
@@ -1481,6 +1525,21 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         instances,
         pipeable,
     );
+    // the versions of the tools that run, checked once (`-v` only reports)
+    let atmos_sources = probes.iter().all(atmos_source);
+    if uses_shim(
+        format,
+        &validated.drc,
+        apodise_off(format, info.samplerate),
+        &layout,
+        profile,
+        args.measure_only,
+        !atmos_sources && measure_by_shim(true, info.channels),
+        five_zero_by_shim(format, &layout, info.channels, args.measure_only),
+    ) && let Some(shim) = &programs.shim
+    {
+        tools::require_shim_version(shim);
+    }
     let ctx = Context {
         args: &args,
         config: &config,
@@ -1520,6 +1579,13 @@ pub fn run(args: Args, config: Config, paths: Paths) {
         keep_log: args.keep_log,
     };
     let results = run_jobs(&prepared.jobs, &options, instances);
+    if args.measure_only
+        && results.finished > 0
+        && !atmos_sources
+        && measure_by_shim(true, ctx.info.channels)
+    {
+        rprintln!("[dim]{}[/dim]", escape(NOTE_MEASURE_71));
+    }
     for message in &results.errors {
         // the `failed:` line of the job already showed it
         events::error(message);
@@ -1664,7 +1730,7 @@ mod tests {
             measure: Some("dee_measure_loudness".into()),
             measure_atmos: Some("dee_measure_loudness".into()),
             truehdd: Some("truehdd".into()),
-            shim: profile.map(|_| crate::tools::Shim {
+            shim: (profile.is_some() || args.measure_only).then(|| crate::tools::Shim {
                 run: "dee_shim".into(),
             }),
         };
@@ -1710,6 +1776,101 @@ mod tests {
         );
         assert_eq!(d(PipeMode::Never, false, 1.0, 1), (false, "off".into()));
         assert_eq!(d(PipeMode::Auto, true, 4.0, 0).1, "not used");
+    }
+
+    #[test]
+    fn the_run_uses_dee_shim_for_its_layouts() {
+        let layout = |outchannels, lfe| Layout {
+            outchannels,
+            layout_arg: None,
+            lfe,
+            dee_downmix: false,
+            notes: Vec::new(),
+        };
+        let uses = |format, drc, apodise, layout: &Layout, profile, measure_only, by_shim| {
+            uses_shim(
+                format,
+                drc,
+                apodise,
+                layout,
+                profile,
+                measure_only,
+                by_shim,
+                false,
+            )
+        };
+        let l51 = layout(6, Lfe::Normal);
+        let l71 = layout(8, Lfe::Normal);
+        let l70 = layout(8, Lfe::Removed);
+        let standard = Some(Profile71::Standard);
+        let bluray = Some(Profile71::Bluray);
+        // a 5.0 source of DD/DDP does (`five_zero`), -mo does not
+        let l50 = layout(6, Lfe::Removed);
+        assert!(uses_shim(
+            Format::Ddp,
+            "none",
+            false,
+            &l50,
+            None,
+            false,
+            false,
+            true
+        ));
+        assert!(!uses_shim(
+            Format::Ddp,
+            "none",
+            false,
+            &l50,
+            None,
+            true,
+            false,
+            true
+        ));
+        // plain encodes don't
+        assert!(!uses(Format::Ddp, "none", false, &l51, None, false, false));
+        assert!(!uses(
+            Format::Ddp,
+            "none",
+            false,
+            &l71,
+            bluray,
+            false,
+            false
+        ));
+        assert!(!uses(
+            Format::Thd,
+            "speech",
+            false,
+            &l51,
+            None,
+            false,
+            false
+        ));
+        // standard 7.1 and both 7.0 profiles, TrueHD without DRC or at 96 kHz, Atmos
+        assert!(uses(
+            Format::Ddp,
+            "none",
+            false,
+            &l71,
+            standard,
+            false,
+            false
+        ));
+        assert!(uses(Format::Ddp, "none", false, &l70, bluray, false, false));
+        assert!(uses(Format::Thd, "none", false, &l51, None, false, false));
+        assert!(uses(Format::Thd, "speech", true, &l51, None, false, false));
+        assert!(uses(
+            Format::DdpAtmos,
+            "none",
+            false,
+            &l51,
+            None,
+            false,
+            false
+        ));
+        // -mo only for 8 channels
+        assert!(uses(Format::Ddp, "none", false, &l71, None, true, true));
+        assert!(!uses(Format::Ddp, "none", false, &l51, None, true, false));
     }
 
     #[test]
@@ -1769,7 +1930,7 @@ mod tests {
             );
             assert!(!job.measure_args.contains(&"--temp-dir".to_string()));
             assert!(job.encode_args.is_empty());
-            assert!(!job.stop_when_measured && job.measure_only);
+            assert!(job.measure_only);
             assert!(job.temp_files.contains(&join("/t", "a.atmos")));
             assert!(!job.temp_files.contains(&job.loudness_path));
         }
@@ -1790,12 +1951,15 @@ mod tests {
         let job = measure_job("/in/a.ec3", &joc, |a| a.format = "ddp-atmos".into());
         assert!(!job.format.is_atmos() && job.decode_args.is_empty());
         assert_eq!(job.measure_args[0], "dee_measure_loudness");
-        assert!(!job.stop_when_measured);
+        // 8 channels go through dee_shim
         let job = measure_job("/in/a.wav", &test_probe(8, false), |a| {
             a.format = "ac4".into()
         });
-        assert!(job.stop_when_measured);
-        assert!(job.measure_args.contains(&"--temp-dir".to_string()));
+        assert_eq!(
+            job.measure_args[..3],
+            ["dee_shim", "measure_loudness", "--binary"]
+        );
+        assert!(!job.measure_args.contains(&"--temp-dir".to_string()));
     }
 
     #[test]
@@ -1858,7 +2022,7 @@ mod tests {
     }
 
     #[test]
-    fn dee_shim_layouts_need_a_shim_that_keeps_the_pipe_on_windows() {
+    fn dee_shim_layouts_take_the_pipe() {
         let probe = test_probe(8, false);
         let job = |profile| {
             let args = Args {
@@ -1867,11 +2031,10 @@ mod tests {
             };
             test_job_with("/in/a.wav", &probe, args, true, Some(profile))
         };
-        // standard 7.1 is a shim layout; the shim of the test does not exist,
-        // so on Windows (where it would be asked) it is not trusted
+        // standard 7.1 is a shim layout, dee_shim keeps the pipe path
         let standard = job(Profile71::Standard);
         assert_eq!(standard.encode_args[0], "dee_shim");
-        assert_eq!(standard.pipe.is_some(), !cfg!(windows));
+        assert!(standard.pipe.is_some());
         // Blu-ray 7.1 is native
         let bluray = job(Profile71::Bluray);
         assert_eq!(bluray.encode_args[0], "dee_x");
@@ -1974,7 +2137,7 @@ mod tests {
             "pcm_s24le:sample_rate=48000:channels=6:streaming=1:sample_count=528000"
         );
         let job = measure_job("/in/a.wav", &test_probe(8, false), |_| {});
-        assert!(job.stop_when_measured);
+        assert_eq!(job.measure_args[1], "measure_loudness");
         assert_eq!(
             pipe_input_format(&job.measure_args),
             "pcm_s24le:sample_rate=48000:channels=8:streaming=1:sample_count=528000"

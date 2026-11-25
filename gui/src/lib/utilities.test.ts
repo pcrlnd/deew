@@ -6,8 +6,11 @@ import {
   encodeBlock,
   excludesEncode,
   needsConfirmation,
+  CLI_MISSING_REASON,
   utilityBlock,
 } from "@/lib/utilities"
+
+const EXCLUSIVE: string[] = ["-gt", "-gc", "-u", "-u all"]
 
 describe("utilityBlock", () => {
   const idle = { encoding: false, utilityRunning: false }
@@ -17,11 +20,11 @@ describe("utilityBlock", () => {
       expect(utilityBlock(flag, idle)).toBeNull()
   })
 
-  it("greys out only -gt and -gc during an encode, with a reason", () => {
+  it("greys out only -gt, -gc and the updates during an encode, with a reason", () => {
     const encoding = { encoding: true, utilityRunning: false }
     for (const { flag } of INFO_COMMANDS) {
       const reason = utilityBlock(flag, encoding)
-      if (flag === "-gt" || flag === "-gc") {
+      if (EXCLUSIVE.includes(flag)) {
         expect(reason).toMatch(/encode/)
         expect(excludesEncode(flag)).toBe(true)
       } else {
@@ -31,6 +34,22 @@ describe("utilityBlock", () => {
     }
     expect(utilityBlock("-gt", encoding)).toMatch(/ffmpeg/)
     expect(utilityBlock("-gc", encoding)).toMatch(/config\.toml/)
+    expect(utilityBlock("-u", encoding)).toMatch(/deew/)
+    expect(utilityBlock("-u all", encoding)).toMatch(/encode/)
+  })
+
+  it("without the CLI only -u all is offered, with the reason", () => {
+    const missing = { encoding: false, utilityRunning: false, cliMissing: true }
+    for (const { flag } of INFO_COMMANDS) {
+      if (flag === "-u all") expect(utilityBlock(flag, missing)).toBeNull()
+      else expect(utilityBlock(flag, missing)).toBe(CLI_MISSING_REASON)
+    }
+    expect(CLI_MISSING_REASON).toMatch(
+      /deew CLI not found.*Update and install all/
+    )
+    const present = { ...missing, cliMissing: false }
+    for (const { flag } of INFO_COMMANDS)
+      expect(utilityBlock(flag, present)).toBeNull()
   })
 
   it("allows one utility at a time", () => {
@@ -45,7 +64,7 @@ describe("encodeBlock", () => {
   it("refuses an encode only while -gt or -gc runs", () => {
     expect(encodeBlock(null)).toBeNull()
     for (const { flag } of INFO_COMMANDS) {
-      expect(encodeBlock(flag) !== null).toBe(flag === "-gt" || flag === "-gc")
+      expect(encodeBlock(flag) !== null).toBe(EXCLUSIVE.includes(flag))
     }
     expect(encodeBlock("-gt")).toContain("-gt")
   })
@@ -60,9 +79,9 @@ describe("activeTab", () => {
 })
 
 describe("needsConfirmation", () => {
-  it("only -gc overwrites user data", () => {
-    expect(INFO_COMMANDS.filter((c) => needsConfirmation(c.flag))).toEqual(
-      INFO_COMMANDS.filter((c) => c.flag === "-gc")
-    )
+  it("only -gc and the updates change user files", () => {
+    expect(
+      INFO_COMMANDS.filter((c) => needsConfirmation(c.flag)).map((c) => c.flag)
+    ).toEqual(["-gc", "-u", "-u all"])
   })
 })

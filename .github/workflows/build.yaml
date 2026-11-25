@@ -331,10 +331,17 @@ jobs:
         working-directory: gui
         run: npm ci
 
-      # The sidecar script builds the deew CLI for both darwin targets and lipos them.
-      - name: Build deew-gui (universal, also builds the frontend)
+      # The app is named deew-gui.app through the productName override. The CLI is NOT
+      # bundled: the override empties bundle.externalBin (a --config JSON merge patch
+      # replaces arrays), the GUI uses the deew-macos kept next to the .app. (The
+      # beforeBuildCommand still builds the sidecar; it is just not bundled.)
+      # signingIdentity "-" is ad-hoc signing (no secrets needed; arm64 binaries must
+      # be signed to run at all), no notarization.
+      - name: Build deew-gui.app (universal, also builds the frontend)
         working-directory: gui
-        run: npm run tauri build -- --no-bundle --target universal-apple-darwin
+        run: |
+          npm run tauri build -- --bundles app --target universal-apple-darwin \
+            --config '{"productName":"deew-gui","bundle":{"externalBin":[],"macOS":{"signingIdentity":"-"}}}'
 
       - name: Build deew-web (both targets)
         working-directory: gui
@@ -345,11 +352,27 @@ jobs:
       - name: Collect binaries
         run: |
           mkdir out
-          mv gui/target/universal-apple-darwin/release/deew-gui out/deew-gui-macos
+          ditto -c -k --keepParent \
+            gui/target/universal-apple-darwin/release/bundle/macos/deew-gui.app \
+            out/deew-gui-macos.zip
           lipo -create -output out/deew-web-macos \
             gui/target/aarch64-apple-darwin/release/deew-web \
             gui/target/x86_64-apple-darwin/release/deew-web
           lipo -info out/deew-web-macos
+
+      - name: Check the app zip
+        run: |
+          unzip -l out/deew-gui-macos.zip
+          list=$(unzip -Z1 out/deew-gui-macos.zip)
+          for f in deew-gui.app/Contents/MacOS/deew-gui deew-gui.app/Contents/Info.plist; do
+            echo "$list" | grep -Fxq "$f" || { echo "::error::$f is missing from the zip"; exit 1; }
+          done
+          echo "$list" | grep -Eq '^deew-gui\.app/Contents/Resources/[^/]+\.icns$' \
+            || { echo "::error::no .icns in Contents/Resources"; exit 1; }
+          # the app must not contain the CLI
+          if echo "$list" | grep -Fxq deew-gui.app/Contents/MacOS/deew; then
+            echo "::error::the CLI (Contents/MacOS/deew) must not be in the app"; exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -477,18 +500,35 @@ jobs:
           fi
 
           if [ "$GUI_WEB" != "true" ]; then
-            copy_set "deew-gui deew-web deew-gui.exe deew-web.exe" "deew-gui-macos deew-web-macos"
+            copy_set "deew-gui deew-web deew-gui.exe deew-web.exe" "deew-gui-macos.zip deew-web-macos"
           elif [ "$MACOS" != "true" ]; then
-            copy_set "" "deew-gui-macos deew-web-macos"
+            copy_set "" "deew-gui-macos.zip deew-web-macos"
           fi
 
           exit "$fail"
 
+      # Component versions of the sources of this run, on every release run.
       - name: Upload built files
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.setup.outputs.version }}
-        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+        run: |
+          python3 - <<'PY'
+          import json, tomllib
+          def version(path):
+              with open(path, "rb") as f:
+                  return tomllib.load(f)["package"]["version"]
+          versions = {
+              "deew": version("Cargo.toml"),
+              "deew-gui": version("gui/src-tauri/Cargo.toml"),
+              "deew-web": version("gui/web/Cargo.toml"),
+          }
+          with open("versions.json", "w") as f:
+              json.dump(versions, f, indent=2)
+              f.write("\n")
+          PY
+          cat versions.json
+          gh release upload "$TAG" dist/* versions.json --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Write the release notes
         env:

@@ -1124,12 +1124,24 @@ describe("info commands", () => {
       "-c",
       "-gc",
       "-gt",
+      "-u",
+      "-u all",
     ])
+    expect(INFO_COMMANDS.find((c) => c.flag === "-u")?.label).toBe("Update")
+    expect(INFO_COMMANDS.find((c) => c.flag === "-u all")?.label).toBe(
+      "Update and install all"
+    )
     const groups = INFO_COMMANDS.map((c) => c.group)
     expect(groups).toEqual([...groups].sort())
     for (const { flag } of INFO_COMMANDS) {
-      expect(infoArgs(flag)).toEqual(flag === "-gc" ? [flag, "-np"] : [flag])
+      const expected =
+        flag === "-gc" || flag === "-u" || flag === "-u all"
+          ? [...flag.split(" "), "-np"]
+          : [flag]
+      expect(infoArgs(flag)).toEqual(expected)
     }
+    expect(infoArgs("-u")).toEqual(["-u", "-np"])
+    expect(infoArgs("-u all")).toEqual(["-u", "all", "-np"])
   })
 })
 

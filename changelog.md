@@ -1,3 +1,43 @@
+# deew 5.6.0:
+- raw TrueHD inputs (`.thd`, `.mlp`) keep their decode progress with the
+  next truehdd release: deew passes `--progress` to truehdd when it reads
+  the file itself, because truehdd will only count the frames (which deew
+  uses for the percentage) when a progress bar is asked for
+- new `-u, --update [all]`: updates deew, and `deew-gui`/`deew-web` when
+  they are next to it, from the latest release; `-u all` also installs the
+  missing ones (the download is checked against GitHub's SHA-256)
+- `-v` also shows where deew itself is, and in a terminal it shows deew's
+  version right away and each tool as soon as it answers
+- deew needs dee_shim 0.4.0 and truehdd 0.6.3 or newer: a job that uses
+  an older one stops with a message (`-gt` downloads the latest); jobs
+  that don't use them are not affected
+- `-mo` of 7.1 and 7.0 measures with dee_shim's `measure_loudness`, the
+  real 7.1 loudness of all channels; before, it ran the DDP encoder and
+  stopped it, which measured its 5.1 downmix and could read up to ~5 dB
+  lower with loud surrounds (that is still what a 7.1/7.0 DDP encode sets
+  its dialnorm from, `-mo` says so)
+- 5.0 DD/DDP and 7.0 DDP are written without the silent LFE channel
+  (dee_shim's `--unpadded-wav`), the output is the same; 5.0 DD and DDP
+  now need dee_shim too
+- the dee_shim dry-run check of `named_pipe://` inputs is gone (fixed
+  since dee_shim 0.2.0)
+- macOS: the tools are also looked up in `/opt/homebrew/bin` and
+  `/usr/local/bin` (an app started from Finder doesn't get the `PATH` of
+  the terminal)
+- `deew-gui`/`deew-web` 1.0.1:
+  - macOS: `deew-gui` is released as `deew-gui-macos.zip` with
+    `deew-gui.app` in it, so it has its icon in the Dock and Finder; keep
+    `deew-macos` next to `deew-gui.app`, the GUI uses that CLI
+  - new "Update" (`-u`) and "Update and install all" (`-u all`) in
+    Utilities, they ask first and can't run during an encode; without a
+    deew CLI only "Update and install all" is available, and it downloads
+    the CLI first
+  - macOS: with `deew-gui.app` in Applications, the CLI, `config.toml`,
+    `dee/` and the tools are in `~/Library/Application Support/deew/`
+  - `deew-web.exe` has the deew icon
+  - the Linux `deew-gui` uses the 128x128 icon as its window icon,
+    which makes the binary about 1 MB smaller
+
 # deew 5.5.3:
 - new advanced `-p, --pipe auto|always|never` (only in `-fh`): overrides
   the config's `pipe` for one run
