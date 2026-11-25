@@ -1,0 +1,128 @@
+# Manual workflow: build only the macOS CLI (deew-macos) and add it to an existing
+# release. Use it when the "CLI macOS" job of build.yaml got no runner and the
+# release is missing deew-macos. The source is built at the release tag.
+# It does not post to Telegram or Doom9 and does not publish to crates.io.
+name: Upload macOS CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to add deew-macos to, e.g. 5.6.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upload-macos-cli-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: CLI macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout source at the tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          mkdir out
+          lipo -create -output out/deew-macos \
+            target/aarch64-apple-darwin/release/deew \
+            target/x86_64-apple-darwin/release/deew
+          lipo -info out/deew-macos
+
+      - name: Check the version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          chmod +x out/deew-macos
+          first=$(./out/deew-macos -v | head -n 1)
+          echo "$first"
+          case "$first" in
+            *"$TAG"*) ;;
+            *)
+              echo "::error::deew-macos reports '$first', which does not contain the tag $TAG"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-cli-macos
+          path: out/*
+          if-no-files-found: error
+          retention-days: 1
+
+  upload:
+    name: Add to release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Check that the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null; then
+            echo "::error::Release $TAG does not exist in $GITHUB_REPOSITORY"
+            exit 1
+          fi
+
+      - name: Checkout source at the tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bin-cli-macos
+          path: dist
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cd dist
+          gh release upload "$TAG" deew-macos --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$repo" --json assets -q '.assets[].name' > assets.txt
+          python3 dev_scripts/telegram.py notes --version "$TAG" --repo "$repo" --assets assets.txt > notes.md
+          gh release edit "$TAG" --repo "$repo" --notes-file notes.md
+          echo "Updated the description of release $TAG"
+
+      - name: Delete build artifacts of this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          for id in $(gh api --paginate "repos/$repo/actions/runs/$GITHUB_RUN_ID/artifacts" -q '.artifacts[].id'); do
+            gh api -X DELETE "repos/$repo/actions/artifacts/$id"
+            echo "Deleted artifact $id"
+          done
