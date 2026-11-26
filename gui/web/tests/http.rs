@@ -364,7 +364,7 @@ async fn settings_round_trip() {
         .unwrap_or_default();
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "cli", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "theme": "system", "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false, "truehddWarpMode": "", "truehddBedConform": false, "outputTemplate": "{stem}", "translocated": false})
+        serde_json::json!({"progress": "cli", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "theme": "system", "minimumOutputHeight": 320, "titleBar": "custom", "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false, "truehddWarpMode": "", "truehddBedConform": false, "outputTemplate": "{stem}", "translocated": false})
     );
 
     // an extra defaultOutput is ignored, a missing output means empty
@@ -377,7 +377,7 @@ async fn settings_round_trip() {
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "native", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "theme": "system", "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false, "truehddWarpMode": "", "truehddBedConform": false, "outputTemplate": "{stem}", "translocated": false})
+        serde_json::json!({"progress": "native", "output": "", "toInput": false, "scaling": 100, "useSystemFont": false, "theme": "system", "minimumOutputHeight": 320, "titleBar": "custom", "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false, "truehddWarpMode": "", "truehddBedConform": false, "outputTemplate": "{stem}", "translocated": false})
     );
 
     let body =
@@ -391,7 +391,7 @@ async fn settings_round_trip() {
     let r = send(&app, get("/api/settings").body(Body::empty()).unwrap()).await;
     assert_eq!(
         body_json(r).await,
-        serde_json::json!({"progress": "cli", "output": "C:\\Users\\pc\\Music", "toInput": true, "scaling": 100, "useSystemFont": false, "theme": "system", "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false, "truehddWarpMode": "", "truehddBedConform": false, "outputTemplate": "{stem}", "translocated": false})
+        serde_json::json!({"progress": "cli", "output": "C:\\Users\\pc\\Music", "toInput": true, "scaling": 100, "useSystemFont": false, "theme": "system", "minimumOutputHeight": 320, "titleBar": "custom", "defaultOutput": home, "defaultDdpMode": "standard", "defaultDdpAtmosMode": "streaming", "defaultAc4ImsMode": "general", "surroundPhaseShift": true, "lowPassFilter": true, "surround3dbAttenuation": false, "truehddWarpMode": "", "truehddBedConform": false, "outputTemplate": "{stem}", "translocated": false})
     );
 }
 

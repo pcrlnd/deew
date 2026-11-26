@@ -1,3 +1,21 @@
+# deew 5.6.1:
+- `-u` shows the installed version of `deew-gui` and `deew-web` instead of
+  "installed" (from 1.1.0 on; an older one shows its version when it is
+  identical to the release, "unknown" otherwise)
+- `deew-gui`/`deew-web` 1.1.0:
+  - fixed: when the window is too small and the page scrolls, the bottom
+    of the output area now keeps its margin
+  - macOS: new app icon that follows the system appearance (light, dark,
+    and the Clear and Tinted styles of macOS 26)
+  - fixed: the hint in the empty input list says the add buttons are
+    below it (it said above)
+  - new `minimum_output_height` key in `[gui]`: the smallest height of the
+    output area in pixels (320 by default), the page scrolls below it
+  - new `title_bar` key in `[gui]`: `'custom'` (default) keeps deew-gui's
+    own title bar, `'native'` uses the operating system's title bar with
+    a bar under it for Utilities and the theme; takes effect on the next
+    start
+
 # deew 5.6.0:
 - raw TrueHD inputs (`.thd`, `.mlp`) keep their decode progress with the
   next truehdd release: deew passes `--progress` to truehdd when it reads

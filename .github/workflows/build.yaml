@@ -331,17 +331,40 @@ jobs:
         working-directory: gui
         run: npm ci
 
+      # macOS 26 themed icon (light/dark, Clear and Tinted derived by the system):
+      # actool compiles the Icon Composer bundle into Assets.car (found through
+      # CFBundleIconName in src-tauri/Info.plist) and an AppIcon.icns from the same
+      # artwork for older macOS, which replaces icons/icon.icns in this build.
+      - name: Compile the app icon
+        working-directory: gui/src-tauri/icons
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app /Applications/Xcode-26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$xcode" ] && sudo xcode-select -s "$xcode"
+          xcodebuild -version
+          mkdir -p car
+          xcrun actool AppIcon.icon --compile car \
+            --output-format human-readable-text --notices --warnings --errors \
+            --output-partial-info-plist car/partial.plist \
+            --app-icon AppIcon --include-all-app-icons \
+            --enable-on-demand-resources NO --development-region en \
+            --target-device mac --minimum-deployment-target 11.0 --platform macosx
+          ls -la car
+          cat car/partial.plist
+          test -s car/Assets.car || { echo "::error::actool made no Assets.car"; exit 1; }
+          if [ -s car/AppIcon.icns ]; then cp car/AppIcon.icns icon.icns; else echo "::warning::no AppIcon.icns, keeping icon.icns"; fi
+
       # The app is named deew-gui.app through the productName override. The CLI is NOT
       # bundled: the override empties bundle.externalBin (a --config JSON merge patch
       # replaces arrays), the GUI uses the deew-macos kept next to the .app. (The
       # beforeBuildCommand still builds the sidecar; it is just not bundled.)
       # signingIdentity "-" is ad-hoc signing (no secrets needed; arm64 binaries must
-      # be signed to run at all), no notarization.
+      # be signed to run at all), no notarization. bundle.macOS.files copies the compiled
+      # Assets.car (icon) into Contents/Resources.
       - name: Build deew-gui.app (universal, also builds the frontend)
         working-directory: gui
         run: |
           npm run tauri build -- --bundles app --target universal-apple-darwin \
-            --config '{"productName":"deew-gui","bundle":{"externalBin":[],"macOS":{"signingIdentity":"-"}}}'
+            --config '{"productName":"deew-gui","bundle":{"externalBin":[],"macOS":{"signingIdentity":"-","files":{"Resources/Assets.car":"icons/car/Assets.car"}}}}'
 
       - name: Build deew-web (both targets)
         working-directory: gui
@@ -364,11 +387,13 @@ jobs:
         run: |
           unzip -l out/deew-gui-macos.zip
           list=$(unzip -Z1 out/deew-gui-macos.zip)
-          for f in deew-gui.app/Contents/MacOS/deew-gui deew-gui.app/Contents/Info.plist; do
+          for f in deew-gui.app/Contents/MacOS/deew-gui deew-gui.app/Contents/Info.plist deew-gui.app/Contents/Resources/Assets.car; do
             echo "$list" | grep -Fxq "$f" || { echo "::error::$f is missing from the zip"; exit 1; }
           done
           echo "$list" | grep -Eq '^deew-gui\.app/Contents/Resources/[^/]+\.icns$' \
             || { echo "::error::no .icns in Contents/Resources"; exit 1; }
+          icon=$(unzip -p out/deew-gui-macos.zip deew-gui.app/Contents/Info.plist | plutil -extract CFBundleIconName raw -o - -)
+          [ "$icon" = AppIcon ] || { echo "::error::CFBundleIconName is '$icon', expected AppIcon"; exit 1; }
           # the app must not contain the CLI
           if echo "$list" | grep -Fxq deew-gui.app/Contents/MacOS/deew; then
             echo "::error::the CLI (Contents/MacOS/deew) must not be in the app"; exit 1

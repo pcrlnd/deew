@@ -167,6 +167,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
   const viewRef = useRef<OutputView>("cli")
   const [saveError, setSaveError] = useState<string | null>(null)
   const [translocated, setTranslocated] = useState(false)
+  const [outputMinHeight, setOutputMinHeight] = useState(320)
+  const [nativeTitleBar, setNativeTitleBar] = useState(false)
   const [cliMissing, setCliMissing] = useState(false)
   const cliMissingRef = useRef(false)
   // The output directory as last loaded from / sent to the config.
@@ -374,6 +376,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       .then((settings) => {
         if (cancelled) return
         setTranslocated(settings.translocated === true)
+        setOutputMinHeight(settings.minimumOutputHeight)
+        setNativeTitleBar(settings.titleBar === "native")
         if (settings.useSystemFont) {
           document.documentElement.dataset.font = "system"
         }
@@ -876,6 +880,7 @@ export function App({ onLogout }: { onLogout?: () => void }) {
       <div className="flex h-full flex-col">
         {inTauri() && (
           <TitleBar
+            nativeTitleBar={nativeTitleBar}
             encoding={running}
             utilityRunning={utility !== null}
             cliMissing={cliMissing}
@@ -885,8 +890,8 @@ export function App({ onLogout }: { onLogout?: () => void }) {
         )}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-none">
           <div
-            className={`flex h-full flex-col gap-3 p-3 ${
-              inTauri() ? "min-h-[533px]" : "min-h-[560px]"
+            className={`flex flex-col gap-3 p-3 ${
+              inTauri() ? "min-h-[max(100%,533px)]" : "min-h-[max(100%,560px)]"
             }`}
           >
             <OptionsForm
@@ -957,19 +962,24 @@ export function App({ onLogout }: { onLogout?: () => void }) {
               />
             )}
 
-            <div className="flex min-h-80 flex-1 flex-col gap-2">
+            <div
+              className="flex flex-1 flex-col gap-2"
+              style={{ minHeight: outputMinHeight }}
+            >
               {!utilitiesShown && !showTerminal && (
                 <ProgressPane className="min-h-24 flex-1" runs={history.runs} />
               )}
               {/* Always mounted, only hidden: remounting would lose the xterm. */}
               <div
                 className={
-                  !utilitiesShown && showTerminal ? "min-h-0 flex-1" : "hidden"
+                  !utilitiesShown && showTerminal
+                    ? "relative min-h-0 flex-1"
+                    : "hidden"
                 }
               >
                 <TerminalPane
                   ref={terminal}
-                  className="size-full overflow-hidden rounded-lg border border-input p-2"
+                  className="absolute inset-0 overflow-hidden rounded-lg border border-input p-2"
                   onData={onTerminalData}
                   onResize={onTerminalResize}
                 />

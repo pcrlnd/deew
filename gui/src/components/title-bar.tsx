@@ -93,24 +93,8 @@ function WindowControls() {
   )
 }
 
-/**
- * Replaces the native title bar. Only elements that carry
- * `data-tauri-drag-region` themselves drag the window (double click
- * maximizes), so the brand is pointer-transparent.
- */
-export function TitleBar({
-  encoding,
-  utilityRunning,
-  cliMissing = false,
-  onRunInfo,
-  onThemeChange,
-}: {
-  encoding: boolean
-  utilityRunning: boolean
-  cliMissing?: boolean
-  onRunInfo: (flag: InfoFlag) => void
-  onThemeChange: (mode: ThemeMode) => void
-}) {
+/** The logo and "deew-gui <version>" of the custom title bar. */
+function Brand() {
   const [version, setVersion] = useState<string>()
 
   useEffect(() => {
@@ -126,20 +110,52 @@ export function TitleBar({
   }, [])
 
   return (
-    <header
+    <div
       data-tauri-drag-region
+      className="pointer-events-none flex items-center gap-2 pl-3"
+    >
+      <img src="/icon.png" alt="" className="size-4" />
+      <span className="text-xs font-semibold">
+        {version ? `deew-gui ${version}` : "deew-gui"}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Replaces the native title bar (or, with `nativeTitleBar`, a toolbar under it). Only elements that carry
+ * `data-tauri-drag-region` themselves drag the window (double click
+ * maximizes), so the brand is pointer-transparent.
+ */
+export function TitleBar({
+  encoding,
+  utilityRunning,
+  cliMissing = false,
+  onRunInfo,
+  onThemeChange,
+  nativeTitleBar = false,
+}: {
+  encoding: boolean
+  utilityRunning: boolean
+  cliMissing?: boolean
+  onRunInfo: (flag: InfoFlag) => void
+  onThemeChange: (mode: ThemeMode) => void
+  /** The OS draws the title bar: a plain toolbar, no drag region or window buttons. */
+  nativeTitleBar?: boolean
+}) {
+  return (
+    <header
+      data-tauri-drag-region={nativeTitleBar ? undefined : true}
       className="flex h-[27px] shrink-0 items-center border-b border-border bg-background select-none"
     >
-      <div
-        data-tauri-drag-region
-        className="pointer-events-none flex items-center gap-2 pl-3"
-      >
-        <img src="/icon.png" alt="" className="size-4" />
-        <span className="text-xs font-semibold">
-          {version ? `deew-gui ${version}` : "deew-gui"}
-        </span>
-      </div>
-      <div data-tauri-drag-region className="h-full flex-1" />
+      {nativeTitleBar ? (
+        <div className="flex-1" />
+      ) : (
+        <>
+          <Brand />
+          <div data-tauri-drag-region className="h-full flex-1" />
+        </>
+      )}
       <div className="mr-1 flex items-center gap-1">
         <UtilitiesMenu
           encoding={encoding}
@@ -149,7 +165,7 @@ export function TitleBar({
         />
         <ThemeMenu onChange={onThemeChange} />
       </div>
-      {inTauri() && <WindowControls />}
+      {inTauri() && !nativeTitleBar && <WindowControls />}
     </header>
   )
 }

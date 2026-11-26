@@ -154,7 +154,14 @@ async fn run(args: Options) -> Result<(), String> {
     Ok(())
 }
 
+// `deew -u` reads this string out of the binary to learn the installed
+// version, so it must survive LTO and section GC (`#[used]` plus the
+// `black_box` in `main`).
+#[used]
+static VERSION_MARK: &str = concat!("\0deew-web-version=", env!("CARGO_PKG_VERSION"), "\0");
+
 fn main() {
+    std::hint::black_box(VERSION_MARK);
     let args = match cmdline::parse(std::env::args().skip(1)) {
         Ok(Command::Help) => {
             cmdline::print_help();

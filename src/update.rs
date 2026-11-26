@@ -222,8 +222,9 @@ fn gui_dir(
 #[derive(Debug, PartialEq, Eq)]
 enum Local {
     Missing,
-    /// A bare binary, or the running deew.
-    Binary,
+    /// A bare binary, or the running deew. For deew-gui and deew-web, the
+    /// version found in the file's marker, when there is one.
+    Binary(Option<String>),
     /// `deew-gui.app` with its version, when it could be read.
     App(Option<String>),
     /// The bare `deew-gui-macos` of the old releases.
@@ -251,9 +252,55 @@ fn local_state(names: &Names, comp: Comp, dir: &Path) -> Local {
         return Local::Missing;
     }
     if local.is_file() {
-        Local::Binary
+        Local::Binary(match comp {
+            Comp::Deew => None,
+            _ => binary_marker_version(&local, comp),
+        })
     } else {
         Local::Missing
+    }
+}
+
+/// The version a deew-gui / deew-web binary carries in its `VERSION_MARK`
+/// (`\0deew-gui-version=1.0.1\0`). The file is only read, never run.
+fn binary_marker_version(path: &Path, comp: Comp) -> Option<String> {
+    let prefix: &[u8] = match comp {
+        Comp::Gui => b"\0deew-gui-version=",
+        Comp::Web => b"\0deew-web-version=",
+        Comp::Deew => return None,
+    };
+    scan_marker(File::open(path).ok()?, prefix, 256 * 1024)
+}
+
+/// Scans `reader` for `prefix` followed by a version and a NUL byte, in chunks
+/// of `chunk` bytes (a marker may span two of them).
+fn scan_marker(mut reader: impl Read, prefix: &[u8], chunk: usize) -> Option<String> {
+    const MAX_VERSION: usize = 64;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut block = vec![0u8; chunk];
+    loop {
+        let n = reader.read(&mut block).ok()?;
+        if n == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&block[..n]);
+        if let Some(pos) = buf.windows(prefix.len()).position(|w| w == prefix) {
+            let rest = &buf[pos + prefix.len()..];
+            if let Some(end) = rest.iter().position(|&b| b == 0) {
+                let version = std::str::from_utf8(&rest[..end]).ok()?.trim();
+                return (!version.is_empty()).then(|| version.to_string());
+            }
+            if rest.len() > MAX_VERSION {
+                return None;
+            }
+            // the version continues in the next chunk
+            buf.drain(..pos);
+        } else {
+            let keep = prefix.len() - 1;
+            if buf.len() > keep {
+                buf.drain(..buf.len() - keep);
+            }
+        }
     }
 }
 
@@ -416,9 +463,27 @@ fn make_plan(cx: &Context) -> Vec<Item> {
                 cx.dir
             };
             let local = if comp == Comp::Deew {
-                Local::Binary
+                Local::Binary(None)
             } else {
                 local_state(&cx.names, comp, dir)
+            };
+            let local_path = if comp == Comp::Deew {
+                cx.exe.to_path_buf()
+            } else {
+                dir.join(cx.names.local(comp))
+            };
+            // a bare binary without a marker (older builds) that is byte for
+            // byte the release asset is the release's version
+            let by_asset = match (&local, comp, &asset) {
+                (Local::Binary(None), Comp::Gui | Comp::Web, Some(a)) => asset_digest(a)
+                    .filter(|d| sha256_file(&local_path).ok().as_ref() == Some(d))
+                    .and_then(|_| cx.versions.of(comp).map(str::to_string)),
+                _ => None,
+            };
+            let known = match &local {
+                Local::App(v) => v.clone(),
+                Local::Binary(v) if comp != Comp::Deew => v.clone().or(by_asset),
+                _ => None,
             };
             let mut item = Item {
                 comp,
@@ -426,8 +491,7 @@ fn make_plan(cx: &Context) -> Vec<Item> {
                 current: match &local {
                     Local::Missing => "missing".to_string(),
                     _ if comp == Comp::Deew => cx.deew_version.to_string(),
-                    Local::App(Some(v)) => v.clone(),
-                    _ => "installed".to_string(),
+                    _ => known.clone().unwrap_or_else(|| "unknown".to_string()),
                 },
                 latest,
                 action: Action::UpToDate,
@@ -442,16 +506,11 @@ fn make_plan(cx: &Context) -> Vec<Item> {
                 item.action = Action::Unavailable;
                 return item;
             };
-            let local_path = if comp == Comp::Deew {
-                cx.exe.to_path_buf()
+            // the local version, when known
+            let have = if comp == Comp::Deew {
+                Some(cx.deew_version)
             } else {
-                dir.join(cx.names.local(comp))
-            };
-            // the local version, when known (the macOS app, or the running deew)
-            let have = match &local {
-                Local::App(v) => v.as_deref(),
-                _ if comp == Comp::Deew => Some(cx.deew_version),
-                _ => None,
+                known.as_deref()
             };
             let want = if comp == Comp::Deew {
                 Some(tag)
@@ -1106,8 +1165,29 @@ mod tests {
         let lin = platform_names(LINUX).unwrap();
         assert_eq!(local_state(&lin, Comp::Gui, dir.path()), Local::Missing);
         std::fs::write(dir.path().join("deew-gui"), b"x").unwrap();
-        assert_eq!(local_state(&lin, Comp::Gui, dir.path()), Local::Binary);
-        assert_eq!(local_state(&lin, Comp::Web, dir.path()), Local::Missing);
+        assert_eq!(
+            local_state(&lin, Comp::Gui, dir.path()),
+            Local::Binary(None)
+        );
+        std::fs::write(
+            dir.path().join("deew-gui"),
+            b"junk\0deew-gui-version=1.2.3\0junk",
+        )
+        .unwrap();
+        assert_eq!(
+            local_state(&lin, Comp::Gui, dir.path()),
+            Local::Binary(Some("1.2.3".into()))
+        );
+        // the web marker is not the gui marker
+        std::fs::write(
+            dir.path().join("deew-web"),
+            b"junk\0deew-gui-version=1.2.3\0junk",
+        )
+        .unwrap();
+        assert_eq!(
+            local_state(&lin, Comp::Web, dir.path()),
+            Local::Binary(None)
+        );
 
         let mac = platform_names(MAC).unwrap();
         assert_eq!(local_state(&mac, Comp::Gui, dir.path()), Local::Missing);
@@ -1148,7 +1228,7 @@ mod tests {
         );
         assert_eq!(items[0].current, DEEW_VERSION);
         assert_eq!(items[0].latest, "9.9.9");
-        assert_eq!(items[1].current, "installed");
+        assert_eq!(items[1].current, "unknown");
         assert_eq!(items[1].latest, "2.0.0");
         assert_eq!(items[2].current, "missing");
         assert!(items[1].asset.is_some() && items[0].asset.is_none());
@@ -1194,6 +1274,65 @@ mod tests {
     }
 
     #[test]
+    fn marker_scan_across_chunks() {
+        let mut data = vec![b'a'; 100];
+        data.extend_from_slice(b"\0deew-web-version=1.2.3\0");
+        data.extend_from_slice(&[b'b'; 50]);
+        let prefix = b"\0deew-web-version=";
+        for chunk in [1, 2, 7, 13, 100, 105, 110, 4096] {
+            assert_eq!(
+                scan_marker(&data[..], prefix, chunk),
+                Some("1.2.3".to_string()),
+                "chunk {chunk}"
+            );
+        }
+        assert_eq!(scan_marker(&b"nothing here"[..], prefix, 4), None);
+        assert_eq!(scan_marker(&b"\0deew-web-version=1.2"[..], prefix, 4), None);
+    }
+
+    #[test]
+    fn plan_of_bare_binaries_by_marker_and_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("deew");
+        std::fs::write(&exe, b"deew new").unwrap();
+        let names = platform_names(LINUX).unwrap();
+        let gui = dir.path().join("deew-gui");
+        let web = dir.path().join("deew-web");
+        let mark = |name: &str, v: &str| format!("xx\0{name}-version={v}\0yy").into_bytes();
+        let assets = [
+            asset("deew", b"deew new"),
+            asset("deew-gui", b"gui release"),
+            asset("deew-web", b"web release"),
+        ];
+        // marker older / equal / newer than 2.0.0 (gui) and the web version
+        let v = versions();
+        let web_latest = v.web.clone().unwrap();
+        for (gui_v, want) in [
+            ("1.9.9", Action::Update),
+            ("2.0.0", Action::UpToDate),
+            ("2.0.1", Action::Newer),
+        ] {
+            std::fs::write(&gui, mark("deew-gui", gui_v)).unwrap();
+            std::fs::write(&web, mark("deew-web", &web_latest)).unwrap();
+            let items = plan_for(names, dir.path(), &exe, false, &assets, &v);
+            assert_eq!(items[1].current, gui_v);
+            assert_eq!(items[1].action, want);
+            assert_eq!(items[2].current, web_latest);
+            assert_eq!(items[2].action, Action::UpToDate);
+        }
+        // no marker, same bytes as the release: the release version
+        std::fs::write(&gui, b"gui release").unwrap();
+        let items = plan_for(names, dir.path(), &exe, false, &assets, &v);
+        assert_eq!(items[1].current, "2.0.0");
+        assert_eq!(items[1].action, Action::UpToDate);
+        // no marker, other bytes: unknown and outdated
+        std::fs::write(&gui, b"gui other").unwrap();
+        let items = plan_for(names, dir.path(), &exe, false, &assets, &v);
+        assert_eq!(items[1].current, "unknown");
+        assert_eq!(items[1].action, Action::Update);
+    }
+
+    #[test]
     fn plan_of_the_mac_app() {
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("deew-macos");
@@ -1208,7 +1347,7 @@ mod tests {
         // version unknown: outdated
         let items = plan_for(names, dir.path(), &exe, false, &assets, &versions());
         assert_eq!(items[1].action, Action::Update);
-        assert_eq!(items[1].current, "installed");
+        assert_eq!(items[1].current, "unknown");
         std::fs::write(
             contents.join("Info.plist"),
             "<key>CFBundleShortVersionString</key><string>1.0.0</string>",

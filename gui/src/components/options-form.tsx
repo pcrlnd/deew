@@ -464,8 +464,8 @@ export function OptionsForm({
           {value.inputs.length === 0 ? (
             <p className="px-2 py-3 text-center text-muted-foreground">
               {inWeb()
-                ? "Use the buttons above to add files or folders."
-                : "Drop audio files or folders here, or use the buttons above."}
+                ? "Use the buttons below to add files or folders."
+                : "Drop audio files or folders here, or use the buttons below."}
             </p>
           ) : (
             <ul>

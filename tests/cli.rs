@@ -191,7 +191,7 @@ fn template_matches_python() {
     assert!(t.contains("max_instances = '50%'\n"));
     assert!(t.contains("    other = true\n"));
     assert!(t.ends_with(
-        "[gui]\n    progress = 'cli'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n"
+        "[gui]\n    progress = 'cli'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n    minimum_output_height = 320\n    title_bar = 'custom'\n"
     ));
 }
 

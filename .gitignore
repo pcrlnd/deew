@@ -24,6 +24,7 @@ gui/target
 gui/target-win
 gui/src-tauri/binaries
 gui/src-tauri/gen/schemas
+gui/src-tauri/icons/car
 
 # deew
 /temp*

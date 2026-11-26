@@ -38,6 +38,34 @@ impl ProgressView {
     }
 }
 
+/// `gui.title_bar`: the window frame of deew-gui.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TitleBar {
+    /// deew-gui draws its own title bar.
+    #[default]
+    Custom,
+    /// The operating system's window border.
+    Native,
+}
+
+impl TitleBar {
+    fn from_str(value: &str) -> Option<TitleBar> {
+        match value {
+            "custom" => Some(TitleBar::Custom),
+            "native" => Some(TitleBar::Native),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            TitleBar::Custom => "custom",
+            TitleBar::Native => "native",
+        }
+    }
+}
+
 /// `gui.theme`: the colour theme of deew-gui.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -90,6 +118,18 @@ pub struct GuiSettings {
     /// `save_theme`; saving the other settings keeps the value in the file.
     #[serde(default)]
     pub theme: ThemeMode,
+    /// `gui.minimum_output_height`: the smallest height of the output area in
+    /// pixels (100 to 4000). Read-only for the GUI.
+    #[serde(default = "default_minimum_output_height")]
+    pub minimum_output_height: u16,
+    /// `gui.title_bar`: 'custom' or 'native' (deew-gui, read at startup).
+    /// Read-only for the GUI: saving keeps the value in the file.
+    #[serde(default)]
+    pub title_bar: TitleBar,
+}
+
+fn default_minimum_output_height() -> u16 {
+    320
 }
 
 fn default_scaling() -> u16 {
@@ -105,8 +145,29 @@ impl Default for GuiSettings {
             scaling: default_scaling(),
             use_system_font: false,
             theme: ThemeMode::default(),
+            minimum_output_height: default_minimum_output_height(),
+            title_bar: TitleBar::default(),
         }
     }
+}
+
+/// `gui.minimum_output_height` in pixels: `320`, `'320'` or `'320px'`,
+/// clamped to 100..=4000. Anything else gives 320.
+fn parse_minimum_output_height(value: Option<&toml::Value>) -> u16 {
+    let number = match value {
+        Some(toml::Value::String(s)) => s
+            .trim()
+            .strip_suffix("px")
+            .unwrap_or(s.trim())
+            .trim()
+            .parse::<i64>()
+            .ok(),
+        Some(toml::Value::Integer(i)) => Some(*i),
+        _ => None,
+    };
+    number.map_or(default_minimum_output_height(), |n| {
+        n.clamp(100, 4000) as u16
+    })
 }
 
 /// `gui.scaling` as a percent: `'125%'`, `'125'` or `125`, clamped to 80..=150.
@@ -290,6 +351,8 @@ const SECTION_COMMENT: &str = "# Settings of deew-gui and deew-web:
 # scaling: zoom of the deew-gui window, '80%' to '150%' (deew-web uses the browser's zoom).
 # use_system_font: true uses the system's font instead of the bundled IBM Plex Sans.
 # theme: 'system' follows the operating system, 'light' or 'dark' (deew-gui; deew-web keeps its own per browser).
+# minimum_output_height: the smallest height of the output area (CLI output, progress, utilities) in pixels, the page scrolls when the window is smaller.
+# title_bar: 'custom' draws deew-gui's own title bar, 'native' uses the operating system's (deew-gui, restart to apply).
 ";
 
 /// Comment above the section when it is added to an existing config.
@@ -329,6 +392,12 @@ pub fn parse(text: &str) -> GuiSettings {
         .and_then(|g| g.get("theme")?.as_str())
         .and_then(ThemeMode::from_str)
         .unwrap_or_default();
+    let minimum_output_height =
+        parse_minimum_output_height(gui.and_then(|g| g.get("minimum_output_height")));
+    let title_bar = gui
+        .and_then(|g| g.get("title_bar")?.as_str())
+        .and_then(TitleBar::from_str)
+        .unwrap_or_default();
     GuiSettings {
         progress,
         output,
@@ -336,6 +405,8 @@ pub fn parse(text: &str) -> GuiSettings {
         scaling,
         use_system_font,
         theme,
+        minimum_output_height,
+        title_bar,
     }
 }
 
@@ -438,11 +509,13 @@ pub fn update_text(text: &str, settings: &GuiSettings) -> Result<String, String>
         blank(&mut out);
         out.push_str(SECTION_COMMENT);
         out.push_str(&format!(
-            "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n    theme = '{}'\n",
+            "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n    theme = '{}'\n    minimum_output_height = {}\n    title_bar = '{}'\n",
             settings.progress.as_str(),
             settings.scaling,
             settings.use_system_font,
-            settings.theme.as_str()
+            settings.theme.as_str(),
+            settings.minimum_output_height,
+            settings.title_bar.as_str()
         ));
     }
     Ok(out)
@@ -468,11 +541,13 @@ pub fn update_theme_text(text: &str, theme: ThemeMode) -> Result<String, String>
     out.push_str(SECTION_COMMENT);
     let defaults = GuiSettings::default();
     out.push_str(&format!(
-        "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n    theme = '{}'\n",
+        "[gui]\n    progress = '{}'\n    scaling = '{}%'\n    use_system_font = {}\n    theme = '{}'\n    minimum_output_height = {}\n    title_bar = '{}'\n",
         defaults.progress.as_str(),
         defaults.scaling,
         defaults.use_system_font,
-        theme.as_str()
+        theme.as_str(),
+        defaults.minimum_output_height,
+        defaults.title_bar.as_str()
     ));
     Ok(out)
 }
@@ -532,7 +607,7 @@ mod tests {
 
     fn gui_block(value: &str) -> String {
         format!(
-            "{SECTION_COMMENT}[gui]\n    progress = '{value}'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n"
+            "{SECTION_COMMENT}[gui]\n    progress = '{value}'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n    minimum_output_height = 320\n    title_bar = 'custom'\n"
         )
     }
 
@@ -544,7 +619,7 @@ mod tests {
     fn serde_shape() {
         assert_eq!(
             serde_json::to_string(&native()).unwrap(),
-            r#"{"progress":"native","output":"","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system"}"#
+            r#"{"progress":"native","output":"","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system","minimumOutputHeight":320,"titleBar":"custom"}"#
         );
         let cli: GuiSettings = serde_json::from_str(r#"{"progress":"cli"}"#).unwrap();
         assert_eq!(cli, GuiSettings::default());
@@ -560,7 +635,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system","defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}","translocated":false}"#
+            r#"{"progress":"cli","output":"/m","toInput":false,"scaling":100,"useSystemFont":false,"theme":"system","minimumOutputHeight":320,"titleBar":"custom","defaultOutput":"/h","defaultDdpMode":"","defaultDdpAtmosMode":"","defaultAc4ImsMode":"","surroundPhaseShift":true,"lowPassFilter":true,"surround3dbAttenuation":false,"truehddWarpMode":"","truehddBedConform":false,"outputTemplate":"{stem}","translocated":false}"#
         );
         let o: GuiSettings = serde_json::from_str(r#"{"progress":"cli","toInput":true}"#).unwrap();
         assert!(o.to_input);
@@ -671,6 +746,30 @@ mod tests {
     }
 
     #[test]
+    fn minimum_output_height_parse() {
+        let f = |t: &str| parse(t).minimum_output_height;
+        assert_eq!(f(""), 320);
+        assert_eq!(f("[gui]\nminimum_output_height = 400\n"), 400);
+        assert_eq!(f("[gui]\nminimum_output_height = '450'\n"), 450);
+        assert_eq!(f("[gui]\nminimum_output_height = '500px'\n"), 500);
+        assert_eq!(f("[gui]\nminimum_output_height = 10\n"), 100);
+        assert_eq!(f("[gui]\nminimum_output_height = 99999\n"), 4000);
+        assert_eq!(f("[gui]\nminimum_output_height = 'tall'\n"), 320);
+        assert_eq!(f("[gui]\nminimum_output_height = true\n"), 320);
+        assert_eq!(f("[gui]\nminimum_output_height = 1.5\n"), 320);
+    }
+
+    #[test]
+    fn title_bar_parse() {
+        let f = |t: &str| parse(t).title_bar;
+        assert_eq!(f(""), TitleBar::Custom);
+        assert_eq!(f("[gui]\ntitle_bar = 'native'\n"), TitleBar::Native);
+        assert_eq!(f("[gui]\ntitle_bar = 'custom'\n"), TitleBar::Custom);
+        assert_eq!(f("[gui]\ntitle_bar = 'Native'\n"), TitleBar::Custom);
+        assert_eq!(f("[gui]\ntitle_bar = true\n"), TitleBar::Custom);
+    }
+
+    #[test]
     fn use_system_font_parse() {
         let f = |t: &str| parse(t).use_system_font;
         assert!(f("[gui]\nuse_system_font = true\n"));
@@ -714,7 +813,7 @@ mod tests {
     fn new_gui_section_has_all_keys() {
         let updated = update_text("", &native()).unwrap();
         assert!(
-            updated.ends_with("[gui]\n    progress = 'native'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n"),
+            updated.ends_with("[gui]\n    progress = 'native'\n    scaling = '100%'\n    use_system_font = false\n    theme = 'system'\n    minimum_output_height = 320\n    title_bar = 'custom'\n"),
             "{updated}"
         );
         let custom = GuiSettings {
@@ -726,7 +825,7 @@ mod tests {
         let updated = update_text("", &custom).unwrap();
         assert!(
             updated.ends_with(
-                "    scaling = '125%'\n    use_system_font = true\n    theme = 'dark'\n"
+                "    scaling = '125%'\n    use_system_font = true\n    theme = 'dark'\n    minimum_output_height = 320\n    title_bar = 'custom'\n"
             ),
             "{updated}"
         );

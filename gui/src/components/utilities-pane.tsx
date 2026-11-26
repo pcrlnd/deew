@@ -27,7 +27,7 @@ export const UtilitiesPane = forwardRef<TerminalHandle, UtilitiesPaneProps>(
         {/* Input is forwarded: on Windows the ConPTY waits for the cursor position reply before it prints anything. */}
         <TerminalPane
           ref={ref}
-          className="size-full overflow-hidden rounded-lg border border-input p-2"
+          className="absolute inset-0 overflow-hidden rounded-lg border border-input p-2"
           onData={onData}
           onResize={onResize}
         />

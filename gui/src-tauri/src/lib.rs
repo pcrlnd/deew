@@ -4,7 +4,7 @@ use deew_gui_core::cli;
 use deew_gui_core::info::{self, Gate, InfoSession};
 use deew_gui_core::probe::ProbeResult;
 use deew_gui_core::pty_session::{self, PtySession, SpawnConfig};
-use deew_gui_core::settings::{GuiSettings, SettingsView, ThemeMode};
+use deew_gui_core::settings::{GuiSettings, SettingsView, ThemeMode, TitleBar};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -353,7 +353,13 @@ pub fn run() {
                     if let Err(e) = window.set_title(&title) {
                         log::warn!("could not set the window title: {e}");
                     }
-                    let scaling = cli::gui_settings().settings.scaling;
+                    let settings = cli::gui_settings().settings;
+                    if settings.title_bar == TitleBar::Native
+                        && let Err(e) = window.set_decorations(true)
+                    {
+                        log::warn!("could not enable the native window border: {e}");
+                    }
+                    let scaling = settings.scaling;
                     if scaling != 100
                         && let Err(e) = window.set_zoom(f64::from(scaling) / 100.0)
                     {

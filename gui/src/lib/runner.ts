@@ -281,6 +281,10 @@ export interface LoadedGuiSettings extends GuiSettings {
   useSystemFont: boolean
   /** `gui.theme`: 'system', 'light' or 'dark' (deew-gui only; deew-web ignores it). */
   theme: ThemeMode
+  /** `gui.minimum_output_height`: the smallest height of the output area in px. */
+  minimumOutputHeight: number
+  /** `gui.title_bar`: 'custom' or 'native' (deew-gui only, read at startup). */
+  titleBar: "custom" | "native"
   /** macOS runs deew-gui from a temporary copy (App Translocation). */
   translocated: boolean
   /** The folder deew runs in (the home folder), empty when unknown. */
