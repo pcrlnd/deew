@@ -1,0 +1,189 @@
+# TEMPORARY: finds out why actool rejects gui/src-tauri/icons/AppIcon.icon
+# ("The data couldn't be read because it isn't in the correct format."). Delete this
+# file and .github/icon-test/ after the icon works.
+name: Icon test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  icon-test:
+    name: Icon test
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app /Applications/Xcode-26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$xcode" ] && sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Find ictool
+        run: |
+          apps="$(dirname "$(xcode-select -p)")/Applications"
+          ictool="$apps/Icon Composer.app/Contents/Executables/ictool"
+          if [ -e "$ictool" ]; then echo "ictool exists: $ictool"; else echo "ictool NOT found: $ictool"; fi
+          ls -la "$apps" || true
+
+      - name: Generate the variants
+        run: |
+          python3 - <<'PY'
+          import copy, json, os, shutil
+          src = "gui/src-tauri/icons/AppIcon.icon"
+          root = os.path.join(os.environ["RUNNER_TEMP"], "v")
+          base = json.load(open(os.path.join(src, "icon.json")))
+          light = base["fill-specializations"][0]["value"]
+          dark = base["fill-specializations"][1]
+
+          def layer(d):
+              return d["groups"][0]["layers"][0]
+
+          def fill_only(d):
+              del d["fill-specializations"]
+              d["fill"] = copy.deepcopy(light)
+
+          def v_no_colorspace(d):
+              del d["color-space-for-untagged-svg-colors"]
+
+          def v_fill_only_no_orientation(d):
+              fill_only(d)
+              del d["fill"]["orientation"]
+
+          def v_solid(d):
+              del d["fill-specializations"]
+              d["fill"] = {"solid": "srgb:1.00000,1.00000,1.00000,1.00000"}
+
+          def v_automatic(d):
+              del d["fill-specializations"]
+              d["fill"] = "automatic"
+
+          def v_no_glass(d):
+              del layer(d)["glass"]
+
+          def v_no_group_effects(d):
+              for k in ("shadow", "specular", "translucency"):
+                  del d["groups"][0][k]
+
+          def v_shadow_neutral(d):
+              d["groups"][0]["shadow"]["kind"] = "neutral"
+
+          def v_extended(d):
+              d.update(json.loads(json.dumps(d).replace('"srgb:', '"extended-srgb:')))
+
+          def v_dark_plus(d):
+              d["fill"] = copy.deepcopy(light)
+              d["fill-specializations"] = [copy.deepcopy(dark)]
+
+          def minimal(image):
+              return {
+                  "fill": {"automatic-gradient": "extended-srgb:0.00000,0.53333,1.00000,1.00000"},
+                  "groups": [{
+                      "layers": [{"image-name": image, "name": "deew"}],
+                      "shadow": {"kind": "neutral", "opacity": 0.5},
+                      "translucency": {"enabled": True, "value": 0.5},
+                  }],
+                  "supported-platforms": {"circles": ["watchOS"], "squares": "shared"},
+              }
+
+          def v_as_is_png(d):
+              layer(d)["image-name"] = "deew.png"
+
+          variants = {
+              "as-is": lambda d: None,
+              "no-colorspace": v_no_colorspace,
+              "fill-only": fill_only,
+              "fill-only-no-orientation": v_fill_only_no_orientation,
+              "solid": v_solid,
+              "automatic-fill": v_automatic,
+              "no-glass-key": v_no_glass,
+              "no-group-effects": v_no_group_effects,
+              "shadow-neutral": v_shadow_neutral,
+              "extended-srgb": v_extended,
+              "dark-specialization-only-fill-plus-dark": v_dark_plus,
+              "minimal": None,
+              "minimal-png": None,
+              "as-is-png": v_as_is_png,
+          }
+
+          for name, fn in variants.items():
+              if name == "minimal":
+                  d = minimal("deew.svg")
+              elif name == "minimal-png":
+                  d = minimal("deew.png")
+              else:
+                  d = copy.deepcopy(base)
+                  fn(d)
+              # the folder must be called AppIcon.icon to match --app-icon AppIcon
+              out = os.path.join(root, name, "AppIcon.icon")
+              shutil.copytree(os.path.join(src, "Assets"), os.path.join(out, "Assets"))
+              shutil.copy(".github/icon-test/deew.png", os.path.join(out, "Assets", "deew.png"))
+              with open(os.path.join(out, "icon.json"), "w") as f:
+                  json.dump(d, f, indent=2)
+                  f.write("\n")
+              print("generated", name)
+          PY
+
+      - name: Compile and render the variants
+        run: |
+          set +e
+          apps="$(dirname "$(xcode-select -p)")/Applications"
+          ICTOOL="$apps/Icon Composer.app/Contents/Executables/ictool"
+          [ -e "$ICTOOL" ] || ICTOOL=""
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          : > "$out/summary.txt"
+          printf '%-42s %-6s %-12s %-10s %s\n' variant actool Assets.car AppIcon.icns ictool >> "$out/summary.txt"
+
+          for dir in "$RUNNER_TEMP"/v/*/; do
+            name=$(basename "$dir")
+            icon="$dir/AppIcon.icon"
+            car="$out/$name"
+            mkdir -p "$car"
+            echo
+            echo "=================== $name ==================="
+            xcrun actool "$icon" --compile "$car" \
+              --output-format human-readable-text --notices --warnings --errors \
+              --output-partial-info-plist "$car/partial.plist" \
+              --app-icon AppIcon --include-all-app-icons \
+              --enable-on-demand-resources NO --development-region en \
+              --target-device mac --minimum-deployment-target 11.0 --platform macosx
+            code=$?
+            echo "actool exit code: $code"
+            ls -la "$car"
+            [ -f "$car/partial.plist" ] && [ "$code" = 0 ] && plutil -p "$car/partial.plist"
+            if [ "$code" = 0 ]; then actool=ok; else actool=fail; fi
+            if [ -f "$car/Assets.car" ]; then size=$(stat -f %z "$car/Assets.car"); else size=-; fi
+            if [ -f "$car/AppIcon.icns" ]; then icns=yes; else icns=no; fi
+
+            ict=n/a
+            if [ -n "$ICTOOL" ]; then
+              ict=ok
+              for rendition in Default Dark; do
+                "$ICTOOL" "$icon" --export-image --output-file "$out/$name-$rendition.png" \
+                  --platform macOS --rendition "$rendition" --width 512 --height 512 --scale 1
+                c=$?
+                echo "ictool $rendition exit code: $c"
+                [ "$c" = 0 ] || ict=fail
+              done
+            fi
+            printf '%-42s %-6s %-12s %-10s %s\n' "$name" "$actool" "$size" "$icns" "$ict" >> "$out/summary.txt"
+          done
+
+          echo
+          echo "=================== summary ==================="
+          cat "$out/summary.txt"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: icon-test
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 3

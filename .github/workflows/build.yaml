@@ -103,6 +103,14 @@ jobs:
               || echo "::warning::Posting the build started message to Telegram failed"
           done
 
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
+
   cli-linux:
     name: CLI Linux
     runs-on: ubuntu-latest
@@ -137,6 +145,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
+
   cli-windows:
     name: CLI Windows
     runs-on: windows-latest
@@ -168,6 +184,14 @@ jobs:
           path: out/*
           if-no-files-found: error
           retention-days: 1
+
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   cli-macos:
     name: CLI macOS
@@ -204,6 +228,14 @@ jobs:
           path: out/*
           if-no-files-found: error
           retention-days: 1
+
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   gui-linux:
     name: GUI/Web Linux
@@ -258,6 +290,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
+
   gui-windows:
     name: GUI/Web Windows
     runs-on: windows-latest
@@ -304,6 +344,14 @@ jobs:
           path: out/*
           if-no-files-found: error
           retention-days: 1
+
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   gui-macos:
     name: GUI/Web macOS
@@ -406,6 +454,14 @@ jobs:
           path: out/*
           if-no-files-found: error
           retention-days: 1
+
+      # one failed job cancels the whole run (GitHub keeps the others running otherwise)
+      - name: Cancel the run
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   release:
     name: Release
