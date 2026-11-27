@@ -1,4 +1,4 @@
-//! The external programs (DEE tools, truehdd, dee_shim, ffmpeg, ffprobe) and
+//! The external programs (DEE tools, truehdd, harletty, dee_shim, ffmpeg, ffprobe) and
 //! the temp directory.
 
 use crate::data::ErrorKind;
@@ -102,6 +102,16 @@ pub fn find_truehdd(exe_dir: &Path, cwd: &Path) -> Option<String> {
 pub fn require_truehdd(exe_dir: &Path, cwd: &Path) -> String {
     find_truehdd(exe_dir, cwd)
         .unwrap_or_else(|| print_exit(ErrorKind::BinaryExist, Some("truehdd")))
+}
+
+/// The harletty binary (see [`find_program`]).
+pub fn find_harletty(exe_dir: &Path, cwd: &Path) -> Option<String> {
+    find_program("harletty", exe_dir, cwd)
+}
+
+/// Like [`find_harletty`] but exits with an error when it is missing.
+pub fn require_harletty(exe_dir: &Path, cwd: &Path) -> String {
+    find_harletty(exe_dir, cwd).unwrap_or_else(|| print_exit(ErrorKind::HarlettyMissing, None))
 }
 
 /// dee_shim: the `dee_shim` runner (it injects the library next to it).
@@ -243,6 +253,15 @@ pub fn parse_truehdd_version(output: &str) -> Option<String> {
     words.next().map(str::to_string)
 }
 
+/// `0.9.0` from the output of `harletty taxonomy`, one JSON object whose
+/// `harletty` field is the crate version. (`harletty --version` only prints
+/// a git hash.)
+pub fn parse_harletty_version(output: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(output.lines().next()?).ok()?;
+    let version = value.get("harletty")?.as_str()?.trim();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// `0.1.0+282-g0301b3e` from `dee_shim v0.1.0+282-g0301b3e`.
 pub fn parse_shim_version(output: &str) -> Option<String> {
     let mut words = output.lines().next()?.split_whitespace();
@@ -257,6 +276,9 @@ pub fn parse_shim_version(output: &str) -> Option<String> {
 pub const MIN_SHIM: [u64; 3] = [0, 4, 0];
 /// The oldest truehdd deew works with.
 pub const MIN_TRUEHDD: [u64; 3] = [0, 6, 3];
+/// The oldest harletty deew works with (the first release with `info --json`,
+/// `taxonomy` and the DTS input of `decode`).
+pub const MIN_HARLETTY: [u64; 3] = [0, 9, 0];
 
 /// `[0, 1, 0]` from `0.1.0+282-g0301b3e`: the numbers before the first `+`
 /// or `-` (build metadata and pre-release tags are ignored). Missing parts
@@ -307,6 +329,16 @@ pub fn require_truehdd_version(truehdd: &str) {
     }
 }
 
+/// Exits with an error if harletty is older than [`MIN_HARLETTY`] or its
+/// version can't be read. Run once, for a run that uses it.
+pub fn require_harletty_version(harletty: &str) {
+    match check_min_version(&harletty_version(harletty), MIN_HARLETTY) {
+        Ok(()) => {}
+        Err(Some(found)) => print_exit(ErrorKind::HarlettyOld, Some(&found)),
+        Err(None) => print_exit(ErrorKind::HarlettyVersion, None),
+    }
+}
+
 /// Version of the DEE tools, read from the `--help` of one of them.
 pub fn dee_version(tool: &str) -> Version {
     Version::from_output(output_of(tool, &["--help"]), parse_dee_version)
@@ -314,6 +346,11 @@ pub fn dee_version(tool: &str) -> Version {
 
 pub fn truehdd_version(truehdd: &str) -> Version {
     Version::from_output(output_of(truehdd, &["--version"]), parse_truehdd_version)
+}
+
+/// The version of harletty, from `harletty taxonomy`.
+pub fn harletty_version(harletty: &str) -> Version {
+    Version::from_output(output_of(harletty, &["taxonomy"]), parse_harletty_version)
 }
 
 pub fn shim_version(shim: &Shim) -> Version {
@@ -325,31 +362,43 @@ pub fn shim_version(shim: &Shim) -> Version {
 pub struct Versions {
     pub dee: Version,
     pub truehdd: Version,
+    pub harletty: Version,
     pub shim: Version,
     pub ffmpeg: Version,
     pub ffprobe: Version,
 }
 
-/// Run the five version probes at the same time. `dee` is one of the DEE
-/// tools, `truehdd` its binary, each `None` if it was not found.
+/// Run the six version probes at the same time. `dee` is one of the DEE
+/// tools, `truehdd` and `harletty` their binaries, each `None` if it was not
+/// found.
 pub fn probe_versions(
     dee: Option<&str>,
     truehdd: Option<&str>,
+    harletty: Option<&str>,
     shim: Option<&Shim>,
     ffmpeg: &str,
     ffprobe: &str,
 ) -> Versions {
     let found = std::sync::Mutex::new(Versions::default());
-    probe_versions_each(dee, truehdd, shim, ffmpeg, ffprobe, |index, version| {
-        let mut all = found.lock().expect("versions");
-        match index {
-            0 => all.dee = version,
-            1 => all.truehdd = version,
-            2 => all.shim = version,
-            3 => all.ffmpeg = version,
-            _ => all.ffprobe = version,
-        }
-    });
+    probe_versions_each(
+        dee,
+        truehdd,
+        harletty,
+        shim,
+        ffmpeg,
+        ffprobe,
+        |index, version| {
+            let mut all = found.lock().expect("versions");
+            match index {
+                0 => all.dee = version,
+                1 => all.truehdd = version,
+                2 => all.harletty = version,
+                3 => all.shim = version,
+                4 => all.ffmpeg = version,
+                _ => all.ffprobe = version,
+            }
+        },
+    );
     found.into_inner().expect("versions")
 }
 
@@ -359,6 +408,7 @@ pub fn probe_versions(
 pub fn probe_versions_each(
     dee: Option<&str>,
     truehdd: Option<&str>,
+    harletty: Option<&str>,
     shim: Option<&Shim>,
     ffmpeg: &str,
     ffprobe: &str,
@@ -368,9 +418,10 @@ pub fn probe_versions_each(
     std::thread::scope(|scope| {
         scope.spawn(move || done(0, dee.map_or(Version::NotFound, dee_version)));
         scope.spawn(move || done(1, truehdd.map_or(Version::NotFound, truehdd_version)));
-        scope.spawn(move || done(2, shim.map_or(Version::NotFound, shim_version)));
-        scope.spawn(move || done(3, version_of(ffmpeg, &["-version"])));
-        scope.spawn(move || done(4, version_of(ffprobe, &["-version"])));
+        scope.spawn(move || done(2, harletty.map_or(Version::NotFound, harletty_version)));
+        scope.spawn(move || done(3, shim.map_or(Version::NotFound, shim_version)));
+        scope.spawn(move || done(4, version_of(ffmpeg, &["-version"])));
+        scope.spawn(move || done(5, version_of(ffprobe, &["-version"])));
     });
 }
 
@@ -543,6 +594,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             "/nonexistent/ffmpeg",
             "/nonexistent/ffprobe",
         );
@@ -550,6 +602,7 @@ mod tests {
         let v = probe_versions(
             Some("/nonexistent/dee"),
             Some("/nonexistent/t"),
+            Some("/nonexistent/h"),
             None,
             "x",
             "y",
@@ -581,6 +634,38 @@ mod tests {
             Some("6.10.12".into())
         );
         assert_eq!(parse_dee_version("no version here"), None);
+    }
+
+    #[test]
+    fn harletty_version_from_taxonomy() {
+        let taxonomy = r#"{"schema":1,"harletty":"0.9.0","build":"9556bce (truehd library 0.7.2) Built: 2026-11-01","taxonomy":4}"#;
+        assert_eq!(
+            parse_harletty_version(&format!("{taxonomy}\n")).as_deref(),
+            Some("0.9.0")
+        );
+        // the version output is a git hash, not a version
+        assert_eq!(
+            parse_harletty_version("harletty 9556bce (truehd library 0.7.2) Built: 2026-11-01"),
+            None
+        );
+        assert_eq!(parse_harletty_version(""), None);
+        assert_eq!(parse_harletty_version(r#"{"harletty":""}"#), None);
+        assert_eq!(parse_harletty_version(r#"{"harletty":7}"#), None);
+        assert_eq!(parse_harletty_version(r#"{"schema":1}"#), None);
+        let found = |v: &str| Version::Found(v.to_string());
+        assert_eq!(check_min_version(&found("0.9.0"), MIN_HARLETTY), Ok(()));
+        assert_eq!(check_min_version(&found("0.10.1"), MIN_HARLETTY), Ok(()));
+        assert_eq!(
+            check_min_version(&found("0.8.9"), MIN_HARLETTY),
+            Err(Some("0.8.9".into()))
+        );
+        assert_eq!(
+            check_min_version(&Version::NotFound, MIN_HARLETTY),
+            Err(None)
+        );
+        #[cfg(unix)]
+        assert_eq!(harletty_version("true"), Version::CouldntParse);
+        assert_eq!(harletty_version("/nonexistent/h"), Version::NotFound);
     }
 
     #[test]

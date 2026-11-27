@@ -1,6 +1,7 @@
-deew     5.6.1  [deew]
+deew     5.7.0  [deew]
 DEE      not found
 truehdd  not found
+harletty not found
 dee_shim not found
 ffmpeg   not found
 ffprobe  not found

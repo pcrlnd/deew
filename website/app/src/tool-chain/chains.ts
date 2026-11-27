@@ -246,6 +246,99 @@ export const chains: Chain[] = [
     ],
   },
   {
+    title:
+      "DTS source of ddp-atmos · thd-atmos · ac4-atmos · ac4-ims: detection",
+    note: "harletty info --json tells whether the DTS track is DTS:X or Auro-3D (an Atmos source) · a DTS track without either is refused by the Atmos formats, like any other input without Atmos, and stays a 5.1 / 7.1 channel source for ac4-ims · raw .dts or a container track · 24-bit 5.1 / 7.1 FLAC, PCM and TrueHD without Atmos are asked too (best effort, harletty --codec wav, ffmpeg -c:a pcm_s24le -f wav -, no resampling or dither): Auro-3D lives in the low bits of the PCM",
+    flow: [
+      alt([
+        [file("IN.dts"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+        [
+          file("IN.flac/mka/thd"),
+          arrow(),
+          tool("ffmpeg → wav"),
+          arrow("pipe →"),
+        ],
+      ]),
+      tool("harletty info"),
+      arrow("JSON →"),
+      step("DTS:X / Auro-3D, else refused"),
+    ],
+  },
+  {
+    title: "ddp-atmos from DTS:X / Auro-3D",
+    note: "‑‑ddp-atmos-mode streaming (5.1 JOC), standard or bluray (7.1) · DTS:X, or Auro-3D in 24-bit DTS-HD MA (raw .dts or a container track) or in 24-bit FLAC / PCM / TrueHD without Atmos (ffmpeg → wav pipe, harletty --codec wav) · the bed is always conformed",
+    flow: [
+      alt([
+        [file("IN.dts"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+        [
+          file("IN.flac/mka/thd"),
+          arrow(),
+          tool("ffmpeg → wav"),
+          arrow("pipe →"),
+        ],
+      ]),
+      tool("harletty decode"),
+      arrow(),
+      file("NAME.bc.atmos"),
+      arrow(),
+      tool("dee_shim ddpjoc_encoder"),
+      arrow("--binary →"),
+      tool("dee_ddpjoc_encoder"),
+      arrow(),
+      file("OUT.ec3 / .eb3"),
+    ],
+  },
+  {
+    title: "thd-atmos from DTS:X / Auro-3D",
+    note: "16 elements · DTS:X, or Auro-3D in 24-bit DTS-HD MA (raw .dts or a container track) or in 24-bit FLAC / PCM / TrueHD without Atmos (ffmpeg → wav pipe, harletty --codec wav) · the bed is always conformed",
+    flow: [
+      alt([
+        [file("IN.dts"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+        [
+          file("IN.flac/mka/thd"),
+          arrow(),
+          tool("ffmpeg → wav"),
+          arrow("pipe →"),
+        ],
+      ]),
+      tool("harletty decode"),
+      arrow(),
+      file("NAME.bc.atmos"),
+      arrow(),
+      tool("dee_shim dthd_encoder"),
+      arrow("--binary →"),
+      tool("dee_dthd_encoder"),
+      arrow(),
+      file("OUT.thd"),
+    ],
+  },
+  {
+    title: "ac4-atmos from DTS:X / Auro-3D",
+    note: "native, no dee_shim · DTS:X, or Auro-3D in 24-bit DTS-HD MA (raw .dts or a container track) or in 24-bit FLAC / PCM / TrueHD without Atmos (ffmpeg → wav pipe, harletty --codec wav) · the bed is always conformed",
+    flow: [
+      alt([
+        [file("IN.dts"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+        [
+          file("IN.flac/mka/thd"),
+          arrow(),
+          tool("ffmpeg → wav"),
+          arrow("pipe →"),
+        ],
+      ]),
+      tool("harletty decode"),
+      arrow(),
+      file("NAME.bc.atmos"),
+      arrow(),
+      tool("dee_ac4ajoc_encoder"),
+      arrow(),
+      file("OUT.ac4"),
+    ],
+  },
+  {
     title: "dd · ddp from an Atmos master",
     note: "5.1 render by DEE (-dm 2 / 1: stereo / mono) · the master is read as it is, no ffmpeg, no truehdd, nothing in TEMP",
     flow: [
@@ -258,7 +351,7 @@ export const chains: Chain[] = [
   },
   {
     title: "ddp-atmos · thd-atmos · ac4-atmos from an Atmos master",
-    note: "no truehdd, no ffmpeg · the same encoder commands as with a TrueHD Atmos source, with the master as -i",
+    note: "no truehdd, no harletty, no ffmpeg · the same encoder commands as with a TrueHD Atmos source, with the master as -i",
     flow: [
       file("IN.wav (ADM BWF) / IN.atmos (DAMF)"),
       arrow("atmos_mezz →"),
@@ -293,6 +386,29 @@ export const chains: Chain[] = [
       tool("truehdd decode"),
       arrow(),
       file("NAME.atmos"),
+      arrow(),
+      tool("dee_ac4ims_encoder"),
+      arrow(),
+      file("OUT.ac4"),
+    ],
+  },
+  {
+    title: "ac4-ims from DTS:X / Auro-3D",
+    note: "DTS:X, or Auro-3D in 24-bit DTS-HD MA (raw .dts or a container track) or in 24-bit FLAC / PCM / TrueHD without Atmos (ffmpeg → wav pipe, harletty --codec wav) · decoded by harletty, the bed is always conformed · a DTS track without either is a 5.1 / 7.1 source",
+    flow: [
+      alt([
+        [file("IN.dts"), arrow()],
+        [file("IN.mkv/m2ts"), arrow(), tool("ffmpeg copy"), arrow("pipe →")],
+        [
+          file("IN.flac/mka/thd"),
+          arrow(),
+          tool("ffmpeg → wav"),
+          arrow("pipe →"),
+        ],
+      ]),
+      tool("harletty decode"),
+      arrow(),
+      file("NAME.bc.atmos"),
       arrow(),
       tool("dee_ac4ims_encoder"),
       arrow(),

@@ -45,7 +45,11 @@ describe("summarizeProbe", () => {
       masters: [],
       onlyMasters: false,
       atmos: false,
-      inputs: [{ codec: "truehd", atmos: false, master: false }],
+      dtsx: false,
+      auro: null,
+      inputs: [
+        { codec: "truehd", atmos: false, master: false, spatial: false },
+      ],
       entries: [
         {
           path: "a.mkv",
@@ -201,6 +205,72 @@ describe("formatting", () => {
   })
 })
 
+describe("DTS:X", () => {
+  const dtsx = (patch: Partial<FileProbe> = {}) =>
+    file({ channels: 8, codec: "dts", dtsx: true, ...patch })
+
+  it("prefixes the channels of the bed when all files are DTS:X", () => {
+    const s = summarizeProbe([dtsx()])
+    expect(s.dtsx).toBe(true)
+    expect(formatSummary(s)).toBe("DTS:X 7.1 - 48 kHz - 24-bit - 1 file")
+  })
+
+  it("does not prefix mixed files or output without the field", () => {
+    const mixed = summarizeProbe([dtsx(), dtsx({ path: "b", dtsx: false })])
+    expect(mixed.dtsx).toBe(false)
+    expect(formatSummary(mixed)).toBe("7.1 - 48 kHz - 24-bit - 2 files")
+    const old = summarizeProbe([file({ channels: 8, codec: "dts" })])
+    expect(old.dtsx).toBe(false)
+  })
+})
+
+describe("Auro-3D", () => {
+  const auro = (patch: Partial<FileProbe> = {}) =>
+    file({
+      channels: 8,
+      codec: "dts",
+      auro: { layout: "13.1", carrier: "7.1" },
+      ...patch,
+    })
+
+  it("shows the layout and the carrier when all files agree", () => {
+    const s = summarizeProbe([auro()])
+    expect(s.auro).toEqual({ layout: "13.1", carrier: "7.1" })
+    expect(formatSummary(s)).toBe(
+      "Auro-3D 13.1 (carried in 7.1) - 48 kHz - 24-bit - 1 file"
+    )
+    expect(formatSummary(summarizeProbe([auro(), auro({ path: "b" })]))).toBe(
+      "Auro-3D 13.1 (carried in 7.1) - 48 kHz - 24-bit - 2 files"
+    )
+  })
+
+  it("leaves out what is not known", () => {
+    const s = summarizeProbe([auro({ auro: { layout: null, carrier: "7.1" } })])
+    expect(formatSummary(s)).toBe(
+      "Auro-3D (carried in 7.1) - 48 kHz - 24-bit - 1 file"
+    )
+  })
+
+  it("does not prefix mixed files, or output without the field", () => {
+    const other = auro({ path: "b", auro: { layout: "11.1", carrier: "7.1" } })
+    expect(formatSummary(summarizeProbe([auro(), other]))).toBe(
+      "7.1 - 48 kHz - 24-bit - 2 files"
+    )
+    expect(
+      summarizeProbe([auro(), auro({ path: "b", auro: null })]).auro
+    ).toBeNull()
+    const old = summarizeProbe([file({ channels: 8, codec: "dts" })])
+    expect(old.auro).toBeNull()
+    expect(formatSummary(old)).toBe("7.1 - 48 kHz - 24-bit - 1 file")
+  })
+
+  it("is not shown over Atmos", () => {
+    expect(formatSummary(summarizeProbe([auro({ atmos: true })]))).toBe(
+      "Atmos 7.1 - 48 kHz - 24-bit - 1 file"
+    )
+  })
+})
+
 describe("Atmos", () => {
   const atmos = (patch: Partial<FileProbe> = {}) =>
     file({ channels: 8, atmos: true, ...patch })
@@ -219,8 +289,8 @@ describe("Atmos", () => {
     expect(mixed.atmos).toBe(false)
     expect(formatSummary(mixed)).toBe("7.1 - 48 kHz - 24-bit - 2 files")
     expect(mixed.inputs).toEqual([
-      { codec: "truehd", atmos: false, master: false },
-      { codec: "truehd", atmos: true, master: false },
+      { codec: "truehd", atmos: false, master: false, spatial: false },
+      { codec: "truehd", atmos: true, master: false, spatial: false },
     ])
   })
 
@@ -296,6 +366,7 @@ describe("Atmos masters", () => {
       codec: "ADM BWF Atmos master",
       atmos: true,
       master: true,
+      spatial: false,
     })
     expect(formatSummary(s)).toBe(
       "7.1 - 48 kHz - 24-bit - 2 files - with ADM BWF Atmos master"
@@ -396,5 +467,35 @@ describe("AC-4 IMS inputs", () => {
       relevantBitrates({ ...base, channels: 8, inputs: [master, thdAtmos] })
         .warnings
     ).toEqual([])
+    // DTS:X and Auro-3D are Atmos sources too (harletty), plain DTS is not
+    const dtsx = { codec: "dts", atmos: false, spatial: true }
+    const dts = { codec: "dts", atmos: false }
+    expect(
+      relevantBitrates({ ...base, channels: 8, inputs: [dtsx, thdAtmos] })
+        .warnings
+    ).toEqual([])
+    expect(
+      relevantBitrates({ ...base, channels: 8, inputs: [dtsx, dts] }).warnings
+    ).toEqual([IMS_MIXED_WARNING])
+    expect(
+      relevantBitrates({ ...base, channels: 6, inputs: [dts, pcm] }).warnings
+    ).toEqual([])
+  })
+
+  it("marks DTS:X and Auro-3D files as spatial inputs", () => {
+    const s = summarizeProbe([
+      file({ channels: 8, codec: "dts", dtsx: true }),
+      file({
+        path: "b",
+        channels: 8,
+        codec: "dts",
+        auro: { layout: "13.1", carrier: "7.1" },
+      }),
+      file({ path: "c", channels: 8, codec: "dts" }),
+    ])
+    expect(s.inputs).toEqual([
+      { codec: "dts", atmos: false, master: false, spatial: true },
+      { codec: "dts", atmos: false, master: false, spatial: false },
+    ])
   })
 })

@@ -137,7 +137,7 @@ export function GetStarted({ platform }: { platform: Platform }) {
           </div>
           <Note>
             Run <Code>deew.exe -gt</Code> (<Code>--get-tools</Code>) to download ffmpeg,
-            ffprobe, truehdd and dee_shim next to deew. It downloads everything
+            ffprobe, truehdd, harletty and dee_shim next to deew. It downloads everything
             except DEE.
           </Note>
         </Panel>
@@ -174,7 +174,7 @@ export function GetStarted({ platform }: { platform: Platform }) {
           </Note>
           <Note>
             Run <Code>deew -gt</Code> (<Code>--get-tools</Code>) to download ffmpeg,
-            ffprobe, truehdd and dee_shim next to deew. It downloads everything
+            ffprobe, truehdd, harletty and dee_shim next to deew. It downloads everything
             except DEE.
           </Note>
         </Panel>
@@ -209,7 +209,7 @@ export function GetStarted({ platform }: { platform: Platform }) {
           <Note>On Apple silicon the macOS DEE tools need Rosetta 2.</Note>
           <Note>
             Run <Code>deew-macos -gt</Code> (<Code>--get-tools</Code>) to download ffmpeg,
-            ffprobe, truehdd and dee_shim next to deew. It downloads everything
+            ffprobe, truehdd, harletty and dee_shim next to deew. It downloads everything
             except DEE.
           </Note>
         </Panel>

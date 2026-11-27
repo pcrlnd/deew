@@ -215,6 +215,82 @@ else
 fi
 "#;
 
+/// A fake harletty: `taxonomy` prints the version (`FAKE_HARLETTY_VERSION`),
+/// `info` reports what `FAKE_SPATIAL` says (`dtsx` by default, `plain` for a
+/// `--codec wav` input, `auro`,
+/// `plain`, `nocodec`, or `error`, which fails), and `decode` writes the
+/// three `.atmos` files, the audio a CAF of `FAKE_SAMPLES` stereo frames at
+/// 48 kHz (96000 by default). `FAKE_WARN` adds a WARN record to the log,
+/// `FAKE_FAIL_TOOL=harletty` makes `decode` fail.
+const FAKE_HARLETTY: &str = r#"#!/bin/sh
+dir=$(dirname "$0")
+cmd=""
+skip=""
+for a in "$@"; do
+  if [ -n "$skip" ]; then skip=""; continue; fi
+  case "$a" in
+    --loglevel|--log-format|--codec) skip=1 ;;
+    taxonomy|info|decode) cmd="$a"; break ;;
+  esac
+done
+log() { { echo "---"; for a in "$@"; do printf '%s\n' "$a"; done; } >> "$dir/harletty.$cmd.args"; }
+wav=""; prev=""; codec="DTS-HD MA"
+for a in "$@"; do if [ "$prev" = "--codec" ] && [ "$a" = wav ]; then wav=1; fi; prev="$a"; done
+if [ -n "$wav" ]; then codec=PCM; fi
+if [ "$cmd" = taxonomy ]; then
+  echo '{"schema":1,"harletty":"'"${FAKE_HARLETTY_VERSION:-0.9.0}"'","build":"fake","taxonomy":4}'
+  exit 0
+fi
+log "$@"
+# a harletty that can't read PCM: a clap usage error
+if [ -n "$wav" ] && [ -n "$FAKE_REJECT_WAV" ]; then
+  echo "error: invalid value 'wav' for '--codec <CODEC>'" >&2
+  exit 2
+fi
+prefix=""; last=""
+while [ $# -gt 0 ]; do
+  case "$1" in --output-path) prefix="$2"; shift ;; esac
+  last="$1"
+  shift
+done
+if [ "$cmd" = info ]; then
+  # harletty stops reading early, ffmpeg gets a broken pipe
+  if [ "$last" = "-" ]; then head -c 1000 > /dev/null; fi
+  head='{"schema":1,"harletty":"0.9.0","build":"fake","taxonomy":4,'
+  # plain PCM has no Auro-3D unless a test says so
+  spatial="${FAKE_SPATIAL:-dtsx}"
+  if [ -z "$FAKE_SPATIAL" ] && [ -n "$wav" ]; then spatial=plain; fi
+  case "$spatial" in
+    dtsx) echo "$head"'"codec":"DTS-HD MA","channels":8,"sample_rate":48000,"spatial":{"label":"DTS:X-7.1.4+3","kind":"dtsx","objects":3,"fixed":4,"experimental":true,"presentation":"ObjectsD0"},"frames_seen":1,"seconds_seen":0.01}' ;;
+    auro) echo "$head"'"codec":"'"$codec"'","channels":8,"sample_rate":48000,"spatial":{"label":"Auro-3D-13.1","kind":"auro","objects":null,"fixed":null,"experimental":false},"frames_seen":1,"seconds_seen":0.01}' ;;
+    plain) echo "$head"'"codec":"DTS","channels":6,"sample_rate":48000,"spatial":null,"frames_seen":1,"seconds_seen":1.0}' ;;
+    nocodec) echo "$head"'"codec":null,"error":"no DTS frame found","channels":null,"sample_rate":null,"spatial":null,"frames_seen":0,"seconds_seen":0.0}' ;;
+    error) echo "Error: Failed to open input: boom" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
+# decode: the input is stdin, take everything ffmpeg sends
+if [ "$last" = "-" ]; then bytes=$(wc -c); echo "$bytes" > "$dir/harletty.stdin"; fi
+echo '{"ts":2026-11-13T16:55:49Z,"lvl":"INFO","msg":"Decoding DTS stream: x (strict mode: false)"}' >&2
+if [ -n "$FAKE_WARN" ]; then
+  echo '{"ts":2026-11-13T16:55:49Z,"lvl":"WARN","msg":"DTS core decode error (dropping frame): Err(x)"}' >&2
+  echo '{"ts":2026-11-13T16:55:49Z,"lvl":"WARN","msg":"DTS:X ObjectsD0 is an experimental presentation: its feed identities rest on corpus evidence"}' >&2
+fi
+if [ "$FAKE_FAIL_TOOL" = harletty ]; then
+  echo '{"ts":2026-11-13T16:55:49Z,"lvl":"ERROR","msg":"bad stream"}' >&2
+  echo "Error: bad stream" >&2
+  exit 1
+fi
+printf damf > "$prefix.atmos"
+printf meta > "$prefix.atmos.metadata"
+{
+  printf 'caff\000\001\000\000'
+  printf 'desc\000\000\000\000\000\000\000\040\100\347\160\000\000\000\000\000lpcm\000\000\000\004\000\000\000\006\000\000\000\001\000\000\000\002\000\000\000\030'
+  printf 'data\377\377\377\377\377\377\377\377\000\000\000\000'
+  head -c $(( ${FAKE_SAMPLES:-96000} * 6 )) /dev/zero
+} > "$prefix.atmos.audio"
+"#;
+
 /// A fake dee_shim: runs the binary after `--` with the arguments after it
 /// and glues a line of its own in front of the first line of DEE.
 const FAKE_DSHIM: &str = r#"#!/bin/sh
@@ -238,7 +314,7 @@ exec "$binary" "$@"
 
 /// ffprobe as deew sees it: the real one, but the TrueHD streams get the
 /// Atmos profile (ffmpeg can't encode Atmos). `FAKE_NO_PROFILE` keeps the
-/// real output.
+/// real output. `FAKE_DTSX` gives the DTS streams the DTS:X profile.
 const FAKE_FFPROBE: &str = r#"#!/bin/sh
 if [ -n "$FAKE_NO_PROFILE" ]; then exec ffprobe "$@"; fi
 # keep the exit code and stderr of ffprobe
@@ -246,7 +322,9 @@ tmp=$(mktemp)
 ffprobe "$@" > "$tmp" 2> "$tmp.err"
 status=$?
 cat "$tmp.err" >&2
-sed 's/"codec_name": "truehd",/"codec_name": "truehd", "profile": "Dolby TrueHD + Dolby Atmos",/' "$tmp"
+dtsx=""
+if [ -n "$FAKE_DTSX" ]; then dtsx='s/"profile": "DTS",/"profile": "DTS-HD MA + DTS:X",/'; fi
+sed -e 's/"codec_name": "truehd",/"codec_name": "truehd", "profile": "Dolby TrueHD + Dolby Atmos",/' ${dtsx:+-e "$dtsx"} "$tmp"
 rm -f "$tmp" "$tmp.err"
 exit $status
 "#;
@@ -313,6 +391,7 @@ impl Env {
         }
         // the tools are next to the private copy of the binary
         write_script(&env.path("bin/truehdd"), FAKE_TRUEHDD);
+        write_script(&env.path("bin/harletty"), FAKE_HARLETTY);
         write_script(&env.path("bin/dee_shim"), FAKE_DSHIM);
         write_script(&env.path("bin/ffprobe"), FAKE_FFPROBE);
         // a private copy of the binary: the config lives next to it
@@ -513,6 +592,31 @@ impl Env {
 
     fn truehdd_run(&self) -> Option<Vec<String>> {
         self.run_of("truehdd.args", "bin")
+    }
+
+    /// The arguments of the last `harletty decode` or `harletty info`.
+    fn harletty_run(&self, command: &str) -> Option<Vec<String>> {
+        self.run_of(&format!("harletty.{command}.args"), "bin")
+    }
+
+    /// A raw DTS file (DTS core, which is what ffmpeg can write).
+    fn dts(&self, name: &str) -> PathBuf {
+        self.media(name, "5.1", 48000, "dca")
+    }
+
+    /// A Matroska audio file with a DTS track.
+    fn dts_mka(&self, name: &str) -> PathBuf {
+        let raw = self.dts("raw.dts");
+        let path = self.work().join(name);
+        let status = command("ffmpeg")
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&raw)
+            .args(["-c", "copy"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "ffmpeg failed to generate {name}");
+        path
     }
 
     fn dshim_run(&self) -> Option<Vec<String>> {
@@ -1997,7 +2101,7 @@ fn atmos_input_rules() {
     for format in ["ddp-atmos", "thd-atmos", "ac4-atmos"] {
         assert_error(
             &env.deew(&["-i", "in.wav", "-f", format]),
-            "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD input with an Atmos presentation, in.wav is not a TrueHD file.",
+            "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, in.wav is none of them.",
         );
         assert_error(
             &env.deew(&["-i", "atmos.thd", "-f", format, "-dm", "2"]),
@@ -2035,7 +2139,7 @@ fn truehd_without_atmos_is_rejected_early() {
         );
         assert_error(
             &out,
-            "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD input with an Atmos presentation, plain.thd has no Atmos.",
+            "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, plain.thd has no Atmos, DTS:X or Auro-3D.",
         );
     }
     // rejected before truehdd
@@ -3243,12 +3347,258 @@ fn track_index_selects_the_truehd_track() {
     // the first track is AC-3
     assert_error(
         &env.deew(&["-i", "two.mka", "-f", "ddp-atmos"]),
-        "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD input with an Atmos presentation, two.mka is not a TrueHD file.",
+        "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, two.mka is none of them.",
     );
     ok(&env.deew(&["-i", "two.mka", "-f", "ddp-atmos", "-ti", "1", "-k"]));
     let kept = fs::read_to_string(env.path("bin").join("truehdd.stdin")).unwrap();
     assert!(kept.trim().parse::<u64>().unwrap() > 100);
     assert!(env.out().join("two.ec3").exists());
+}
+
+#[test]
+fn dtsx_file_goes_through_harletty_into_ddp_atmos() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew(&["-i", "x.dts", "-f", "ddp-atmos"]);
+    ok(&out);
+    let text = stdout(&out);
+    assert_eq!(summary_row(&text, "harletty version"), "0.9.0");
+    assert_eq!(summary_row(&text, "harletty"), "bed conform on");
+    // the experimental presentation is a warning
+    assert!(
+        text.contains("WARNING: x.dts: DTS:X-7.1.4+3 (ObjectsD0) is decoded experimentally by harletty, check the result."),
+        "{text}"
+    );
+    // a raw file is detected and decoded directly
+    let info = env.harletty_run("info").unwrap();
+    assert_eq!(info, ["--loglevel", "off", "info", "--json", "x.dts"]);
+    let decode = env.harletty_run("decode").unwrap();
+    assert_eq!(
+        decode[..9],
+        [
+            "--log-format",
+            "json",
+            "--loglevel",
+            "info",
+            "decode",
+            "--codec",
+            "dts",
+            "--bed-conform",
+            "--output-path"
+        ]
+    );
+    assert_eq!(
+        opt(&decode, "--output-path"),
+        env.temp().join("x.bc").to_str().unwrap()
+    );
+    assert_eq!(decode.last().unwrap(), "x.dts");
+    assert!(!has(&decode, "--warp-mode") && !has(&decode, "--progress"));
+    assert!(env.truehdd_run().is_none());
+    // from the .atmos on it is a TrueHD Atmos source
+    let shim = env.dshim_run().unwrap();
+    assert_eq!(shim[0], "ddpjoc_encoder");
+    let rest: Vec<String> = shim[shim.iter().position(|a| a == "--").unwrap() + 1..].to_vec();
+    assert_eq!(opt(&rest, "--input-format"), "atmos_mezz");
+    assert_eq!(
+        opt(&rest, "-i"),
+        env.temp().join("x.bc.atmos").to_str().unwrap()
+    );
+    assert!(env.out().join("x.ec3").exists());
+    // all three .atmos files are gone
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn dts_track_of_a_container_is_piped_into_harletty() {
+    let env = env_or_skip!();
+    env.dts_mka("x.mka");
+    for format in ["ddp-atmos", "thd-atmos", "ac4-atmos"] {
+        let out = env.deew_env(
+            &["-i", "x.mka", "-f", format, "-wm", "loro", "-bc", "off"],
+            &[("FAKE_SPATIAL", "auro")],
+        );
+        ok(&out);
+        let text = stdout(&out);
+        assert_eq!(
+            summary_row(&text, "harletty"),
+            "warp mode loro, bed conform on",
+            "{format}"
+        );
+        // Auro-3D is not experimental
+        assert!(!text.contains("experimentally"), "{text}");
+        // a track is copied into harletty, for the detection and the decode
+        let info = env.harletty_run("info").unwrap();
+        assert_eq!(info.last().unwrap(), "-");
+        let decode = env.harletty_run("decode").unwrap();
+        assert_eq!(decode.last().unwrap(), "-");
+        assert_eq!(opt(&decode, "--warp-mode"), "loro");
+        assert!(has(&decode, "--bed-conform"));
+        assert_eq!(
+            opt(&decode, "--output-path"),
+            env.temp().join("x.wm-loro.bc").to_str().unwrap()
+        );
+        let bytes: u64 = fs::read_to_string(env.path("bin/harletty.stdin"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(bytes > 1000, "{bytes}");
+        assert!(env.truehdd_run().is_none());
+        assert!(temp_is_empty(&env), "{format}");
+    }
+}
+
+#[test]
+fn dts_without_dtsx_is_no_atmos_source() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    for format in ["ddp-atmos", "thd-atmos", "ac4-atmos"] {
+        let out = env.deew_env(&["-i", "x.dts", "-f", format], &[("FAKE_SPATIAL", "plain")]);
+        assert_error(
+            &out,
+            "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, x.dts has no Atmos, DTS:X or Auro-3D.",
+        );
+    }
+    assert!(env.harletty_run("decode").is_none());
+    assert!(env.truehdd_run().is_none());
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn harletty_is_only_used_for_the_atmos_formats() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    for args in [
+        vec!["-f", "ddp"],
+        vec!["-f", "dd"],
+        vec!["-f", "thd"],
+        vec!["-f", "ac4"],
+        vec!["-f", "aac"],
+        vec!["-mo"],
+    ] {
+        let mut all = vec!["-i", "x.dts"];
+        all.extend(args.iter());
+        let out = env.deew(&all);
+        ok(&out);
+        assert!(env.harletty_run("info").is_none(), "{args:?}");
+        assert!(env.harletty_run("decode").is_none(), "{args:?}");
+        assert!(env.truehdd_run().is_none(), "{args:?}");
+    }
+    // not even without harletty
+    fs::remove_file(env.path("bin/harletty")).unwrap();
+    ok(&env.deew(&["-i", "x.dts", "-f", "ddp"]));
+}
+
+#[test]
+fn harletty_is_required_for_dts_of_the_atmos_formats() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    fs::remove_file(env.path("bin/harletty")).unwrap();
+    let out = env.deew(&["-i", "x.dts", "-f", "ddp-atmos"]);
+    assert_error(
+        &out,
+        "harletty is required for DTS:X and Auro-3D sources of the Atmos formats and AC-4 IMS (to read and decode them), put harletty next to deew or in your PATH, or get it with -gt (https://github.com/harletty/harletty-bridge)",
+    );
+    // a TrueHD source needs no harletty
+    env.truehd("atmos.thd");
+    ok(&env.deew(&["-i", "atmos.thd", "-f", "ddp-atmos"]));
+}
+
+#[test]
+fn old_harletty_is_rejected() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ddp-atmos"],
+        &[("FAKE_HARLETTY_VERSION", "0.8.2")],
+    );
+    assert_error(
+        &out,
+        "harletty 0.8.2 is too old, deew needs 0.9.0 or newer: update it with -gt",
+    );
+    assert!(env.harletty_run("info").is_none());
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ddp-atmos"],
+        &[("FAKE_HARLETTY_VERSION", "junk")],
+    );
+    assert_error(
+        &out,
+        "can't read the version of harletty, deew needs 0.9.0 or newer: update it with -gt",
+    );
+}
+
+#[test]
+fn harletty_info_failures_name_the_file() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ddp-atmos"],
+        &[("FAKE_SPATIAL", "error")],
+    );
+    assert_error(
+        &out,
+        "harletty couldn't read x.dts: Failed to open input: boom",
+    );
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ddp-atmos"],
+        &[("FAKE_SPATIAL", "nocodec")],
+    );
+    assert_error(&out, "harletty couldn't read x.dts: no DTS frame found");
+    assert!(env.harletty_run("decode").is_none());
+}
+
+#[test]
+fn harletty_failure_is_reported() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ddp-atmos"],
+        &[("FAKE_FAIL_TOOL", "harletty")],
+    );
+    assert_error(&out, "harletty failed (exit code 1): bad stream");
+    assert!(env.last_run("dee_ddpjoc_encoder").is_none());
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn harletty_warnings_and_short_decodes() {
+    let env = env_or_skip!();
+    env.dts_mka("x.mka");
+    let out = env.deew_env(&["-i", "x.mka", "-f", "ddp-atmos"], &[("FAKE_WARN", "1")]);
+    ok(&out);
+    let text = stdout(&out);
+    assert!(
+        text.contains("WARNING: harletty reported problems in x.mka: DTS core decode error (dropping frame): Err(x). The output may have a gap"),
+        "{text}"
+    );
+    // the experimental notice of the log is not repeated
+    assert_eq!(text.matches("experimental").count(), 1, "{text}");
+    // far less audio than the input has
+    fs::remove_file(env.out().join("x.ec3")).unwrap();
+    let out = env.deew_env(
+        &["-i", "x.mka", "-f", "ddp-atmos"],
+        &[("FAKE_SAMPLES", "9600")],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(" - harletty decoded only 0.2 s of 2."),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!env.out().join("x.ec3").exists());
+    assert!(temp_is_empty(&env));
+}
+
+#[test]
+fn dtsx_and_truehd_sources_mix() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    env.truehd("atmos.thd");
+    let out = env.deew(&["-i", "x.dts", "atmos.thd", "-f", "thd-atmos"]);
+    ok(&out);
+    assert!(env.harletty_run("decode").is_some());
+    assert!(env.truehdd_run().is_some());
+    assert!(temp_is_empty(&env));
 }
 
 #[test]
@@ -4527,7 +4877,111 @@ fn ac4_ims_from_truehd_atmos() {
     env.media("in.wav", "5.1", 48000, "pcm_s24le");
     assert_error(
         &env.deew(&["-i", "atmos.thd", "in.wav", "-f", "ac4-ims"]),
-        "ac4-ims can't encode Atmos inputs (TrueHD Atmos, ADM BWF, DAMF) and channel-based inputs in the same run.",
+        "ac4-ims can't encode Atmos inputs (TrueHD Atmos, DTS:X, Auro-3D, ADM BWF, DAMF) and channel-based inputs in the same run.",
+    );
+}
+
+fn harletty_info_runs(env: &Env) -> usize {
+    fs::read_to_string(env.path("bin/harletty.info.args"))
+        .map(|text| text.matches("---").count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn ac4_ims_from_dtsx_goes_through_harletty() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ac4-ims", "-wm", "loro", "-bc", "off"],
+        &[("FAKE_DTSX", "1")],
+    );
+    ok(&out);
+    let text = stdout(&out);
+    assert_eq!(last_summary_row(&text, "Channels"), "immersive stereo");
+    assert_eq!(
+        summary_row(&text, "harletty"),
+        "warp mode loro, bed conform on"
+    );
+    // harletty looked at the track once, and decoded it
+    assert_eq!(harletty_info_runs(&env), 1);
+    let decode = env.harletty_run("decode").unwrap();
+    assert!(has(&decode, "--bed-conform"));
+    assert_eq!(opt(&decode, "--warp-mode"), "loro");
+    assert!(env.truehdd_run().is_none());
+    // from the .atmos on it is a TrueHD Atmos source of AC4 IMS
+    let args = env.run("dee_ac4ims_encoder");
+    assert_eq!(opt(&args, "--input-format"), "atmos_mezz");
+    assert_eq!(
+        opt(&args, "-i"),
+        env.temp().join("x.wm-loro.bc.atmos").to_str().unwrap()
+    );
+    assert!(env.out().join("x.ac4").exists());
+    assert!(temp_is_empty(&env));
+    // the check of harletty alone finds it too, ffprobe says plain DTS
+    let out = env.deew(&["-i", "x.dts", "-f", "ac4-ims"]);
+    ok(&out);
+    assert_eq!(
+        opt(&env.run("dee_ac4ims_encoder"), "--input-format"),
+        "atmos_mezz"
+    );
+}
+
+#[test]
+fn ac4_ims_from_plain_dts_is_channel_based() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ac4-ims"],
+        &[("FAKE_SPATIAL", "plain")],
+    );
+    ok(&out);
+    assert!(env.harletty_run("decode").is_none());
+    assert!(env.truehdd_run().is_none());
+    assert_eq!(opt(&env.run("dee_ac4ims_encoder"), "--input-format"), "wav");
+    // without harletty a plain DTS track needs none
+    fs::remove_file(env.path("bin/harletty")).unwrap();
+    ok(&env.deew(&["-i", "x.dts", "-f", "ac4-ims"]));
+    assert_eq!(opt(&env.run("dee_ac4ims_encoder"), "--input-format"), "wav");
+    // nor does a harletty that is too old
+    write_script(&env.path("bin/harletty"), FAKE_HARLETTY);
+    ok(&env.deew_env(
+        &["-i", "x.dts", "-f", "ac4-ims"],
+        &[("FAKE_HARLETTY_VERSION", "0.8.2")],
+    ));
+    assert_eq!(opt(&env.run("dee_ac4ims_encoder"), "--input-format"), "wav");
+}
+
+#[test]
+fn ac4_ims_needs_harletty_for_a_dtsx_track() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    let out = env.deew_env(&["-i", "x.dts", "-f", "ac4-ims"], &[("FAKE_DTSX", "1")]);
+    ok(&out);
+    fs::remove_file(env.path("bin/harletty")).unwrap();
+    let out = env.deew_env(&["-i", "x.dts", "-f", "ac4-ims"], &[("FAKE_DTSX", "1")]);
+    assert_error(
+        &out,
+        "harletty is required for DTS:X and Auro-3D sources of the Atmos formats and AC-4 IMS (to read and decode them), put harletty next to deew or in your PATH, or get it with -gt (https://github.com/harletty/harletty-bridge)",
+    );
+    write_script(&env.path("bin/harletty"), FAKE_HARLETTY);
+    let out = env.deew_env(
+        &["-i", "x.dts", "-f", "ac4-ims"],
+        &[("FAKE_DTSX", "1"), ("FAKE_HARLETTY_VERSION", "0.8.2")],
+    );
+    assert_error(
+        &out,
+        "harletty 0.8.2 is too old, deew needs 0.9.0 or newer: update it with -gt",
+    );
+}
+
+#[test]
+fn ac4_ims_does_not_mix_dtsx_and_channel_based_inputs() {
+    let env = env_or_skip!();
+    env.dts("x.dts");
+    env.media("in.wav", "5.1", 48000, "pcm_s24le");
+    assert_error(
+        &env.deew(&["-i", "x.dts", "in.wav", "-f", "ac4-ims"]),
+        "ac4-ims can't encode Atmos inputs (TrueHD Atmos, DTS:X, Auro-3D, ADM BWF, DAMF) and channel-based inputs in the same run.",
     );
 }
 
@@ -5265,4 +5719,105 @@ fn config_template() {
     let text = stdout(&out);
     assert!(text.contains("invalid config"), "{text}");
     assert!(text.contains("unknown placeholder {nope}"), "{text}");
+}
+
+impl Env {
+    /// A Matroska audio file with a 24-bit FLAC track.
+    fn flac_mka(&self, name: &str, layout: &str, bits: &str) -> PathBuf {
+        let path = self.work().join(name);
+        let status = command("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!(
+                "anullsrc=channel_layout={layout}:sample_rate=48000"
+            ))
+            .args(["-t", "2", "-c:a", "flac", "-sample_fmt", bits])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "ffmpeg failed to generate {name}");
+        path
+    }
+}
+
+#[test]
+fn auro_in_flac_goes_through_a_wav_pipe_into_harletty() {
+    let env = env_or_skip!();
+    env.flac_mka("x.mka", "7.1", "s32");
+    assert_eq!(
+        ffprobe_field(&env.work().join("x.mka"), "bits_per_raw_sample"),
+        "24"
+    );
+    for format in ["ddp-atmos", "thd-atmos", "ac4-atmos", "ac4-ims"] {
+        let out = env.deew_env(
+            &["-i", "x.mka", "-f", format, "-wm", "loro", "-la"],
+            &[("FAKE_SPATIAL", "auro")],
+        );
+        ok(&out);
+        let text = stdout(&out);
+        assert!(
+            text.contains("-c:a pcm_s24le -f wav - | harletty --codec wav "),
+            "{text}"
+        );
+        let info = env.harletty_run("info").unwrap();
+        assert_eq!(
+            info,
+            ["--codec", "wav", "--loglevel", "off", "info", "--json", "-"]
+        );
+        let decode = env.harletty_run("decode").unwrap();
+        assert_eq!(decode[..2], ["--codec", "wav"]);
+        assert_eq!(decode.last().unwrap(), "-");
+        assert_eq!(opt(&decode, "--warp-mode"), "loro");
+        assert!(has(&decode, "--bed-conform"));
+        let bytes: u64 = fs::read_to_string(env.path("bin/harletty.stdin"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(bytes > 1000, "{bytes}");
+        assert!(env.truehdd_run().is_none());
+        assert!(temp_is_empty(&env), "{format}");
+        assert!(
+            env.out().join("x.ec3").exists()
+                || env.out().join("x.thd").exists()
+                || env.out().join("x.ac4").exists()
+        );
+    }
+}
+
+#[test]
+fn flac_with_a_harletty_that_cannot_read_pcm_is_as_before() {
+    let env = env_or_skip!();
+    env.flac_mka("x.mka", "7.1", "s32");
+    let envs = [("FAKE_SPATIAL", "auro"), ("FAKE_REJECT_WAV", "1")];
+    let out = env.deew_env(&["-i", "x.mka", "-f", "ddp-atmos"], &envs);
+    assert_error(
+        &out,
+        "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, x.mka is none of them.",
+    );
+    assert!(env.harletty_run("decode").is_none());
+    // no label, no message, as a plain source
+    let out = env.deew_env(&["-i", "x.mka", "-f", "ddp"], &envs);
+    ok(&out);
+    assert!(!stdout(&out).contains("Auro"), "{}", stdout(&out));
+}
+
+#[test]
+fn plain_flac_is_unchanged() {
+    let env = env_or_skip!();
+    env.flac_mka("x.mka", "7.1", "s32");
+    let out = env.deew_env(
+        &["-i", "x.mka", "-f", "ddp-atmos"],
+        &[("FAKE_SPATIAL", "plain")],
+    );
+    assert_error(
+        &out,
+        "ddp-atmos, thd-atmos and ac4-atmos need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, x.mka is none of them.",
+    );
+    assert!(env.harletty_run("decode").is_none());
+    // 16-bit FLAC is never asked
+    let env = env_or_skip!();
+    env.flac_mka("y.mka", "7.1", "s16");
+    let out = env.deew_env(&["-i", "y.mka", "-f", "ddp"], &[("FAKE_SPATIAL", "auro")]);
+    ok(&out);
+    assert!(env.harletty_run("info").is_none());
 }

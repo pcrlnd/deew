@@ -1,9 +1,10 @@
-//! Running one input through ffmpeg / truehdd and the DEE tools, with
+//! Running one input through ffmpeg / truehdd / harletty and the DEE tools, with
 //! progress reporting.
 
 use crate::deewlog::{self, LogData, LogSpec, StageLog, Stream};
 use crate::error::escape;
 use crate::events;
+use crate::harletty;
 use crate::interrupt;
 use crate::pipe;
 use crate::plan::Format;
@@ -35,8 +36,10 @@ pub struct Job {
     /// The audio goes from ffmpeg straight into DEE (the first DEE command of
     /// the job): this is the DEE input path, see `pipe`. There is no wav.
     pub pipe: Option<String>,
-    /// truehdd: decodes the Atmos formats' input.
+    /// truehdd (or harletty, see `decoder`): decodes the Atmos formats' input.
     pub decode_args: Vec<String>,
+    /// Which program `decode_args` is.
+    pub decoder: Decoder,
     /// `dee_measure_loudness`, for `-mo` and a custom dialnorm.
     pub measure_args: Vec<String>,
     /// The encoder (empty for `-mo`).
@@ -66,6 +69,23 @@ pub struct Job {
     pub dee_temp: String,
     /// The report of `-kl`.
     pub log: Option<LogSpec>,
+}
+
+/// The program that decodes the input of an Atmos format into a `.atmos`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Decoder {
+    /// TrueHD Atmos.
+    #[default]
+    Truehdd,
+    /// DTS:X and Auro-3D.
+    Harletty {
+        /// The warning shown before the decode for a presentation harletty
+        /// decodes experimentally.
+        experimental: Option<String>,
+        /// The duration of the input is exact enough to compare the decoded
+        /// length with (not for the estimate of a raw stream).
+        check_length: bool,
+    },
 }
 
 /// Settings shared by all jobs.
@@ -1103,6 +1123,48 @@ fn run_ffmpeg(job: &Job, bar: &Bar, log: &mut StageLog) -> Result<(), String> {
     Ok(())
 }
 
+/// The ffmpeg that copies a track into the stdin of a decoder, after the
+/// decoder ended: if it failed (`decoder_ok` is false) ffmpeg would hang on
+/// the closed pipe, so it is killed. Its log goes into `log`; `Some(message)`
+/// is its failure, when the decoder did not fail first.
+fn finish_feeder(
+    mut ffmpeg: Option<Tracked>,
+    ffmpeg_log: Option<JoinHandle<Stream>>,
+    decoder_ok: bool,
+    job: &Job,
+    log: &mut StageLog,
+) -> Result<Option<String>, String> {
+    let mut failure = None;
+    if let Some(ff) = ffmpeg.as_mut() {
+        let killed = !decoder_ok;
+        if killed {
+            let _ = ff.kill();
+        }
+        let ffmpeg_status = ff.wait().map_err(|e| format!("ffmpeg: {e}"))?;
+        let mut ffmpeg_stream = ffmpeg_log.map(joined).unwrap_or_default();
+        ffmpeg_stream.push(&match ffmpeg_status.code() {
+            Some(code) => format!("exit code {code}{}", if killed { " (killed)" } else { "" }),
+            None => "terminated by a signal".to_string(),
+        });
+        if !killed && !ffmpeg_status.success() {
+            // the last line is the exit code just pushed
+            let logged = &ffmpeg_stream.lines[..ffmpeg_stream.lines.len().saturating_sub(1)];
+            let detail = ffmpeg_detail(
+                logged
+                    .iter()
+                    .rev()
+                    .map(String::as_str)
+                    .find(|l| is_ffmpeg_error(l)),
+                logged.last().map(String::as_str),
+                &temp_of(job),
+            );
+            failure = Some(failure_message("ffmpeg", ffmpeg_status, Some(&detail)));
+        }
+        log.streams.push(ffmpeg_stream);
+    }
+    Ok(failure)
+}
+
 /// ffmpeg | truehdd: decodes the Atmos presentation of the input.
 fn run_decode(job: &Job, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), String> {
     // ffmpeg copies the TrueHD track (of a container or a raw stream) into
@@ -1204,34 +1266,7 @@ fn run_decode(job: &Job, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), S
     log.exit = status.code();
 
     // If truehdd gave up, ffmpeg would hang on the closed pipe.
-    let mut ffmpeg_failure = None;
-    if let Some(ff) = ffmpeg.as_mut() {
-        let killed = !status.success();
-        if killed {
-            let _ = ff.kill();
-        }
-        let ffmpeg_status = ff.wait().map_err(|e| format!("ffmpeg: {e}"))?;
-        let mut ffmpeg_stream = ffmpeg_log.map(joined).unwrap_or_default();
-        ffmpeg_stream.push(&match ffmpeg_status.code() {
-            Some(code) => format!("exit code {code}{}", if killed { " (killed)" } else { "" }),
-            None => "terminated by a signal".to_string(),
-        });
-        if !killed && !ffmpeg_status.success() {
-            // the last line is the exit code just pushed
-            let logged = &ffmpeg_stream.lines[..ffmpeg_stream.lines.len().saturating_sub(1)];
-            let detail = ffmpeg_detail(
-                logged
-                    .iter()
-                    .rev()
-                    .map(String::as_str)
-                    .find(|l| is_ffmpeg_error(l)),
-                logged.last().map(String::as_str),
-                &temp_of(job),
-            );
-            ffmpeg_failure = Some(failure_message("ffmpeg", ffmpeg_status, Some(&detail)));
-        }
-        log.streams.push(ffmpeg_stream);
-    }
+    let ffmpeg_failure = finish_feeder(ffmpeg, ffmpeg_log, status.success(), job, log)?;
     log.streams.push(truehdd_log);
     let mut stdout_stream = Stream::new("truehdd stdout");
     stdout_stream.push(&result);
@@ -1270,6 +1305,144 @@ fn run_decode(job: &Job, bar: &Bar, ui: &Ui, log: &mut StageLog) -> Result<(), S
             "[bold yellow]WARNING:[/bold yellow] {}",
             escape(&message)
         ));
+    }
+    bar.percent(100.0);
+    Ok(())
+}
+
+/// Show a warning of a job (on screen, in the events and in the report).
+fn warn_job(message: &str, ui: &Ui, log: &mut StageLog) {
+    log.warnings.push(message.to_string());
+    events::warning(message);
+    ui.say(&format!(
+        "[bold yellow]WARNING:[/bold yellow] {}",
+        escape(message)
+    ));
+}
+
+/// ffmpeg | harletty: decodes the DTS:X or Auro-3D presentation of the input
+/// into the same `.atmos` master set truehdd writes. harletty has no result
+/// on its stdout, so the decoded `.atmos.audio` (a CAF) says how far it is
+/// and how much it decoded; its JSON log on stderr has the errors and the
+/// warnings.
+fn run_harletty_decode(
+    job: &Job,
+    experimental: Option<&str>,
+    check_length: bool,
+    bar: &Bar,
+    ui: &Ui,
+    log: &mut StageLog,
+) -> Result<(), String> {
+    // ffmpeg copies the DTS track of a container into the stdin of harletty
+    // (a raw .dts is read directly)
+    let mut ffmpeg = if job.ffmpeg_args.is_empty() {
+        None
+    } else {
+        Some(spawn(&job.ffmpeg_args, Stdio::piped(), Stdio::piped())?)
+    };
+    let (stdin, ffmpeg_log) = match ffmpeg.as_mut() {
+        Some(ff) => (
+            Stdio::from(ff.stdout.take().expect("piped stdout")),
+            Some(drain_stream(
+                ff.stderr.take().expect("piped stderr"),
+                "ffmpeg stderr",
+            )),
+        ),
+        None => (Stdio::null(), None),
+    };
+    let mut child = match spawn_with_stdin(&job.decode_args, stdin, Stdio::null(), Stdio::piped()) {
+        Ok(child) => child,
+        Err(e) => {
+            if let Some(ff) = ffmpeg.as_mut() {
+                let _ = ff.kill();
+                let _ = ff.wait();
+            }
+            return Err(e);
+        }
+    };
+    let stderr = child.stderr.take().expect("piped stderr");
+    bar.set_decoder("harletty");
+    bar.describe(Stage::Decode, None);
+    if let Some(message) = experimental {
+        warn_job(message, ui, log);
+    }
+    // the total is the duration of the input, if it is known
+    if job.length > 0.0 {
+        bar.percent(0.0);
+    } else {
+        bar.indeterminate();
+    }
+
+    let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let warnings = Arc::new(Mutex::new(Vec::<String>::new()));
+    let harletty_log = {
+        let (errors, warnings) = (errors.clone(), warnings.clone());
+        std::thread::spawn(move || {
+            let mut stream = Stream::new("harletty stderr");
+            for_each_line(stderr, |line| {
+                stream.push(line);
+                match harletty::classify(line) {
+                    harletty::LogLine::Error(message) => {
+                        errors.lock().expect("errors").push(message);
+                    }
+                    harletty::LogLine::Warn(message) => {
+                        warnings.lock().expect("warnings").push(message);
+                    }
+                    harletty::LogLine::Other => {}
+                }
+            });
+            stream
+        })
+    };
+
+    // harletty prints no progress to a pipe: the size of the decoded audio
+    // tells how far it is
+    let audio_path = format!("{}.audio", job.intermediate);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if let Some(percent) =
+                    harletty::decode_percent(harletty::read_audio(&audio_path), job.length)
+                {
+                    bar.percent(percent);
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(e) => {
+                if let Some(ff) = ffmpeg.as_mut() {
+                    let _ = ff.kill();
+                    let _ = ff.wait();
+                }
+                return Err(format!("harletty: {e}"));
+            }
+        }
+    };
+    let harletty_log = harletty_log.join().unwrap_or_default();
+    log.exit = status.code();
+    let ffmpeg_failure = finish_feeder(ffmpeg, ffmpeg_log, status.success(), job, log)?;
+    log.streams.push(harletty_log);
+    if let Some(message) = ffmpeg_failure {
+        return Err(message);
+    }
+    if !status.success() {
+        let errors = errors.lock().expect("errors");
+        return Err(failure_message(
+            "harletty",
+            status,
+            errors
+                .last()
+                .map(String::as_str)
+                .or_else(|| harletty::exit_phrase(status.code())),
+        ));
+    }
+    if !Path::new(&job.intermediate).exists() {
+        return Err("harletty failed: no .atmos file was written.".to_string());
+    }
+    harletty::check_decoded(harletty::read_audio(&audio_path), job.length, check_length)?;
+    let warnings = warnings.lock().expect("warnings");
+    if let Some(message) = harletty::warning_text(last_component(&job.input), &warnings) {
+        warn_job(&message, ui, log);
     }
     bar.percent(100.0);
     Ok(())
@@ -1758,8 +1931,12 @@ fn run_stages(job: &Job, bar: &Bar, ui: &Ui, stages: &mut Vec<StageLog>) -> Resu
             if !job.ffmpeg_args.is_empty() {
                 commands.insert(0, &job.ffmpeg_args[..]);
             }
-            staged(stages, "decode", &commands, on, |log| {
-                run_decode(job, bar, ui, log)
+            staged(stages, "decode", &commands, on, |log| match &job.decoder {
+                Decoder::Truehdd => run_decode(job, bar, ui, log),
+                Decoder::Harletty {
+                    experimental,
+                    check_length,
+                } => run_harletty_decode(job, experimental.as_deref(), *check_length, bar, ui, log),
             })?;
         } else if !job.ffmpeg_args.is_empty() {
             staged(stages, "ffmpeg", &[&job.ffmpeg_args], on, |log| {

@@ -126,8 +126,9 @@ impl Format {
         matches!(self, Format::Dd | Format::Ddp | Format::Thd)
     }
 
-    /// Formats whose Atmos source goes through truehdd (`-wm`, `-bc`): the
-    /// Atmos formats and AC4 IMS (from a TrueHD Atmos source).
+    /// Formats whose Atmos source goes through truehdd or harletty (`-wm`,
+    /// `-bc`): the Atmos formats and AC4 IMS (from a TrueHD Atmos, DTS:X or
+    /// Auro-3D source).
     pub fn has_truehdd(self) -> bool {
         self.is_atmos() || self == Format::Ac4Ims
     }
@@ -482,8 +483,12 @@ fn all_equal(list: &[i64]) -> bool {
 
 /// Sample rate and channel mismatch checks, bit depth normalisation. `probes` is not empty.
 pub fn check_inputs(probes: &[Probe]) -> Result<InputInfo, Fail> {
-    // an Atmos master has no say in the rate and channels of the others
-    let real: Vec<&Probe> = probes.iter().filter(|p| p.master.is_none()).collect();
+    // an Atmos master has no say in the rate and channels of the others, nor
+    // has a DTS:X or Auro-3D source (its bed is not what is encoded)
+    let real: Vec<&Probe> = probes
+        .iter()
+        .filter(|p| p.master.is_none() && p.spatial.is_none())
+        .collect();
     let basis: Vec<&Probe> = if real.is_empty() {
         probes.iter().collect()
     } else {
@@ -522,23 +527,35 @@ pub fn normalize_bit_depth(depth: i64) -> u32 {
     }
 }
 
-/// The Atmos formats need TrueHD inputs with an Atmos presentation;
-/// `files` and `probes` belong together.
+/// Whether the track is DTS (any profile): the only input besides TrueHD
+/// that can be an Atmos source, as DTS:X or Auro-3D (see [`Probe::spatial`]).
+pub fn is_dts(probe: &Probe) -> bool {
+    probe.codec == "dts"
+}
+
+/// The Atmos formats need TrueHD inputs with an Atmos presentation, DTS
+/// inputs with DTS:X or Auro-3D, 24-bit PCM (FLAC, PCM, TrueHD) with Auro-3D
+/// (the `spatial` of their probe, so harletty has looked at them already), or
+/// Atmos masters; `files` and `probes` belong
+/// together.
 pub fn check_atmos_inputs(files: &[String], probes: &[Probe]) -> Result<(), Fail> {
     let pairs = || files.iter().zip(probes);
-    if let Some((file, _)) = pairs().find(|(_, probe)| !probe.is_truehd && probe.master.is_none()) {
+    if let Some((file, _)) = pairs().find(|(_, probe)| {
+        !probe.is_truehd && !is_dts(probe) && probe.master.is_none() && probe.spatial.is_none()
+    }) {
         return Err(Fail::with(ErrorKind::AtmosInput, escape(file)));
     }
-    match pairs().find(|(_, probe)| !probe.is_atmos) {
+    match pairs().find(|(_, probe)| !probe.is_atmos && probe.spatial.is_none()) {
         Some((file, _)) => Err(Fail::with(ErrorKind::AtmosNoAtmos, escape(file))),
         None => Ok(()),
     }
 }
 
-/// Whether the source of AC4 IMS is Atmos: a master, or TrueHD with an Atmos
-/// presentation (decoded by truehdd). Any other source is 5.1 / 7.1 audio.
+/// Whether the source of AC4 IMS is Atmos: a master, TrueHD with an Atmos
+/// presentation (decoded by truehdd), or a DTS:X or Auro-3D track (decoded by
+/// harletty, also Auro-3D in 24-bit PCM, see [`Probe::spatial`]). Any other source is 5.1 / 7.1 audio.
 pub fn ims_atmos_source(probe: &Probe) -> bool {
-    probe.master.is_some() || (probe.is_truehd && probe.is_atmos)
+    probe.master.is_some() || (probe.is_truehd && probe.is_atmos) || probe.spatial.is_some()
 }
 
 /// AC4 IMS takes Atmos or channel-based inputs, not both in one run (the
@@ -1476,11 +1493,15 @@ mod tests {
             channel_layout: String::new(),
             codec: "pcm_s24le".into(),
             raw_truehd: false,
+            raw_dts: false,
             profile: String::new(),
             is_atmos: false,
             master: None,
             language: None,
             title: None,
+            dts_downmix: None,
+            spatial: None,
+            harletty_check: None,
         }
     }
 
@@ -1526,6 +1547,87 @@ mod tests {
         plain.is_atmos = false;
         let e = check_atmos_inputs(&files, &[thd.clone(), plain]).unwrap_err();
         assert_eq!(e, Fail::with(ErrorKind::AtmosNoAtmos, "b \\[1].wav"));
+    }
+
+    #[test]
+    fn atmos_inputs_can_be_dts_with_dtsx_or_auro() {
+        use crate::harletty::Spatial;
+        let spatial = |kind: &str| Spatial {
+            label: "DTS:X-7.1.4".into(),
+            kind: kind.into(),
+            objects: None,
+            experimental: false,
+            presentation: None,
+            auro_layout: None,
+            auro_carrier: None,
+        };
+        let dts = |spatial: Option<Spatial>| Probe {
+            codec: "dts".into(),
+            dts_downmix: None,
+            spatial,
+            harletty_check: None,
+            ..probe(48000, 8, 24)
+        };
+        let files = ["a.dts".to_string(), "b [1].mkv".to_string()];
+        let x = dts(Some(spatial("dtsx")));
+        assert_eq!(
+            check_atmos_inputs(&files[..1], std::slice::from_ref(&x)),
+            Ok(())
+        );
+        assert_eq!(
+            check_atmos_inputs(&files[..1], &[dts(Some(spatial("auro")))]),
+            Ok(())
+        );
+        // DTS without DTS:X or Auro-3D
+        let e = check_atmos_inputs(&files, &[x.clone(), dts(None)]).unwrap_err();
+        assert_eq!(e, Fail::with(ErrorKind::AtmosNoAtmos, "b \\[1].mkv"));
+        // mixed with TrueHD Atmos and a master
+        let mut thd = probe(48000, 8, 24);
+        thd.is_truehd = true;
+        thd.is_atmos = true;
+        let mixed = [x.clone(), thd, master_probe()];
+        let names = ["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(check_atmos_inputs(&names, &mixed), Ok(()));
+        // other codecs are still no Atmos source
+        let mut aac = x.clone();
+        aac.codec = "aac".into();
+        aac.spatial = None;
+        let e = check_atmos_inputs(&files[..1], &[aac]).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::AtmosInput);
+        assert!(is_dts(&x) && !is_dts(&probe(48000, 8, 24)));
+    }
+
+    #[test]
+    fn atmos_inputs_can_be_pcm_with_auro() {
+        let auro = crate::harletty::Spatial {
+            label: "Auro-3D-13.1".into(),
+            kind: "auro".into(),
+            objects: None,
+            experimental: false,
+            presentation: None,
+            auro_layout: Some("13.1".into()),
+            auro_carrier: Some("7.1".into()),
+        };
+        let files = ["a.flac".to_string()];
+        let mut flac = Probe {
+            codec: "flac".into(),
+            ..probe(48000, 8, 24)
+        };
+        let e = check_atmos_inputs(&files, std::slice::from_ref(&flac)).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::AtmosInput);
+        flac.spatial = Some(auro.clone());
+        assert_eq!(check_atmos_inputs(&files, &[flac.clone()]), Ok(()));
+        assert!(ims_atmos_source(&flac));
+        // TrueHD without Atmos but with Auro-3D
+        let mut thd = truehd_probe(false);
+        assert_eq!(
+            check_atmos_inputs(&files, std::slice::from_ref(&thd))
+                .unwrap_err()
+                .kind,
+            ErrorKind::AtmosNoAtmos
+        );
+        thd.spatial = Some(auro);
+        assert_eq!(check_atmos_inputs(&files, &[thd]), Ok(()));
     }
 
     #[test]
@@ -2358,6 +2460,25 @@ mod tests {
         assert!(ims_atmos_source(&master_probe()));
         assert!(ims_atmos_source(&truehd_probe(true)));
         assert!(!ims_atmos_source(&truehd_probe(false)));
+        let mut dtsx = probe(48000, 8, 24);
+        assert!(!ims_atmos_source(&dtsx));
+        dtsx.spatial = Some(crate::harletty::Spatial {
+            label: "DTS:X-7.1.4+3".into(),
+            kind: "dtsx".into(),
+            objects: Some(3),
+            experimental: false,
+            presentation: None,
+            auro_layout: None,
+            auro_carrier: None,
+        });
+        assert!(ims_atmos_source(&dtsx));
+        assert!(check_ims_inputs(&[dtsx.clone(), truehd_probe(true)]).is_ok());
+        assert_eq!(
+            check_ims_inputs(&[dtsx, probe(48000, 6, 24)])
+                .unwrap_err()
+                .kind,
+            ErrorKind::Ac4ImsMixed
+        );
         assert!(check_ims_inputs(&[master_probe(), truehd_probe(true)]).is_ok());
         assert!(check_ims_inputs(&[probe(48000, 6, 24), truehd_probe(false)]).is_ok());
         assert_eq!(

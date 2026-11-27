@@ -29,7 +29,7 @@ export const excludesEncode = (flag: InfoFlag): boolean =>
 
 const ENCODE_REASON: Partial<Record<InfoFlag, string>> = {
   "-gt":
-    "Not while an encode is running: it replaces ffmpeg, truehdd and dee_shim, which the encode is using.",
+    "Not while an encode is running: it replaces ffmpeg, truehdd, harletty and dee_shim, which the encode is using.",
   "-gc": "Not while an encode is running: it rewrites config.toml.",
   "-u": "Not while an encode is running: it replaces deew, which the encode is using.",
   "-u all":

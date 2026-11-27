@@ -38,7 +38,7 @@ export const FORMAT_LABELS: Readonly<Record<Format, string>> = {
   aac: "AAC",
 }
 
-/** Formats that are encoded from a TrueHD Atmos input with truehdd. */
+/** Formats that are encoded from a TrueHD Atmos (truehdd), DTS:X or Auro-3D (harletty) input (AC-4 IMS too, from such a source). */
 export function isAtmos(format: Format): boolean {
   return (
     format === "ddp-atmos" || format === "ac4-atmos" || format === "thd-atmos"
@@ -203,7 +203,7 @@ export type WarpModeConfig = WarpMode | ""
 
 /**
  * Whether `-wm` and `-bc` are enabled: the formats that decode a TrueHD
- * Atmos source with truehdd, and measure only (any format). The CLI
+ * Atmos source with truehdd or DTS:X / Auro-3D with harletty, and measure only (any format). The CLI
  * rejects them for the other formats.
  */
 export function truehddOptionsApply(
@@ -478,6 +478,8 @@ export interface InputKind {
   atmos: boolean
   /** An Atmos master (ADM BWF / DAMF), `codec` is its label. */
   master?: boolean
+  /** A DTS:X or Auro-3D track (decoded by harletty, an Atmos source of AC-4 IMS). */
+  spatial?: boolean
 }
 
 export interface BitrateInfo {
@@ -504,21 +506,24 @@ export interface BitrateInfo {
 }
 
 export const ATMOS_INPUT_WARNING =
-  "The Atmos formats need a TrueHD Atmos input."
+  "The Atmos formats need a TrueHD Atmos, DTS:X or Auro-3D input."
 export const DDP_ATMOS_INPUT_WARNING =
-  "DDP Atmos input: the Atmos formats need a TrueHD Atmos input."
+  "DDP Atmos input: the Atmos formats need a TrueHD Atmos, DTS:X or Auro-3D input."
 export const THD_NO_ATMOS_INPUT_WARNING =
-  "TrueHD input without Atmos: the Atmos formats need a TrueHD Atmos input."
+  "TrueHD input without Atmos: the Atmos formats need a TrueHD Atmos, DTS:X or Auro-3D input."
 
 /** One warning per kind of unsuitable input for the Atmos formats. */
 export function atmosInputWarnings(
   allInputs: readonly InputKind[] | undefined,
   codecs: readonly string[] | undefined
 ): string[] {
-  // Atmos masters are Atmos sources of their own, they are never a problem.
-  const inputs = allInputs?.filter((i) => i.master !== true)
+  // Atmos masters and DTS:X / Auro-3D tracks (also Auro-3D in FLAC, PCM or
+  // TrueHD) are Atmos sources of their own, they are never a problem.
+  const inputs = allInputs?.filter(
+    (i) => i.master !== true && i.spatial !== true
+  )
   if (inputs === undefined) {
-    return codecs?.some((codec) => codec !== "truehd")
+    return codecs?.some((codec) => codec !== "truehd" && codec !== "dts")
       ? [ATMOS_INPUT_WARNING]
       : []
   }
@@ -530,7 +535,12 @@ export function atmosInputWarnings(
     warnings.push(THD_NO_ATMOS_INPUT_WARNING)
   }
   if (
-    inputs.some((i) => i.codec !== "truehd" && !(i.codec === "eac3" && i.atmos))
+    inputs.some(
+      (i) =>
+        i.codec !== "truehd" &&
+        i.codec !== "dts" &&
+        !(i.codec === "eac3" && i.atmos)
+    )
   ) {
     warnings.push(ATMOS_INPUT_WARNING)
   }
@@ -540,13 +550,15 @@ export function atmosInputWarnings(
 export const IMS_INPUT_WARNING =
   "AC-4 IMS needs a 5.1 (or 5.0, 7.0, 7.1) or an Atmos input, stereo and mono can't be encoded to immersive stereo."
 export const IMS_MIXED_WARNING =
-  "AC-4 IMS can't encode Atmos inputs (TrueHD Atmos, ADM BWF, DAMF) and channel-based inputs in the same run."
+  "AC-4 IMS can't encode Atmos inputs (TrueHD Atmos, DTS:X, Auro-3D, ADM BWF, DAMF) and channel-based inputs in the same run."
 export const MASTER_MIXED_WARNING =
   "Atmos masters (ADM BWF, DAMF) can't be encoded to DD/DDP together with other inputs."
 
-/** Whether the source of AC-4 IMS is Atmos: a master or TrueHD Atmos. */
+/** Whether the source of AC-4 IMS is Atmos: a master, TrueHD Atmos, DTS:X or Auro-3D. */
 export function imsAtmosSource(i: InputKind): boolean {
-  return i.master === true || (i.codec === "truehd" && i.atmos)
+  return (
+    i.master === true || (i.codec === "truehd" && i.atmos) || i.spatial === true
+  )
 }
 
 /** The formats whose encoder reads an Atmos master (DD/DDP render a 5.1). */

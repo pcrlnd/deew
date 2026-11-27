@@ -223,7 +223,7 @@ const DD_FILTER_FORMATS: Record<DdFilterOption, string> = {
   lowPassFilter: "DD and DDP",
   surround3dbAttenuation: "DD, DDP and TrueHD",
   truehddBedConform:
-    "DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only",
+    "DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only (TrueHD Atmos sources)",
 }
 
 function FlagCode({ flag }: { flag: string }) {

@@ -1,3 +1,22 @@
+# deew 5.7.0:
+- DTS:X and Auro-3D sources for `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims`: [harletty](https://github.com/harletty/harletty-bridge) (0.9.0 or newer) decodes them into an Atmos master, which DEE encodes like a TrueHD Atmos source
+  - DTS tracks (raw `.dts` or a container) are checked with harletty when one of these formats is selected; a DTS track without DTS:X or Auro-3D is refused, like any other input without Atmos
+  - Auro-3D is read from 24-bit DTS-HD MA tracks, and from other 24-bit lossless sources (FLAC, PCM, TrueHD without Atmos), which ffmpeg decodes bit-exactly and pipes into harletty as PCM
+  - the bed is always conformed (heights that an Atmos bed can't hold become static objects), `-wm` / `truehdd_warp_mode` apply as for TrueHD Atmos
+  - harletty's DTS:X decoding is based on reverse engineering; DTS:X layouts it marks experimental get a warning, problems it reports while decoding are shown as a warning per file
+  - `ac4-ims` takes them as Atmos sources like TrueHD Atmos (so not with 5.1 / 7.1 inputs in one run); a plain DTS track stays channel-based, and without harletty only a track ffprobe reports as DTS:X needs it
+  - every other format and `-mo` still decode DTS with ffmpeg, harletty is not needed for them
+- `-gt` also downloads harletty (x86_64 Linux and Windows, universal macOS)
+  - note: until my pull requests to harletty are merged (Auro-3D from PCM, the universal macOS build, the version in `--version`), `-gt` downloads harletty from my fork ([pcrlnd/harletty-bridge](https://github.com/pcrlnd/harletty-bridge)): harletty's current `main` with these changes, reporting version `0.9.0-pcr`
+- `-v`, `-kl` and the summary show harletty's version, the summary has a harletty row (warp mode, bed conform) when it decodes
+- fixed: with an ffmpeg that decodes the heights of DTS:X (7.1.4, 5.1.2, ...), the channel-based formats and `-mo` kept only the 7.1 / 5.1 bed and lost the height channels; deew now asks ffmpeg's DTS decoder for the stream's own 7.1 / 5.1 downmix (`-downmix`), which folds the heights in
+- DTS:X inputs are shown as "DTS:X 7.1" in the summary, Auro-3D inputs as "Auro-3D 13.1 (carried in 7.1)" (for every format: with harletty next to deew, 24-bit lossless 5.1 / 7.1 tracks are checked for Auro-3D when they are probed; without harletty they show as their 5.1 / 7.1 carrier)
+- the progress shows "harletty decode" for DTS:X and Auro-3D sources (in `deew-gui`/`deew-web` too)
+- `-cl` wraps the changelog to the terminal width (at most 120 columns)
+- `deew-gui`/`deew-web` 1.1.1:
+  - DTS:X and Auro-3D inputs are shown in the input summary ("DTS:X 7.1", "Auro-3D 13.1 (carried in 7.1)")
+  - help texts mention DTS:X / Auro-3D sources and harletty
+
 # deew 5.6.1:
 - `-u` shows the installed version of `deew-gui` and `deew-web` instead of
   "installed" (from 1.1.0 on; an older one shows its version when it is
@@ -5,8 +24,10 @@
 - `deew-gui`/`deew-web` 1.1.0:
   - fixed: when the window is too small and the page scrolls, the bottom
     of the output area now keeps its margin
-  - macOS: new app icon that follows the system appearance (light, dark,
-    and the Clear and Tinted styles of macOS 26)
+  - macOS: new app icon with light and dark variants; on macOS 26 it
+    follows the "Icon & widget style" setting in System Settings ->
+    Appearance (Clear and Tinted are derived from it), not the light/dark
+    theme
   - fixed: the hint in the empty input list says the add buttons are
     below it (it said above)
   - new `minimum_output_height` key in `[gui]`: the smallest height of the

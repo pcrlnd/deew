@@ -61,8 +61,14 @@ fn tenths(value: i64) -> f64 {
     value as f64 / 10.0
 }
 
-fn progress_value(job: usize, stage: Stage, percent: Option<f64>, level: Option<Level>) -> Value {
-    json!({
+fn progress_value(
+    job: usize,
+    stage: Stage,
+    decoder: &str,
+    percent: Option<f64>,
+    level: Option<Level>,
+) -> Value {
+    let mut value = json!({
         "type": "progress",
         "job": job,
         "stage": stage,
@@ -73,7 +79,12 @@ fn progress_value(job: usize, stage: Stage, percent: Option<f64>, level: Option<
         "program": level.and_then(|l| l.program).map(tenths),
         "lra": level.and_then(|l| l.lra).map(tenths),
         "true_peak": level.and_then(|l| l.true_peak).map(tenths),
-    })
+    });
+    // which program decodes (`truehdd` or `harletty`), only for the decode stage
+    if stage == Stage::Decode {
+        value["decoder"] = json!(decoder);
+    }
+    value
 }
 
 fn text_value(kind: &str, text: &str) -> Value {
@@ -88,9 +99,15 @@ pub fn jobs(files: &[&str]) {
 }
 
 /// Progress of a job; `percent` is 0 to 100, `None` for an unknown total.
-pub fn progress(job: usize, stage: Stage, percent: Option<f64>, level: Option<Level>) {
+pub fn progress(
+    job: usize,
+    stage: Stage,
+    decoder: &str,
+    percent: Option<f64>,
+    level: Option<Level>,
+) {
     if enabled() {
-        emit(progress_value(job, stage, percent, level));
+        emit(progress_value(job, stage, decoder, percent, level));
     }
 }
 
@@ -174,7 +191,13 @@ mod tests {
 
     #[test]
     fn progress_shape() {
-        let v = progress_value(2, Stage::Encode, Some(12.3456), Some(Level::new(-24)));
+        let v = progress_value(
+            2,
+            Stage::Encode,
+            "truehdd",
+            Some(12.3456),
+            Some(Level::new(-24)),
+        );
         assert_eq!(v["type"], "progress");
         assert_eq!(v["job"], 2);
         assert_eq!(v["stage"], "encode");
@@ -187,7 +210,7 @@ mod tests {
             speech: Some(16),
             ..Level::new(-33)
         };
-        let v = progress_value(0, Stage::Measure, Some(1.0), Some(level));
+        let v = progress_value(0, Stage::Measure, "truehdd", Some(1.0), Some(level));
         assert_eq!(v["gating"], "dialogue");
         assert_eq!(v["speech"], 16);
         assert!(v["program"].is_null() && v["lra"].is_null() && v["true_peak"].is_null());
@@ -197,26 +220,42 @@ mod tests {
             true_peak: Some(-49),
             ..level
         };
-        let v = progress_value(0, Stage::Measure, Some(1.0), Some(level));
+        let v = progress_value(0, Stage::Measure, "truehdd", Some(1.0), Some(level));
         assert_eq!(v["program"], -18.9);
         assert_eq!(v["lra"], 13.1);
         assert_eq!(v["true_peak"], -4.9);
-        let v = progress_value(0, Stage::Starting, None, None);
+        let v = progress_value(0, Stage::Starting, "truehdd", None, None);
         assert_eq!(v["stage"], "starting");
         assert!(v["percent"].is_null() && v["db"].is_null());
         assert!(v.as_object().unwrap().contains_key("percent"));
         assert_eq!(
-            progress_value(0, Stage::Ffmpeg, Some(0.0), None)["stage"],
+            progress_value(0, Stage::Ffmpeg, "truehdd", Some(0.0), None)["stage"],
             "ffmpeg"
         );
         assert_eq!(
-            progress_value(0, Stage::Measure, Some(100.0), None)["stage"],
+            progress_value(0, Stage::Measure, "truehdd", Some(100.0), None)["stage"],
             "measure"
         );
         assert_eq!(
-            progress_value(0, Stage::Decode, Some(50.0), None)["stage"],
+            progress_value(0, Stage::Decode, "truehdd", Some(50.0), None)["stage"],
             "decode"
         );
+        // the decoder is only named for the decode stage
+        let v = progress_value(0, Stage::Decode, "harletty", Some(50.0), None);
+        assert_eq!(v["decoder"], "harletty");
+        assert_eq!(
+            progress_value(0, Stage::Decode, "truehdd", None, None)["decoder"],
+            "truehdd"
+        );
+        for stage in [
+            Stage::Starting,
+            Stage::Ffmpeg,
+            Stage::Measure,
+            Stage::Encode,
+        ] {
+            let v = progress_value(0, stage, "harletty", Some(1.0), None);
+            assert!(!v.as_object().unwrap().contains_key("decoder"), "{stage:?}");
+        }
     }
 
     #[test]

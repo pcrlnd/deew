@@ -15,6 +15,7 @@ use base64::Engine;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use unicode_width::UnicodeWidthChar;
 
 const CHANGELOG_URL: &str = "https://api.github.com/repos/pcrlnd/deew/contents/changelog.md";
 
@@ -38,12 +39,13 @@ const DEE_TOOLS: [&str; 8] = [
 #[cfg(test)]
 pub fn version_lines(
     versions: &Versions,
-    paths: &[Option<String>; 5],
+    paths: &[Option<String>; 6],
     exe: Option<&str>,
 ) -> Vec<String> {
     let known = [
         &versions.dee,
         &versions.truehdd,
+        &versions.harletty,
         &versions.shim,
         &versions.ffmpeg,
         &versions.ffprobe,
@@ -59,8 +61,8 @@ const PENDING: &str = "[dim]…[/dim]";
 /// result (`None`) shows a placeholder and no path, and does not count for
 /// the width of the version column.
 pub fn partial_version_lines(
-    versions: &[Option<tools::Version>; 5],
-    paths: &[Option<String>; 5],
+    versions: &[Option<tools::Version>; 6],
+    paths: &[Option<String>; 6],
     exe: Option<&str>,
 ) -> Vec<String> {
     let own = env!("CARGO_PKG_VERSION");
@@ -79,7 +81,7 @@ pub fn partial_version_lines(
     } else {
         0
     };
-    let column = (0..5)
+    let column = (0..6)
         .filter(|&i| found(i))
         .map(|i| plain[i])
         .max()
@@ -98,7 +100,9 @@ pub fn partial_version_lines(
         "[bold cyan]{:<9}[/bold cyan][not bold white]{own}[/not bold white]{own_path}",
         "deew"
     )];
-    let labels = ["DEE", "truehdd", "dee_shim", "ffmpeg", "ffprobe"];
+    let labels = [
+        "DEE", "truehdd", "harletty", "dee_shim", "ffmpeg", "ffprobe",
+    ];
     for (i, label) in labels.into_iter().enumerate() {
         let cell = versions[i]
             .as_ref()
@@ -128,6 +132,7 @@ pub fn print_version() -> ! {
         .iter()
         .find_map(|tool| tools::dee_tool(tool, &cwd, exe_dir));
     let truehdd = tools::find_truehdd(exe_dir, &cwd);
+    let harletty = tools::find_harletty(exe_dir, &cwd);
     let shim = tools::find_shim(&cwd, exe_dir);
     // the programs that would run
     let program = |name: &str| tools::find_program(name, exe_dir, &cwd).unwrap_or(name.to_string());
@@ -139,6 +144,7 @@ pub fn print_version() -> ! {
     let paths = [
         dee_dir,
         truehdd.clone(),
+        harletty.clone(),
         shim.as_ref().map(|shim| shim.run.clone()),
         Some(ffmpeg.clone()),
         Some(ffprobe.clone()),
@@ -152,7 +158,7 @@ pub fn print_version() -> ! {
             None => text,
         }
     });
-    let results: Arc<Mutex<[Option<tools::Version>; 5]>> = Arc::default();
+    let results: Arc<Mutex<[Option<tools::Version>; 6]>> = Arc::default();
     let live = {
         let (results, paths, exe) = (results.clone(), paths.clone(), exe.clone());
         let color = color_enabled();
@@ -168,6 +174,7 @@ pub fn print_version() -> ! {
     tools::probe_versions_each(
         dee.as_deref(),
         truehdd.as_deref(),
+        harletty.as_deref(),
         shim.as_ref(),
         &ffmpeg,
         &ffprobe,
@@ -465,7 +472,10 @@ pub fn changelog_lines(content: &str) -> Vec<&str> {
 /// the raw text is never parsed as markup, `# ` headings become bold and
 /// backticks alternate between opening and closing a yellow span.
 pub fn changelog_markup(line: &str) -> String {
-    let line = line.strip_suffix('\\').unwrap_or(line);
+    markup_raw(line.strip_suffix('\\').unwrap_or(line))
+}
+
+fn markup_raw(line: &str) -> String {
     let mut line = escape(line);
     if line.starts_with("# ") {
         line = format!(
@@ -488,6 +498,100 @@ pub fn changelog_markup(line: &str) -> String {
         }
     }
     format!("[not bold white]{out}[/not bold white]")
+}
+
+/// Columns the text of a line starts at (after the indent and a `- `, `* `
+/// or `1. ` list marker).
+fn hanging_indent(line: &str) -> usize {
+    let rest = line.trim_start_matches(' ');
+    let lead = line.len() - rest.len();
+    let marker = if rest.starts_with("- ") || rest.starts_with("* ") {
+        2
+    } else {
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        if digits > 0 && rest[digits..].starts_with(". ") {
+            digits + 2
+        } else {
+            0
+        }
+    };
+    lead + marker
+}
+
+/// Display width of raw text, not counting the backticks (never printed).
+fn raw_width(s: &str) -> usize {
+    s.chars()
+        .filter(|&c| c != '`')
+        .map(|c| c.width().unwrap_or(0))
+        .sum()
+}
+
+/// Wrap one raw line at spaces to `width` columns, continuation lines
+/// indented by the hanging indent. A word wider than `width` stays whole.
+fn wrap_raw(line: &str, width: usize) -> Vec<String> {
+    if raw_width(line) <= width {
+        return vec![line.to_string()];
+    }
+    let hang = hanging_indent(line);
+    let indent = " ".repeat(hang);
+    let mut words = line[hang.min(line.len())..].split(' ');
+    let mut cur = line[..hang.min(line.len())].to_string();
+    let mut cur_width = hang;
+    let mut has_word = false;
+    let mut lines = Vec::new();
+    // The leading indent and marker belong to the first word.
+    if let Some(first) = words.next() {
+        cur.push_str(first);
+        cur_width += raw_width(first);
+        has_word = true;
+    }
+    for word in words {
+        let w = raw_width(word);
+        if cur_width + 1 + w > width && has_word {
+            lines.push(std::mem::replace(&mut cur, indent.clone()));
+            cur_width = hang;
+            cur.push_str(word);
+            cur_width += w;
+        } else {
+            cur.push(' ');
+            cur.push_str(word);
+            cur_width += 1 + w;
+        }
+    }
+    lines.push(cur);
+    lines
+}
+
+/// The printable markup lines of the changelog, long lines wrapped to
+/// `width` columns. A code span split over lines is closed at the end of
+/// each piece and reopened at the start of the next.
+pub fn changelog_wrapped(content: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in changelog_lines(content) {
+        if line.starts_with("# ") {
+            out.push(changelog_markup(line));
+            continue;
+        }
+        let line = line.strip_suffix('\\').unwrap_or(line);
+        let mut open = false;
+        for piece in wrap_raw(line, width) {
+            let mut text = String::new();
+            let body = piece.trim_start_matches(' ');
+            text.push_str(&piece[..piece.len() - body.len()]);
+            if open {
+                text.push('`');
+            }
+            text.push_str(body);
+            if piece.chars().filter(|&c| c == '`').count() % 2 == 1 {
+                open = !open;
+            }
+            if open {
+                text.push('`');
+            }
+            out.push(markup_raw(&text));
+        }
+    }
+    out
 }
 
 fn fetch_changelog() -> Result<String, String> {
@@ -516,13 +620,20 @@ fn fetch_changelog() -> Result<String, String> {
     String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
+/// Wrap width for a terminal of `term` columns: the terminal width, at most
+/// 120 and at least 20 so the hanging indent always leaves room for text.
+fn changelog_width(term: usize) -> usize {
+    term.clamp(20, 120)
+}
+
 pub fn print_changelog() -> ! {
     let content = match fetch_changelog() {
         Ok(content) => content,
         Err(_) => print_exit(ErrorKind::Changelog, None),
     };
-    for line in changelog_lines(&content) {
-        rprintln!("{}", changelog_markup(line));
+    let width = changelog_width(crate::term::console_width());
+    for line in changelog_wrapped(&content, width) {
+        rprintln!("{}", line);
     }
     std::process::exit(0);
 }
@@ -643,6 +754,7 @@ mod tests {
         let versions = Versions {
             dee: Version::Found("6.7.0".into()),
             truehdd: Version::NotFound,
+            harletty: Version::Found("0.9.0".into()),
             shim: Version::Found("0.1.0".into()),
             ffmpeg: Version::CouldntParse,
             ffprobe: Version::Found("7.1".into()),
@@ -650,6 +762,7 @@ mod tests {
         let paths = [
             Some("/opt/deew/dee".to_string()),
             Some("/x/truehdd".to_string()),
+            Some("/x/harletty".to_string()),
             Some("/opt/deew/dee_shim".to_string()),
             Some("/usr/bin/ffmpeg".to_string()),
             None,
@@ -672,6 +785,7 @@ mod tests {
             [
                 "DEE      6.7.0           /opt/deew/dee",
                 "truehdd  not found",
+                "harletty 0.9.0           /x/harletty",
                 "dee_shim 0.1.0           /opt/deew/dee_shim",
                 "ffmpeg   couldn't parse  /usr/bin/ffmpeg",
                 "ffprobe  7.1",
@@ -684,35 +798,37 @@ mod tests {
         let paths = [
             Some("/a/dee".to_string()),
             Some("/a/truehdd".to_string()),
+            Some("/a/harletty".to_string()),
             Some("/a/shim".to_string()),
             Some("/a/ffmpeg".to_string()),
             Some("/a/ffprobe".to_string()),
         ];
         let exe = Some("/a/deew");
-        let plain = |known: &[Option<Version>; 5]| -> Vec<String> {
+        let plain = |known: &[Option<Version>; 6]| -> Vec<String> {
             partial_version_lines(known, &paths, exe)
                 .iter()
                 .map(|l| strip(l))
                 .collect()
         };
         // nothing known: placeholders, no paths, the column follows deew
-        let mut known: [Option<Version>; 5] = Default::default();
+        let mut known: [Option<Version>; 6] = Default::default();
         let own = env!("CARGO_PKG_VERSION");
         let lines = plain(&known);
-        assert_eq!(lines.len(), 6);
+        assert_eq!(lines.len(), 7);
         assert_eq!(lines[1], "DEE      …");
-        assert_eq!(lines[5], "ffprobe  …");
+        assert_eq!(lines[6], "ffprobe  …");
         assert_eq!(lines[0], format!("deew     {own}  /a/deew"));
         // one long version widens the column, the others stay pending
-        known[3] = Some(Version::Found("7.1.1-very-long".into()));
+        known[4] = Some(Version::Found("7.1.1-very-long".into()));
         let lines = plain(&known);
-        assert_eq!(lines[4], "ffmpeg   7.1.1-very-long  /a/ffmpeg");
+        assert_eq!(lines[5], "ffmpeg   7.1.1-very-long  /a/ffmpeg");
         assert_eq!(lines[2], "truehdd  …");
         assert!(lines[0].ends_with("/a/deew") && lines[0].len() > own.len() + 17);
         // all known: exactly the final output
         let versions = Versions {
             dee: Version::Found("6.7.0".into()),
             truehdd: Version::NotFound,
+            harletty: Version::NotFound,
             shim: Version::Found("0.1.0".into()),
             ffmpeg: Version::CouldntParse,
             ffprobe: Version::Found("7.1".into()),
@@ -720,6 +836,7 @@ mod tests {
         let all = [
             Some(versions.dee.clone()),
             Some(versions.truehdd.clone()),
+            Some(versions.harletty.clone()),
             Some(versions.shim.clone()),
             Some(versions.ffmpeg.clone()),
             Some(versions.ffprobe.clone()),
@@ -735,11 +852,12 @@ mod tests {
         let versions = Versions {
             dee: Version::NotFound,
             truehdd: Version::NotFound,
+            harletty: Version::NotFound,
             shim: Version::NotFound,
             ffmpeg: Version::NotFound,
             ffprobe: Version::NotFound,
         };
-        let paths = [None, None, None, None, None];
+        let paths = [None, None, None, None, None, None];
         let lines = version_lines(&versions, &paths, None);
         assert_eq!(
             strip(&lines[0]),
@@ -828,5 +946,97 @@ mod tests {
     fn fewer_than_ten_entries() {
         let lines = changelog_lines("# a\n- 1\n\n# b\n- 2");
         assert_eq!(lines, vec!["# b", "- 2", "", "# a", "- 1"]);
+    }
+
+    fn plain(lines: &[String]) -> Vec<String> {
+        lines.iter().map(|l| strip(l)).collect()
+    }
+
+    #[test]
+    fn wrap_hanging_indents() {
+        let long = "aaa bbb ccc ddd eee fff";
+        let got = plain(&changelog_wrapped(&format!("- {long}"), 10));
+        assert_eq!(got, vec!["- aaa bbb", "  ccc ddd", "  eee fff"]);
+        let got = plain(&changelog_wrapped(&format!("  - {long}"), 12));
+        assert_eq!(got, vec!["  - aaa bbb", "    ccc ddd", "    eee fff"]);
+        let got = plain(&changelog_wrapped(&format!("    - {long}"), 14));
+        assert_eq!(got, vec!["    - aaa bbb", "      ccc ddd", "      eee fff"]);
+        let got = plain(&changelog_wrapped("  aaa bbb ccc", 9));
+        assert_eq!(got, vec!["  aaa bbb", "  ccc"]);
+        let got = plain(&changelog_wrapped("1. aaa bbb ccc", 9));
+        assert_eq!(got, vec!["1. aaa", "   bbb", "   ccc"]);
+    }
+
+    #[test]
+    fn width_is_terminal_capped_at_120() {
+        assert_eq!(changelog_width(60), 60);
+        assert_eq!(changelog_width(150), 120);
+        assert_eq!(changelog_width(0), 20);
+    }
+
+    #[test]
+    fn wrap_long_word_unbroken() {
+        let got = plain(&changelog_wrapped(
+            "- see https://example.com/very/long/url now",
+            12,
+        ));
+        assert_eq!(
+            got,
+            vec!["- see", "  https://example.com/very/long/url", "  now"]
+        );
+    }
+
+    #[test]
+    fn wrap_code_span_split_stays_balanced() {
+        let got = changelog_wrapped("- aa `bb cc dd ee` ff", 10);
+        assert_eq!(
+            got,
+            vec![
+                "[not bold white]- aa [bold yellow]bb cc[/bold yellow][/not bold white]",
+                "[not bold white]  [bold yellow]dd ee[/bold yellow] ff[/not bold white]",
+            ]
+        );
+        for l in &got {
+            assert_eq!(&balanced(l), l);
+        }
+    }
+
+    #[test]
+    fn wrap_leaves_short_lines_and_headings() {
+        let content =
+            "# deew 1.0.0: a very long heading that is wider than ten\n- short\n- also short";
+        let got = plain(&changelog_wrapped(content, 80));
+        assert_eq!(
+            got,
+            vec![
+                "deew 1.0.0: a very long heading that is wider than ten",
+                "- short",
+                "- also short"
+            ]
+        );
+        let got = plain(&changelog_wrapped("# deew 1.0.0: long heading here", 10));
+        assert_eq!(got, vec!["deew 1.0.0: long heading here"]);
+    }
+
+    #[test]
+    fn wrap_real_changelog_fits() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("changelog.md");
+        let content = std::fs::read_to_string(path).unwrap();
+        for width in [60, 80, 120] {
+            for l in plain(&changelog_wrapped(&content, width)) {
+                if l.starts_with("deew ") || crate::markup::visible_width(&l) <= width {
+                    continue;
+                }
+                assert_eq!(
+                    l.trim().split(' ').count(),
+                    if l.trim_start().starts_with("- ") {
+                        2
+                    } else {
+                        1
+                    },
+                    "too wide at {width}: {l}"
+                );
+            }
+        }
     }
 }

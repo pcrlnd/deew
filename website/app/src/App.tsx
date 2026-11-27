@@ -53,7 +53,7 @@ function DownloadButton({
       className={buttonVariants({
         size: "lg",
         className:
-          "h-11 px-5 text-sm max-w-full whitespace-normal! max-[239px]:h-auto max-[239px]:min-h-11 max-[239px]:px-3 max-[239px]:py-2 max-[239px]:w-full",
+          "h-11 max-w-full px-5 text-sm whitespace-normal! max-[239px]:h-auto max-[239px]:min-h-11 max-[239px]:w-full max-[239px]:px-3 max-[239px]:py-2",
       })}
     >
       <Icon className="size-5" />
@@ -85,9 +85,9 @@ export default function App() {
             <p className="mt-6 max-w-xl text-base text-muted-foreground sm:text-lg">
               A fast CLI and GUI for{" "}
               <b className="text-foreground">Dolby Encoding Engine</b>. deew
-              prepares your audio with{" "}
-              <b className="text-foreground">ffmpeg</b> and{" "}
-              <b className="text-foreground">truehdd</b> and encodes it to DD,
+              prepares your audio with <b className="text-foreground">ffmpeg</b>
+              , <b className="text-foreground">truehdd</b> and{" "}
+              <b className="text-foreground">harletty</b> and encodes it to DD,
               DDP, TrueHD, AC4 and AAC, including Atmos.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -98,7 +98,7 @@ export default function App() {
                   size: "lg",
                   variant: "outline",
                   className:
-          "h-11 px-5 text-sm max-w-full whitespace-normal! max-[239px]:h-auto max-[239px]:min-h-11 max-[239px]:px-3 max-[239px]:py-2 max-[239px]:w-full",
+                    "h-11 max-w-full px-5 text-sm whitespace-normal! max-[239px]:h-auto max-[239px]:min-h-11 max-[239px]:w-full max-[239px]:px-3 max-[239px]:py-2",
                 })}
               >
                 <GithubIcon className="size-5" />
@@ -219,6 +219,10 @@ export default function App() {
                     href: "https://github.com/truehdd/truehdd",
                   },
                   {
+                    label: "harletty",
+                    href: "https://github.com/harletty/harletty-bridge",
+                  },
+                  {
                     label: "dee_shim",
                     href: "https://github.com/truehdd/dee-shim",
                   },
@@ -237,7 +241,10 @@ export default function App() {
                         />
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="h-6 max-w-full px-2.5 text-sm max-[239px]:h-auto max-[239px]:min-h-6 max-[239px]:break-all max-[239px]:whitespace-normal!">
+                      <Badge
+                        variant="outline"
+                        className="h-6 max-w-full px-2.5 text-sm max-[239px]:h-auto max-[239px]:min-h-6 max-[239px]:break-all max-[239px]:whitespace-normal!"
+                      >
                         {label}
                       </Badge>
                     )}
@@ -305,7 +312,6 @@ export default function App() {
           </div>
         </section>
       </main>
-
     </div>
   )
 }

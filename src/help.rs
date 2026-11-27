@@ -41,6 +41,8 @@ const RAW_HELP: &str = concat!(
   [green]-f[/green], [green]--format[/green] [bold color(231)]FORMAT[/bold color(231)]       [underline magenta]options:[/underline magenta] [bold color(231)]dd[/bold color(231)] / [bold color(231)]ddp[/bold color(231)] / [bold bright_blue]ddp-atmos[/bold bright_blue] / [bold color(231)]thd[/bold color(231)] / [bold bright_blue]thd-atmos[/bold bright_blue] / [bold color(231)]ac4[/bold color(231)] / [bold color(231)]ac4-atmos[/bold color(231)] / [bold color(231)]ac4-ims[/bold color(231)] / [bold color(231)]aac[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]ddp[/bold color(231)]
                             [bold bright_blue]ddp-atmos[/bold bright_blue] and [bold bright_blue]thd-atmos[/bold bright_blue] use truehdd and dee_shim, ac4-atmos and ac4-ims (from Atmos) use truehdd
+                            ddp-atmos, thd-atmos, ac4-atmos and ac4-ims also take DTS:X and Auro-3D sources, decoded with harletty
+                            Auro-3D is read from 24-bit DTS-HD MA, and from 24-bit FLAC, PCM and TrueHD with a harletty that reads PCM (--codec wav)
 ~  [green]--ddp-mode[/green] [bold color(231)]MODE[/bold color(231)]           [underline magenta]options:[/underline magenta] [bold bright_blue]standard[/bold bright_blue] / [bold color(231)]bluray[/bold color(231)]
 ~                            [underline magenta]default:[/underline magenta] run [green]-c[/green]/[green]--config[/green]
 ~                            profile of 7.1 DDP, 5.1 and below are not affected
@@ -83,12 +85,13 @@ const RAW_HELP: &str = concat!(
 ~                            TrueHD asks first: the output is no longer identical to the source
 ~  [green]-wm[/green], [green]--warp-mode[/green] [bold color(231)]MODE[/bold color(231)]     [underline magenta]options:[/underline magenta] [bold color(231)]normal[/bold color(231)] / [bold color(231)]warping[/bold color(231)] / [bold color(231)]prologiciix[/bold color(231)] / [bold color(231)]loro[/bold color(231)]
 ~                            [underline magenta]default:[/underline magenta] from the source's metadata
-~                            truehdd's warp mode, only used when the TrueHD Atmos source has none
+~                            warp mode of the TrueHD Atmos (truehdd) and DTS:X / Auro-3D (harletty) sources, only used when the source has none
 ~                            config: [bold color(231)]truehdd_warp_mode[/bold color(231)]
 ~  [green]-bc[/green], [green]--bed-conform[/green] [bold color(231)]SWITCH[/bold color(231)]
 ~                            [underline magenta]options:[/underline magenta] [bold color(231)]on[/bold color(231)] / [bold color(231)]off[/bold color(231)]
 ~                            [underline magenta]default:[/underline magenta] [bold color(231)]off[/bold color(231)]
 ~                            truehdd's bed conformance, for Atmos sources whose bed comes out as objects
+~                            DTS:X and Auro-3D sources are always conformed
 ~                            config: [bold color(231)]truehdd_bed_conform[/bold color(231)]
   [green]-d[/green], [green]--delay[/green] [bold color(231)]DELAY[/bold color(231)]         [underline magenta]examples:[/underline magenta] [bold color(231)]-5.1ms[/bold color(231)], [bold color(231)]+1,52s[/bold color(231)], [bold color(231)]-24@pal[/bold color(231)], [bold color(231)]+10@24000/1001[/bold color(231)]
                             [underline magenta]default:[/underline magenta] [bold color(231)]0ms[/bold color(231)] or parsed from filename
@@ -118,13 +121,13 @@ const RAW_HELP: &str = concat!(
 ~  [green]-kl[/green], [green]--keep[/green][green]-log[/green]           keep TrueHD's log and write a .deew-log.html report for each output
   [green]-mo[/green], [green]--measure[/green][green]-only[/green]       only measures the loudness of the source with DEE, no encoding, -f and the encoding options are ignored, TrueHD Atmos sources and Atmos masters are measured as Atmos
   [green]-lb[/green], [green]--list[/green][green]-bitrates[/green]      list bitrates that DEE can do for each format
-~  [green]-la[/green], [green]--long[/green][green]-argument[/green]      print ffmpeg, truehdd and DEE arguments for each input
+~  [green]-la[/green], [green]--long[/green][green]-argument[/green]      print ffmpeg, truehdd, harletty and DEE arguments for each input
   [green]-np[/green], [green]--no[/green][green]-prompt[/green]          skip confirmation questions, print them as notes and continue
 ~  [green]-pl[/green], [green]--print[/green][green]-logos[/green]        show all logo variants you can set in the config
   [green]-cl[/green], [green]--changelog[/green]          show changelog
   [green]-c[/green], [green]--config[/green]              show config and config location
   [green]-gc[/green], [green]--generate[/green][green]-config[/green]    generate a new config, asks before overwriting an existing config (-np skips the question)
-  [green]-gt[/green], [green]--get[/green][green]-tools[/green]          download ffmpeg, ffprobe, truehdd and dee_shim next to deew
+  [green]-gt[/green], [green]--get[/green][green]-tools[/green]          download ffmpeg, ffprobe, truehdd, harletty and dee_shim next to deew
 
 [bold bright_blue]blue[/bold bright_blue]: uses dee_shim"#
 );

@@ -1,4 +1,4 @@
-//! ffmpeg, truehdd and DEE command lines (argument lists and the markup printed for
+//! ffmpeg, truehdd, harletty and DEE command lines (argument lists and the markup printed for
 //! them). Everything here is pure.
 
 use crate::config::{DdpAtmosMode, WarpMode};
@@ -126,6 +126,21 @@ pub struct AudioPlan {
     pub swap_print: String,
     pub resample_args: Vec<String>,
     pub resample_print: String,
+    /// `-downmix BED` of a DTS track with heights: a decoder option, before `-i`.
+    pub downmix_args: Vec<String>,
+    pub downmix_print: String,
+}
+
+impl AudioPlan {
+    /// The plan for a DTS track whose heights ffmpeg's decoder folds into
+    /// `bed` (`Probe::dts_downmix`).
+    pub fn with_dts_downmix(mut self, bed: Option<&str>) -> AudioPlan {
+        if let Some(bed) = bed {
+            self.downmix_args = strings(&["-downmix", bed]);
+            self.downmix_print = format!("-downmix [bold color(231)]{bed}[/bold color(231)] ");
+        }
+        self
+    }
 }
 
 /// Target sample rate if the input has to be resampled.
@@ -269,13 +284,15 @@ pub fn audio_plan(
         swap_print,
         resample_args,
         resample_print,
+        downmix_args: Vec::new(),
+        downmix_print: String::new(),
     }
 }
 
 pub fn ffmpeg_args(ffmpeg: &str, plan: &AudioPlan, input: &str, wav: &str) -> Vec<String> {
-    let mut args: Vec<String> = [ffmpeg, "-y", "-drc_scale", "0", "-i", input]
-        .map(String::from)
-        .to_vec();
+    let mut args: Vec<String> = [ffmpeg, "-y", "-drc_scale", "0"].map(String::from).to_vec();
+    args.extend(plan.downmix_args.iter().cloned());
+    args.extend(["-i", input].map(String::from));
     args.extend(plan.map_args.iter().cloned());
     args.push("-c".to_string());
     args.push(format!("pcm_s{}le", plan.bit_depth));
@@ -306,9 +323,9 @@ fn pipe_format(codec: &str) -> &str {
 /// result is raw PCM for DEE, written to `output` (see `pipe::ffmpeg_output`:
 /// `-`, stdout, on Unix, the named pipe of DEE on Windows).
 pub fn ffmpeg_pipe_args(ffmpeg: &str, plan: &AudioPlan, input: &str, output: &str) -> Vec<String> {
-    let mut args: Vec<String> = [ffmpeg, "-y", "-drc_scale", "0", "-i", input]
-        .map(String::from)
-        .to_vec();
+    let mut args: Vec<String> = [ffmpeg, "-y", "-drc_scale", "0"].map(String::from).to_vec();
+    args.extend(plan.downmix_args.iter().cloned());
+    args.extend(["-i", input].map(String::from));
     args.extend(plan.map_args.iter().cloned());
     args.push("-c".to_string());
     args.push(pipe_codec(plan.bit_depth).to_string());
@@ -350,10 +367,16 @@ pub fn pcm_input_format(
     value
 }
 
-/// ffmpeg: copies the selected TrueHD track (of a container or a raw stream)
-/// to stdout, as a raw stream for the stdin of truehdd. ffmpeg prints
-/// timestamp warnings even with `-v error`, only its exit code counts.
-pub fn pipe_args(ffmpeg: &str, input: &str, track_index: impl Into<TrackIndex>) -> Vec<String> {
+/// ffmpeg: copies the selected track (of a container or a raw stream) to
+/// stdout, as a raw stream of `format` (`truehd`, `dts`) for the stdin of
+/// truehdd or harletty. ffmpeg prints timestamp warnings even with
+/// `-v error`, only its exit code counts.
+pub fn pipe_args(
+    ffmpeg: &str,
+    input: &str,
+    track_index: impl Into<TrackIndex>,
+    format: &str,
+) -> Vec<String> {
     [
         ffmpeg,
         "-v",
@@ -366,21 +389,47 @@ pub fn pipe_args(ffmpeg: &str, input: &str, track_index: impl Into<TrackIndex>) 
         "-c",
         "copy",
         "-f",
-        "truehd",
+        format,
         "-",
     ]
     .map(String::from)
     .to_vec()
 }
 
+/// ffmpeg: decodes the selected track (24-bit FLAC, PCM or TrueHD without
+/// Atmos) to a 24-bit wav on stdout, for the stdin of `harletty --codec wav`,
+/// which finds Auro-3D in the low bits of the PCM. Nothing may touch the
+/// samples (no resampling, no filter, no dither): ffmpeg decodes these codecs
+/// bit-exactly to 24 bits. The wav is streamed, its sizes are placeholders.
+/// TrueHD is decoded without its dynamic range control.
+pub fn wav_pipe_args(
+    ffmpeg: &str,
+    input: &str,
+    track_index: impl Into<TrackIndex>,
+    truehd: bool,
+) -> Vec<String> {
+    let mut args = strings(&[ffmpeg, "-v", "error", "-nostdin"]);
+    if truehd {
+        args.extend(strings(&["-drc_scale", "0"]));
+    }
+    args.extend(strings(&[
+        "-i",
+        input,
+        "-map",
+        &track_index.into().map_spec(),
+    ]));
+    args.extend(strings(&["-c:a", "pcm_s24le", "-f", "wav", "-"]));
+    args
+}
+
 fn ffmpeg_print_with(plan: &AudioPlan, depth: &str, input: &str, output: &str) -> String {
     format!(
         "[bold cyan]ffmpeg[/bold cyan] -y -drc_scale [bold color(231)]0[/bold color(231)] \
--i [bold green]{input}[/bold green] \
+{}-i [bold green]{input}[/bold green] \
 {}-c [bold color(231)]{}[/bold color(231)] \
 {}{}-rf64 [bold color(231)]always[/bold color(231)] \
 [bold magenta]{output}[/bold magenta]",
-        plan.map_print, depth, plan.swap_print, plan.resample_print
+        plan.downmix_print, plan.map_print, depth, plan.swap_print, plan.resample_print
     )
 }
 
@@ -389,9 +438,10 @@ fn ffmpeg_pipe_print_with(plan: &AudioPlan, input: &str, output: &str) -> String
     let codec = pipe_codec(plan.bit_depth);
     format!(
         "[bold cyan]ffmpeg[/bold cyan] -y -drc_scale [bold color(231)]0[/bold color(231)] \
--i [bold green]{input}[/bold green] \
+{}-i [bold green]{input}[/bold green] \
 {}-c [bold color(231)]{codec}[/bold color(231)] \
 {}{}-f [bold color(231)]{}[/bold color(231)] {}",
+        plan.downmix_print,
         plan.map_print,
         plan.swap_print,
         plan.resample_print,
@@ -902,6 +952,58 @@ pub fn decode_args(
     args
 }
 
+/// harletty: prints the DTS:X / Auro-3D facts of a DTS stream as one JSON line.
+/// `input` is a raw DTS file, or `-` for the stdin (a track copied by ffmpeg).
+/// It stops on its own after at most 20 seconds of audio. With `wav` the input
+/// is a PCM wav (`--codec wav`, a pipe from [`wav_pipe_args`]) that can carry
+/// Auro-3D in its low bits.
+pub fn harletty_info_args(harletty: &str, input: &str, wav: bool) -> Vec<String> {
+    let mut args = strings(&[harletty]);
+    if wav {
+        args.extend(strings(&["--codec", "wav"]));
+    }
+    args.extend(strings(&["--loglevel", "off", "info", "--json", input]));
+    args
+}
+
+/// harletty: decodes the DTS:X or Auro-3D presentation of a DTS stream to
+/// `<output_prefix>.atmos` (and `.atmos.metadata`, `.atmos.audio`), the same
+/// master set truehdd writes. The log is JSON for deew to read. The bed is
+/// always conformed (an Atmos bed can't hold the corner heights of DTS:X and
+/// Auro-3D, they become static objects). `warp_mode` is passed only when set.
+/// All cores decode the stream. No `--no-estimate-progress`: DTS has no frame
+/// counting pre-pass, and harletty skips it for the stdin anyway.
+pub fn harletty_decode_args(
+    harletty: &str,
+    input: &str,
+    output_prefix: &str,
+    warp_mode: Option<WarpMode>,
+    wav: bool,
+) -> Vec<String> {
+    let mut args = strings(&[harletty]);
+    if wav {
+        // a PCM wav from ffmpeg, with Auro-3D in its low bits
+        args.extend(strings(&["--codec", "wav"]));
+    }
+    args.extend(strings(&[
+        "--log-format",
+        "json",
+        "--loglevel",
+        "info",
+        "decode",
+    ]));
+    if !wav {
+        args.extend(strings(&["--codec", "dts"]));
+    }
+    args.push("--bed-conform".to_string());
+    if let Some(mode) = warp_mode {
+        args.push("--warp-mode".to_string());
+        args.push(mode.name().to_string());
+    }
+    args.extend(strings(&["--output-path", output_prefix, input]));
+    args
+}
+
 /// How a path argument is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shown {
@@ -924,8 +1026,8 @@ fn shown(option: &str) -> Option<Shown> {
 pub fn print_command(args: &[String], short: bool) -> String {
     let program = crate::util::file_name(&args[0]);
     let mut out = format!("[bold cyan]{}[/bold cyan]", escape(&shell_quote(program)));
-    // truehdd takes the input as its last argument.
-    let positional_input = program.starts_with("truehdd");
+    // truehdd and harletty take the input as their last argument.
+    let positional_input = program.starts_with("truehdd") || program.starts_with("harletty");
     // ffmpeg takes the output as its last argument.
     let positional_output = program.starts_with("ffmpeg");
     let mut previous = "";
@@ -1067,7 +1169,7 @@ mod tests {
 
     #[test]
     fn pipe_command() {
-        let args = pipe_args("ffmpeg", "in.mka", 1);
+        let args = pipe_args("ffmpeg", "in.mka", 1, "truehd");
         assert_eq!(
             args,
             v(&[
@@ -1086,6 +1188,153 @@ mod tests {
             )),
             "truehdd decode --presentation 3 --json --output-path [output] -"
         );
+    }
+
+    #[test]
+    fn harletty_commands() {
+        assert_eq!(
+            harletty_info_args("harletty", "/in/a.dts", false),
+            v(&[
+                "harletty",
+                "--loglevel",
+                "off",
+                "info",
+                "--json",
+                "/in/a.dts"
+            ])
+        );
+        assert_eq!(
+            harletty_info_args("harletty", "-", false)
+                .last()
+                .map(String::as_str),
+            Some("-")
+        );
+        // a track of a container is copied as a raw DTS stream
+        assert_eq!(
+            pipe_args("ffmpeg", "in.mkv", 2, "dts"),
+            v(&[
+                "ffmpeg", "-v", "error", "-nostdin", "-i", "in.mkv", "-map", "0:a:2", "-c", "copy",
+                "-f", "dts", "-"
+            ])
+        );
+        // a file goes in directly, a pipe as `-`; the bed is always conformed
+        assert_eq!(
+            harletty_decode_args("harletty", "/in/a.dts", "/t/a", None, false),
+            v(&[
+                "harletty",
+                "--log-format",
+                "json",
+                "--loglevel",
+                "info",
+                "decode",
+                "--codec",
+                "dts",
+                "--bed-conform",
+                "--output-path",
+                "/t/a",
+                "/in/a.dts"
+            ])
+        );
+        assert_eq!(
+            harletty_decode_args("harletty", "-", "/t/a", Some(WarpMode::Loro), false),
+            v(&[
+                "harletty",
+                "--log-format",
+                "json",
+                "--loglevel",
+                "info",
+                "decode",
+                "--codec",
+                "dts",
+                "--bed-conform",
+                "--warp-mode",
+                "loro",
+                "--output-path",
+                "/t/a",
+                "-"
+            ])
+        );
+        let args = harletty_decode_args("/x/harletty", "/in/a.dts", "/t/a", None, false);
+        assert!(!args.contains(&"--progress".to_string()));
+        assert!(!args.contains(&"--no-estimate-progress".to_string()));
+        assert_eq!(
+            strip(&print_command(&args, true)),
+            "harletty --log-format json --loglevel info decode --codec dts --bed-conform --output-path [output] [input]"
+        );
+        assert_eq!(
+            strip(&print_command(
+                &harletty_decode_args("harletty", "-", "/t/a", None, false),
+                true
+            )),
+            "harletty --log-format json --loglevel info decode --codec dts --bed-conform --output-path [output] -"
+        );
+    }
+
+    #[test]
+    fn harletty_wav_commands() {
+        let flac = wav_pipe_args("ffmpeg", "in.mkv", 1, false);
+        assert_eq!(
+            flac,
+            v(&[
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                "in.mkv",
+                "-map",
+                "0:a:1",
+                "-c:a",
+                "pcm_s24le",
+                "-f",
+                "wav",
+                "-"
+            ])
+        );
+        let thd = wav_pipe_args("ffmpeg", "in.mkv", 0, true);
+        assert_eq!(
+            thd,
+            v(&[
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-drc_scale",
+                "0",
+                "-i",
+                "in.mkv",
+                "-map",
+                "0:a:0",
+                "-c:a",
+                "pcm_s24le",
+                "-f",
+                "wav",
+                "-"
+            ])
+        );
+        // the samples stay as they are
+        for arg in ["-ar", "-af", "-filter_complex", "-dither_method"] {
+            assert!(!thd.contains(&arg.to_string()), "{arg}");
+        }
+        assert_eq!(
+            harletty_info_args("harletty", "-", true),
+            v(&[
+                "harletty",
+                "--codec",
+                "wav",
+                "--loglevel",
+                "off",
+                "info",
+                "--json",
+                "-"
+            ])
+        );
+        let args = harletty_decode_args("harletty", "-", "/t/a", Some(WarpMode::Loro), true);
+        assert_eq!(
+            strip(&print_command(&args, true)),
+            "harletty --codec wav --log-format json --loglevel info decode --bed-conform --warp-mode loro --output-path [output] -"
+        );
+        assert!(!args.contains(&"dts".to_string()));
     }
 
     #[test]
@@ -1992,13 +2241,13 @@ mod tests {
         );
         // TrueHD for truehdd
         assert_eq!(
-            pipe_args("ffmpeg", "in.mkv", s3),
+            pipe_args("ffmpeg", "in.mkv", s3, "truehd"),
             v(&[
                 "ffmpeg", "-v", "error", "-nostdin", "-i", "in.mkv", "-map", "0:3", "-c", "copy",
                 "-f", "truehd", "-"
             ])
         );
-        assert_eq!(pipe_args("ffmpeg", "in.mkv", a1)[7], "0:a:1");
+        assert_eq!(pipe_args("ffmpeg", "in.mkv", a1, "truehd")[7], "0:a:1");
     }
 
     #[test]
@@ -2790,5 +3039,34 @@ mod tests {
             intermediate_variant(Format::Dd, 48000, 8, false, Some(6)),
             ""
         );
+    }
+
+    #[test]
+    fn dts_downmix_is_a_decoder_option_before_the_input() {
+        let plain = audio_plan(Format::Ddp, 48000, 8, 24, 0, false, None);
+        assert!(
+            !ffmpeg_args("ffmpeg", &plain, "in.dts", "o.wav").contains(&"-downmix".to_string())
+        );
+        assert!(!ffmpeg_print(&plain, "in.dts", "o.wav").contains("-downmix"));
+        for bed in ["7.1", "5.1"] {
+            let plan = plain.clone().with_dts_downmix(Some(bed));
+            for args in [
+                ffmpeg_args("ffmpeg", &plan, "in.dts", "o.wav"),
+                ffmpeg_pipe_args("ffmpeg", &plan, "in.dts", "-"),
+            ] {
+                let at = args.iter().position(|a| a == "-downmix").unwrap();
+                assert_eq!(args[at + 1], bed);
+                assert_eq!(args[at + 2], "-i");
+            }
+            assert!(
+                strip(&ffmpeg_print(&plan, "in.dts", "o.wav"))
+                    .contains(&format!("-downmix {bed} -i in.dts"))
+            );
+            assert!(
+                strip(&ffmpeg_pipe_print(&plan, "in.dts", "-"))
+                    .contains(&format!("-downmix {bed} -i in.dts"))
+            );
+        }
+        assert_eq!(plain.clone().with_dts_downmix(None), plain);
     }
 }

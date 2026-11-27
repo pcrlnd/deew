@@ -22,7 +22,8 @@ export const features: Feature[] = [
   {
     text: "encodes DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos, AC4, AC4 Atmos and AAC",
     sub: [
-      "TrueHD Atmos input is decoded with truehdd and re-encoded from the Atmos master to DDP Atmos, TrueHD Atmos or AC4 Atmos",
+      "TrueHD Atmos input is decoded with truehdd and re-encoded from the Atmos master to DDP Atmos, TrueHD Atmos or AC4 Atmos (and AC4 IMS)",
+      "DTS:X (or Auro-3D in 24-bit DTS-HD MA, FLAC, PCM or TrueHD, the PCM through an ffmpeg wav pipe) input is decoded with harletty and re-encoded the same way, AC4 IMS included (experimental, check the result)",
       "dee_shim is required for DDP Atmos and TrueHD Atmos (it stops DEE from smoothing the object positions a second time) and for TrueHD with DRC none (the default)",
     ],
   },
@@ -43,7 +44,7 @@ export const features: Feature[] = [
     text: "versatile delay option that supports ms, s and also frame@fps formats, parsing delay from filenames also supported",
   },
   {
-    text: "the tool chain page shows how deew connects ffprobe, ffmpeg, truehdd, dee_shim and the DEE tools, with the exact options it passes to each one for every format:",
+    text: "the tool chain page shows how deew connects ffprobe, ffmpeg, truehdd, harletty, dee_shim and the DEE tools, with the exact options it passes to each one for every format:",
     link: { label: "deew.app/tool-chain", href: "/tool-chain" },
   },
 ]

@@ -1,4 +1,4 @@
-deew 5.6.1
+deew 5.7.0
 
 USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
             [-o DIRECTORY] [-oi] [-on NAME] [-f FORMAT] [-b BITRATE]
@@ -30,6 +30,12 @@ FLAGS:
                             default: ddp
                             ddp-atmos and thd-atmos use truehdd and dee_shim,
                             ac4-atmos and ac4-ims (from Atmos) use truehdd
+                            ddp-atmos, thd-atmos, ac4-atmos and ac4-ims also
+                            take DTS:X and Auro-3D sources, decoded with
+                            harletty
+                            Auro-3D is read from 24-bit DTS-HD MA, and from
+                            24-bit FLAC, PCM and TrueHD with a harletty that
+                            reads PCM (--codec wav)
   -b, --bitrate BITRATE     options: run -lb/--list-bitrates
                             default: run -c/--config
   -dm, --downmix CHANNELS   options: 1 / 2 / 6
@@ -66,7 +72,7 @@ FLAGS:
   -c, --config              show config and config location
   -gc, --generate-config    generate a new config, asks before overwriting an
                             existing config (-np skips the question)
-  -gt, --get-tools          download ffmpeg, ffprobe, truehdd and dee_shim next
-                            to deew
+  -gt, --get-tools          download ffmpeg, ffprobe, truehdd, harletty and
+                            dee_shim next to deew
 
 blue: uses dee_shim

@@ -9,7 +9,7 @@ export const HELP = {
   outputToInput:
     "Save each output next to its input file.\nThis overrides the output directory (its value is kept).\nThe setting is saved as to_input in the [output] section of config.toml.",
   format:
-    "Options: DD / DDP / DDP Atmos / TrueHD / TrueHD Atmos / AC4 / AC4 Atmos / AC-4 IMS / AAC (dd / ddp / ddp-atmos / thd / thd-atmos / ac4 / ac4-atmos / ac4-ims / aac).\nThe Atmos formats need a TrueHD Atmos input or an Atmos master (ADM BWF .wav, DAMF .atmos): DDP Atmos and TrueHD Atmos use truehdd and dee_shim, AC4 Atmos uses truehdd. TrueHD Atmos has no bitrate.\nAC-4 IMS (immersive stereo, .ac4) takes a 5.1 / 5.0 / 7.0 / 7.1 or an Atmos input (TrueHD Atmos or a master), not both in one run.\nAtmos masters can also be rendered to DD / DDP (5.1), not to TrueHD, AC4 or AAC.\nDefault: ddp",
+    "Options: DD / DDP / DDP Atmos / TrueHD / TrueHD Atmos / AC4 / AC4 Atmos / AC-4 IMS / AAC (dd / ddp / ddp-atmos / thd / thd-atmos / ac4 / ac4-atmos / ac4-ims / aac).\nThe Atmos formats need a TrueHD Atmos, DTS:X or Auro-3D input or an Atmos master (ADM BWF .wav, DAMF .atmos): DDP Atmos and TrueHD Atmos use dee_shim, TrueHD Atmos sources are decoded with truehdd, DTS:X and Auro-3D sources with harletty (Auro-3D is read from 24-bit DTS-HD MA, and from 24-bit FLAC, PCM and TrueHD with a harletty that reads PCM). TrueHD Atmos has no bitrate.\nAC-4 IMS (immersive stereo, .ac4) takes a 5.1 / 5.0 / 7.0 / 7.1 or an Atmos input (TrueHD Atmos decoded with truehdd, DTS:X or Auro-3D with harletty, or a master), not both in one run.\nAtmos masters can also be rendered to DD / DDP (5.1), not to TrueHD, AC4 or AAC.\nDefault: ddp",
   bitrate:
     "Bitrates DEE can do for the selected format (see Utilities > List bitrates).\nDefault: taken from the config (see Utilities > Show config).",
   downmix:
@@ -36,9 +36,9 @@ export const HELP = {
   surround3dbAttenuation:
     "3 dB attenuation of the surround channels (DD, DDP and TrueHD; TrueHD asks first because the output won't be identical to the source).\nDefault: off (config: surround_3db_attenuation)",
   warpMode:
-    "truehdd's warp mode, only used when the TrueHD Atmos source has none (DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only).\nDefault: from the source's metadata (config: truehdd_warp_mode)",
+    "Warp mode of truehdd (TrueHD Atmos sources) and harletty (DTS:X and Auro-3D sources), only used when the source has none (DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only).\nDefault: from the source's metadata (config: truehdd_warp_mode)",
   truehddBedConform:
-    "truehdd's bed conformance, for Atmos sources whose bed comes out as objects (DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only).\nDefault: off (config: truehdd_bed_conform)",
+    "truehdd's bed conformance, for TrueHD Atmos sources whose bed comes out as objects; DTS:X and Auro-3D sources are always conformed (DDP Atmos, TrueHD Atmos, AC-4 Atmos, AC-4 IMS and Measure only).\nDefault: off (config: truehdd_bed_conform)",
   outputName:
     "The name of the output file, only with a single input file (greyed out otherwise). deew adds the extension; a name with a folder is an error, use the output directory for that. The characters : * ? \" < > | become _.\nDefault: the input's name (see the template)",
   outputTemplate:
@@ -47,7 +47,7 @@ export const HELP = {
   keepLog:
     "Keep TrueHD's encode log and write a .deew-log.html report next to each output.",
   measureOnly:
-    "Only measures the loudness of the source with DEE, no encoding.\nThe format and the encoding options are ignored.\nTrueHD Atmos sources and Atmos masters are measured as Atmos.",
+    "Only measures the loudness of the source with DEE, no encoding.\nThe format and the encoding options are ignored.\nTrueHD Atmos sources and Atmos masters are measured as Atmos (DTS:X and Auro-3D are decoded with ffmpeg).",
   longArgument: "Print ffmpeg and DEE arguments for each input.",
   noPrompt: "Skip confirmation questions, print them as notes and continue.",
   info: {
@@ -60,7 +60,7 @@ export const HELP = {
     "-c": "Show config and config location.",
     "-gc": "Generate a new config next to the deew CLI.",
     "-gt":
-      "Download ffmpeg, ffprobe, truehdd and dee_shim next to the deew CLI (everything except DEE).",
+      "Download ffmpeg, ffprobe, truehdd, harletty and dee_shim next to the deew CLI (everything except DEE).",
     "-u": "Update deew, and deew-gui and deew-web next to it, to the latest release.",
     "-u all":
       "Update deew and install deew-gui and deew-web too if they are missing.",

@@ -1,5 +1,6 @@
 //! ffprobe: argument list, output parsing and the process call.
 
+use crate::harletty::Spatial;
 use crate::master::{Master, MasterKind};
 use serde_json::Value;
 use std::process::{Command, Stdio};
@@ -125,10 +126,17 @@ pub struct Probe {
     /// The input is a raw TrueHD stream (ffprobe format `truehd`), which
     /// truehdd reads directly.
     pub raw_truehd: bool,
+    /// The input is a raw DTS stream (ffprobe format `dts`), which harletty
+    /// reads directly.
+    pub raw_dts: bool,
     /// `profile` of the stream (empty if ffprobe has none), e.g. `Dolby TrueHD + Dolby Atmos`.
     pub profile: String,
     /// The profile mentions Atmos.
     pub is_atmos: bool,
+    /// The bed (`7.1`, `5.1`) that ffmpeg's `-downmix` folds the height
+    /// channels of a DTS track into (`channels` and `channel_layout` are
+    /// then those of the bed), `None` for a track without heights.
+    pub dts_downmix: Option<&'static str>,
     /// An Atmos master (ADM BWF or DAMF) that DEE reads directly, never
     /// probed with ffprobe.
     pub master: Option<MasterKind>,
@@ -136,6 +144,15 @@ pub struct Probe {
     pub language: Option<String>,
     /// The `title` tag of the stream, `None` if it has none.
     pub title: Option<String>,
+    /// The DTS:X or Auro-3D presentation of a DTS track, from harletty. Only
+    /// asked for the Atmos formats, so `None` for anything else (see
+    /// [`crate::harletty::detect`]).
+    pub spatial: Option<Spatial>,
+    /// What harletty said about the track, when it was asked: `None` not
+    /// asked yet, `Some(None)` it found neither DTS:X nor Auro-3D. Set by the
+    /// best-effort check of [`Probe::auro_candidate`] and by the detection of
+    /// the Atmos formats, so harletty is run once per input.
+    pub harletty_check: Option<Option<Spatial>>,
 }
 
 impl Probe {
@@ -151,11 +168,15 @@ impl Probe {
             channel_layout: String::new(),
             codec: master.kind.label().to_string(),
             raw_truehd: false,
+            raw_dts: false,
             profile: String::new(),
             is_atmos: true,
             master: Some(master.kind),
             language: None,
             title: None,
+            dts_downmix: None,
+            spatial: None,
+            harletty_check: None,
         }
     }
 }
@@ -351,12 +372,24 @@ pub fn parse_probe(json: &str, track: impl Into<TrackIndex>) -> Result<Probe, Pr
         .unwrap_or_default()
         .to_string();
     let is_atmos = profile.contains("Atmos");
+    let mut channels = channels;
+    let mut channel_layout = channel_layout;
+    let dts_downmix = if codec == "dts" {
+        dts_bed(&channel_layout, channels)
+    } else {
+        None
+    };
+    if let Some(bed) = dts_downmix {
+        channels = if bed == "7.1" { 8 } else { 6 };
+        channel_layout = bed.to_string();
+    }
     let is_truehd = codec == "truehd";
-    let raw_truehd = value
+    let format_name = value
         .get("format")
         .and_then(|f| f.get("format_name"))
-        .and_then(Value::as_str)
-        == Some("truehd");
+        .and_then(Value::as_str);
+    let raw_truehd = format_name == Some("truehd");
+    let raw_dts = format_name == Some("dts");
     Ok(Probe {
         sample_rate,
         channels,
@@ -366,12 +399,70 @@ pub fn parse_probe(json: &str, track: impl Into<TrackIndex>) -> Result<Probe, Pr
         channel_layout,
         codec,
         raw_truehd,
+        raw_dts,
         profile,
         is_atmos,
         master: None,
         language: tag(audio, "language"),
         title: tag(audio, "title"),
+        dts_downmix,
+        spatial: None,
+        harletty_check: None,
     })
+}
+
+/// The bed of a DTS layout with heights (`7.1.4`, `5.1.2`, or more than 8
+/// channels), the layout ffmpeg's `-downmix` takes. `None` without heights.
+fn dts_bed(layout: &str, channels: i64) -> Option<&'static str> {
+    let parts: Vec<&str> = layout.split('.').collect();
+    let number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if parts.len() == 3 && parts.iter().all(|p| number(p)) {
+        let base: i64 = parts[0].parse().ok()?;
+        return Some(if base >= 7 { "7.1" } else { "5.1" });
+    }
+    (channels > 8).then_some("7.1")
+}
+
+impl Probe {
+    /// Whether harletty is asked, best effort, if this track is Auro-3D (to
+    /// show it as such): 24-bit DTS-HD MA, or 24-bit lossless PCM (see
+    /// [`Probe::pcm_auro_candidate`]).
+    pub fn auro_candidate(&self) -> bool {
+        self.master.is_none()
+            && ((self.codec == "dts"
+                && self.profile.starts_with("DTS-HD MA")
+                && self.bit_depth == 24)
+                || self.pcm_auro_candidate())
+    }
+
+    /// A 24-bit lossless PCM track of 5.1 or 7.1 (the carriers of Auro-3D)
+    /// that ffmpeg decodes bit-exactly, so `harletty --codec wav` can find
+    /// Auro-3D in its low bits: FLAC, 24-bit PCM and TrueHD without Atmos.
+    /// (PCM of 32 bits and ALAC / WavPack are left out: a 24-bit raw depth is
+    /// not told apart, or the decode is not always integer.)
+    pub fn pcm_auro_candidate(&self) -> bool {
+        self.master.is_none()
+            && self.bit_depth == 24
+            && matches!(self.channels, 6 | 8)
+            && match self.codec.as_str() {
+                "flac" | "pcm_s24le" | "pcm_s24be" | "pcm_bluray" | "pcm_dvd" => true,
+                "truehd" => !self.is_atmos,
+                _ => false,
+            }
+    }
+
+    /// The Auro-3D source harletty found in the track, if it was asked.
+    pub fn auro(&self) -> Option<&Spatial> {
+        self.harletty_check
+            .as_ref()?
+            .as_ref()
+            .filter(|s| s.kind == "auro")
+    }
+
+    /// The track is DTS:X.
+    pub fn is_dtsx(&self) -> bool {
+        self.codec == "dts" && self.profile.contains("DTS:X")
+    }
 }
 
 /// A tag of the stream (ffprobe's key case varies, e.g. `LANGUAGE` in some
@@ -465,11 +556,15 @@ mod tests {
                 channel_layout: String::new(),
                 codec: "pcm_s24le".into(),
                 raw_truehd: false,
+                raw_dts: false,
                 profile: String::new(),
                 is_atmos: false,
                 master: None,
                 language: None,
                 title: None,
+                dts_downmix: None,
+                spatial: None,
+                harletty_check: None,
             })
         );
     }
@@ -489,11 +584,15 @@ mod tests {
                 channel_layout: String::new(),
                 codec: String::new(),
                 raw_truehd: false,
+                raw_dts: false,
                 profile: String::new(),
                 is_atmos: false,
                 master: None,
                 language: None,
                 title: None,
+                dts_downmix: None,
+                spatial: None,
+                harletty_check: None,
             })
         );
     }
@@ -733,5 +832,80 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn dts_stream(profile: &str, channels: i64, layout: &str, codec: &str) -> Probe {
+        let json = format!(
+            r#"{{"streams":[{{"codec_type":"audio","codec_name":"{codec}","profile":"{profile}",
+            "sample_rate":"48000","channels":{channels},"channel_layout":"{layout}"}}]}}"#
+        );
+        parse_probe(&json, TrackIndex::default()).unwrap()
+    }
+
+    #[test]
+    fn dts_with_heights_is_probed_as_its_bed() {
+        let p = dts_stream("DTS-HD MA + DTS:X", 12, "7.1.4", "dts");
+        assert_eq!((p.channels, p.channel_layout.as_str()), (8, "7.1"));
+        assert_eq!(p.dts_downmix, Some("7.1"));
+        assert!(p.is_dtsx());
+        let p = dts_stream("DTS-HD MA + DTS:X", 8, "5.1.2", "dts");
+        assert_eq!((p.channels, p.channel_layout.as_str()), (6, "5.1"));
+        assert_eq!(p.dts_downmix, Some("5.1"));
+        let p = dts_stream("DTS-HD MA + DTS:X", 10, "7.1.2", "dts");
+        assert_eq!(p.dts_downmix, Some("7.1"));
+        let p = dts_stream("DTS-HD MA", 12, "", "dts");
+        assert_eq!((p.channels, p.dts_downmix), (8, Some("7.1")));
+    }
+
+    #[test]
+    fn dts_without_heights_and_other_codecs_are_untouched() {
+        let p = dts_stream("DTS-HD MA + DTS:X", 8, "7.1", "dts");
+        assert_eq!((p.channels, p.dts_downmix), (8, None));
+        assert!(p.is_dtsx());
+        let p = dts_stream("DTS", 6, "5.1(side)", "dts");
+        assert_eq!((p.channels, p.dts_downmix), (6, None));
+        assert!(!p.is_dtsx());
+        let p = dts_stream("Dolby Digital Plus", 12, "7.1.4", "eac3");
+        assert_eq!((p.channels, p.dts_downmix), (12, None));
+        assert!(!p.is_dtsx());
+    }
+
+    fn pcm_stream(codec: &str, bits: i64, channels: i64, profile: &str) -> Probe {
+        let json = format!(
+            r#"{{"streams":[{{"codec_type":"audio","codec_name":"{codec}","profile":"{profile}",
+            "sample_rate":"48000","channels":{channels},"bits_per_raw_sample":"{bits}"}}]}}"#
+        );
+        parse_probe(&json, TrackIndex::default()).unwrap()
+    }
+
+    #[test]
+    fn lossless_24_bit_surround_can_carry_auro() {
+        for codec in [
+            "flac",
+            "pcm_s24le",
+            "pcm_s24be",
+            "pcm_bluray",
+            "pcm_dvd",
+            "truehd",
+        ] {
+            for channels in [6, 8] {
+                let p = pcm_stream(codec, 24, channels, "");
+                assert!(p.pcm_auro_candidate() && p.auro_candidate(), "{codec}");
+            }
+        }
+        // not 16 bits, not stereo or 5.0, no Atmos, no other codec
+        assert!(!pcm_stream("flac", 16, 6, "").auro_candidate());
+        assert!(!pcm_stream("flac", 24, 2, "").auro_candidate());
+        assert!(!pcm_stream("flac", 24, 5, "").auro_candidate());
+        assert!(!pcm_stream("truehd", 24, 8, "Dolby TrueHD + Dolby Atmos").auro_candidate());
+        assert!(!pcm_stream("pcm_s32le", 24, 6, "").auro_candidate());
+        assert!(!pcm_stream("alac", 24, 6, "").auro_candidate());
+        assert!(!pcm_stream("ac3", 24, 6, "").auro_candidate());
+        // DTS-HD MA stays a candidate on its own, but not a PCM one
+        let p = dts_stream("DTS-HD MA", 8, "7.1", "dts");
+        assert!(!p.pcm_auro_candidate() && !p.auro_candidate());
+        let mut p = pcm_stream("dts", 24, 8, "DTS-HD MA");
+        p.codec = "dts".into();
+        assert!(p.auro_candidate() && !p.pcm_auro_candidate());
     }
 }

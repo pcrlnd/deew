@@ -244,9 +244,19 @@ mod linux {
         )
         .unwrap();
         std::fs::set_permissions(&truehdd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // harletty's version comes from `taxonomy`, `--version` is a git hash
+        let harletty = sb.dir.path().join("harletty");
+        std::fs::write(
+            &harletty,
+            "#!/bin/sh\n[ \"$1\" = taxonomy ] && echo '{\"schema\":1,\"harletty\":\"0.9.0\",\"taxonomy\":4}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&harletty, std::fs::Permissions::from_mode(0o755)).unwrap();
         let out = sb.run_without_path(&["-v"]);
         let text = stdout(&out);
         let line = format!("truehdd  0.6.2  {}", truehdd.display());
+        assert!(text.lines().any(|l| l == line), "{text}");
+        let line = format!("harletty 0.9.0  {}", harletty.display());
         assert!(text.lines().any(|l| l == line), "{text}");
         // a tool that is not found has no path
         assert!(text.lines().any(|l| l == "DEE      not found"), "{text}");

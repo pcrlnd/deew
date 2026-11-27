@@ -10,13 +10,13 @@ export const PAGE_HEAD: Record<
   home: {
     title: "deew - Dolby Encoding Engine Wrapper",
     description:
-      "A fast CLI and GUI for Dolby Encoding Engine. deew prepares your audio with ffmpeg and truehdd and encodes it to DD, DDP, TrueHD, AC4 and AAC, including Atmos.",
+      "A fast CLI and GUI for Dolby Encoding Engine. deew prepares your audio with ffmpeg, truehdd and harletty and encodes it to DD, DDP, TrueHD, AC4 and AAC, including Atmos.",
     canonical: "https://deew.app/",
   },
   "tool-chain": {
     title: "deew tool chain",
     description:
-      "How deew chains ffmpeg, truehdd, dee_shim and the DEE command line tools: the whole chain, the blocks each format uses and the exact options of every block.",
+      "How deew chains ffmpeg, truehdd, harletty, dee_shim and the DEE command line tools: the whole chain, the blocks each format uses and the exact options of every block.",
     canonical: "https://deew.app/tool-chain",
   },
 }

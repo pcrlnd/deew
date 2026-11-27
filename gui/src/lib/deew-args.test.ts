@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   BITRATE_TABLE,
   ATMOS_INPUT_WARNING,
+  THD_NO_ATMOS_INPUT_WARNING,
   CHANNELS_WARNING,
   DEFAULT_OPTIONS,
   PROGRAM_DD_FILTER_DEFAULTS,
@@ -1422,6 +1423,27 @@ describe("relevantBitrates", () => {
           .warnings
       ).toEqual([])
     }
+  })
+
+  it("takes Auro-3D in FLAC, PCM and TrueHD as an Atmos source", () => {
+    const warnings = (
+      inputs: { codec: string; atmos: boolean; spatial?: boolean }[]
+    ) =>
+      relevantBitrates(
+        ctx({ format: "ddp-atmos", channels: 8, codecs: [], inputs })
+      ).warnings
+    expect(warnings([{ codec: "flac", atmos: false, spatial: true }])).toEqual(
+      []
+    )
+    expect(
+      warnings([{ codec: "truehd", atmos: false, spatial: true }])
+    ).toEqual([])
+    expect(warnings([{ codec: "flac", atmos: false }])).toEqual([
+      ATMOS_INPUT_WARNING,
+    ])
+    expect(warnings([{ codec: "truehd", atmos: false }])).toEqual([
+      THD_NO_ATMOS_INPUT_WARNING,
+    ])
   })
 
   it("has no bitrate for TrueHD", () => {

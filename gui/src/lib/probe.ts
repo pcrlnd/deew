@@ -12,6 +12,10 @@ export interface FileProbe {
   codec: string | null
   /** ffprobe's stream profile mentions Dolby Atmos. */
   atmos: boolean
+  /** A DTS:X track (its `channels` are those of the bed); missing in the output of an older CLI. */
+  dtsx?: boolean
+  /** An Auro-3D track, `layout` `null` when unknown; `null` or missing otherwise (also for an older CLI). */
+  auro?: { layout: string | null; carrier: string | null } | null
   /** The `language` tag of the selected track; missing or `null` without one. */
   language?: string | null
   /** The `title` tag of the selected track; missing or `null` without one. */
@@ -44,8 +48,12 @@ export interface ProbeSummary {
   onlyMasters: boolean
   /** Every probed file is Atmos (and there is at least one). */
   atmos: boolean
-  /** The distinct (codec, Atmos) kinds of the probed files. */
-  inputs: { codec: string; atmos: boolean; master: boolean }[]
+  /** Every probed file is DTS:X (and there is at least one). */
+  dtsx: boolean
+  /** Every probed file is Auro-3D with the same layout and carrier (and there is at least one). */
+  auro: { layout: string | null; carrier: string | null } | null
+  /** The distinct (codec, Atmos, DTS:X or Auro-3D) kinds of the probed files. */
+  inputs: { codec: string; atmos: boolean; master: boolean; spatial: boolean }[]
   /** The probed files that can be encoded, for their output names. */
   entries: {
     path: string
@@ -72,23 +80,63 @@ function intList(values: number[]): string {
 
 function distinctInputs(
   ok: readonly FileProbe[]
-): { codec: string; atmos: boolean; master: boolean }[] {
+): { codec: string; atmos: boolean; master: boolean; spatial: boolean }[] {
   const seen = new Map<
     string,
-    { codec: string; atmos: boolean; master: boolean }
+    { codec: string; atmos: boolean; master: boolean; spatial: boolean }
   >()
   for (const f of ok) {
     if (f.codec === null) continue
-    seen.set(`${f.codec}/${f.atmos}/${f.master}`, {
+    const spatial = f.dtsx === true || fileAuro(f) !== null
+    seen.set(`${f.codec}/${f.atmos}/${f.master}/${spatial}`, {
       codec: f.codec,
       atmos: f.atmos,
       master: f.master,
+      spatial,
     })
   }
   return [...seen.values()].sort(
     (a, b) =>
       a.codec.localeCompare(b.codec) || Number(a.atmos) - Number(b.atmos)
   )
+}
+
+/** The `auro` of a file, read defensively (the output of an older CLI has none). */
+function fileAuro(
+  f: FileProbe
+): { layout: string | null; carrier: string | null } | null {
+  const a = f.auro as unknown
+  if (typeof a !== "object" || a === null) return null
+  const { layout, carrier } = a as Record<string, unknown>
+  return {
+    layout: typeof layout === "string" && layout !== "" ? layout : null,
+    carrier: typeof carrier === "string" && carrier !== "" ? carrier : null,
+  }
+}
+
+/** The Auro-3D of all the files when it is the same for each, else `null`. */
+function commonAuro(
+  ok: readonly FileProbe[]
+): { layout: string | null; carrier: string | null } | null {
+  const all = ok.map(fileAuro)
+  const first = all[0]
+  if (!first) return null
+  return all.every(
+    (a) =>
+      a !== null && a.layout === first.layout && a.carrier === first.carrier
+  )
+    ? first
+    : null
+}
+
+/** `Auro-3D 13.1 (carried in 7.1)`, without what is not known. */
+export function formatAuro(a: {
+  layout: string | null
+  carrier: string | null
+}): string {
+  return `Auro-3D${a.layout ? ` ${a.layout}` : ""}${
+    a.carrier ? ` (carried in ${a.carrier})` : ""
+  }`
 }
 
 /** Condenses the per-file results into what the CLI would derive from them. */
@@ -147,6 +195,8 @@ export function summarizeProbe(all: readonly FileProbe[]): ProbeSummary {
       ),
     ].sort(),
     atmos: ok.length > 0 && ok.every((f) => f.atmos),
+    dtsx: ok.length > 0 && ok.every((f) => f.dtsx === true),
+    auro: commonAuro(ok),
     inputs: distinctInputs(ok),
     entries: ok.map((f) => ({
       path: f.path,
@@ -186,7 +236,7 @@ export function formatSampleRate(hz: number): string {
   return `${Number((hz / 1000).toFixed(3))} kHz`
 }
 
-/** E.g. `Atmos 7.1 - 48 kHz - 24-bit - 1 file`, `5.1 - 48 kHz - 24-bit - 3 files`, or `16/24/32-bit` for mixed bit depths. */
+/** E.g. `Auro-3D 13.1 (carried in 7.1) - 48 kHz - 24-bit - 1 file`, `Atmos 7.1 - 48 kHz - 24-bit - 1 file`, `5.1 - 48 kHz - 24-bit - 3 files`, or `16/24/32-bit` for mixed bit depths. */
 export function formatSummary(s: ProbeSummary): string {
   const parts: string[] = []
   if (s.onlyMasters) {
@@ -197,7 +247,15 @@ export function formatSummary(s: ProbeSummary): string {
   }
   if (s.channels !== null) {
     const channels = formatChannels(s.channels)
-    parts.push(s.atmos ? `Atmos ${channels}` : channels)
+    parts.push(
+      s.atmos
+        ? `Atmos ${channels}`
+        : s.auro
+          ? formatAuro(s.auro)
+          : s.dtsx
+            ? `DTS:X ${channels}`
+            : channels
+    )
   }
   if (s.sampleRate !== null) parts.push(formatSampleRate(s.sampleRate))
   if (s.bitDepths.length > 0) parts.push(`${s.bitDepths.join("/")}-bit`)

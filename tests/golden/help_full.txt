@@ -1,4 +1,4 @@
-deew 5.6.1
+deew 5.7.0
 
 USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
             [-o DIRECTORY] [-oi] [-on NAME] [-ot TEMPLATE] [-f FORMAT]
@@ -40,6 +40,12 @@ FLAGS:
                             default: ddp
                             ddp-atmos and thd-atmos use truehdd and dee_shim,
                             ac4-atmos and ac4-ims (from Atmos) use truehdd
+                            ddp-atmos, thd-atmos, ac4-atmos and ac4-ims also
+                            take DTS:X and Auro-3D sources, decoded with
+                            harletty
+                            Auro-3D is read from 24-bit DTS-HD MA, and from
+                            24-bit FLAC, PCM and TrueHD with a harletty that
+                            reads PCM (--codec wav)
   --ddp-mode MODE           options: standard / bluray
                             default: run -c/--config
                             profile of 7.1 DDP, 5.1 and below are not affected
@@ -90,7 +96,8 @@ FLAGS:
                             to the source
   -wm, --warp-mode MODE     options: normal / warping / prologiciix / loro
                             default: from the source's metadata
-                            truehdd's warp mode, only used when the TrueHD Atmos
+                            warp mode of the TrueHD Atmos (truehdd) and DTS:X /
+                            Auro-3D (harletty) sources, only used when the
                             source has none
                             config: truehdd_warp_mode
   -bc, --bed-conform SWITCH
@@ -98,6 +105,7 @@ FLAGS:
                             default: off
                             truehdd's bed conformance, for Atmos sources whose
                             bed comes out as objects
+                            DTS:X and Auro-3D sources are always conformed
                             config: truehdd_bed_conform
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
@@ -134,8 +142,8 @@ FLAGS:
                             ignored, TrueHD Atmos sources and Atmos masters are
                             measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
-  -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
-                            input
+  -la, --long-argument      print ffmpeg, truehdd, harletty and DEE arguments
+                            for each input
   -np, --no-prompt          skip confirmation questions, print them as notes and
                             continue
   -pl, --print-logos        show all logo variants you can set in the config
@@ -143,7 +151,7 @@ FLAGS:
   -c, --config              show config and config location
   -gc, --generate-config    generate a new config, asks before overwriting an
                             existing config (-np skips the question)
-  -gt, --get-tools          download ffmpeg, ffprobe, truehdd and dee_shim next
-                            to deew
+  -gt, --get-tools          download ffmpeg, ffprobe, truehdd, harletty and
+                            dee_shim next to deew
 
 blue: uses dee_shim

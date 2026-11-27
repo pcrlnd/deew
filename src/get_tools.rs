@@ -1,5 +1,5 @@
-//! `-gt`: download the latest ffmpeg, ffprobe, truehdd and dee_shim next to
-//! the deew executable.
+//! `-gt`: download the latest ffmpeg, ffprobe, truehdd, harletty and dee_shim
+//! next to the deew executable.
 
 use crate::error::escape;
 use crate::interrupt;
@@ -21,6 +21,13 @@ use ureq::ResponseExt;
 const GITHUB_API: &str = "https://api.github.com/repos";
 const BTBN_REPO: &str = "BtbN/FFmpeg-Builds";
 const TRUEHDD_REPO: &str = "truehdd/truehdd";
+// The fork carries Auro-3D from PCM, the universal macOS build and the crate
+// version in `--version` (PRs to harletty/harletty-bridge); switch back once
+// they are merged.
+const HARLETTY_REPO: &str = "pcrlnd/harletty-bridge";
+/// The CLI archives of the harletty release (`harletty-cli-v0.9.0-linux-x86_64.zip`),
+/// not the `harletty-bridge-*` plugins.
+const HARLETTY_PREFIX: &str = "harletty-cli-";
 const DEE_SHIM_REPO: &str = "truehdd/dee-shim";
 const MACOS_FFMPEG: &str = "https://ffmpeg.martin-riedl.de/redirect/latest/macos";
 
@@ -138,6 +145,19 @@ fn truehdd_suffix(platform: Platform) -> Option<&'static str> {
     }
 }
 
+/// Suffixes of the harletty asset (`harletty-cli-v0.9.0<suffix>`), tried in
+/// order. Only x86_64 Linux and Windows and macOS are built: universal, or
+/// (upstream) arm64 only. Empty: no build.
+fn harletty_suffixes(platform: Platform) -> &'static [&'static str] {
+    match (platform.os, platform.arch) {
+        (Os::Linux, Arch::X86_64) => &["-linux-x86_64.zip"],
+        (Os::Windows, Arch::X86_64) => &["-windows-x86_64.zip"],
+        (Os::Darwin, Arch::Aarch64) => &["-macos-universal.zip", "-macos-arm64.zip"],
+        (Os::Darwin, Arch::X86_64) => &["-macos-universal.zip"],
+        _ => &[],
+    }
+}
+
 /// Suffix of the dee_shim asset. Only x86_64 is built, on Apple silicon it
 /// runs under Rosetta.
 fn dee_shim_suffix(platform: Platform) -> Option<&'static str> {
@@ -149,8 +169,19 @@ fn dee_shim_suffix(platform: Platform) -> Option<&'static str> {
     }
 }
 
-fn pick_suffix<'a>(names: &[&'a str], suffix: &str) -> Option<&'a str> {
-    names.iter().copied().find(|n| n.ends_with(suffix))
+/// The first asset that starts with `prefix` (empty: any) and ends with `suffix`.
+fn pick_suffix<'a>(names: &[&'a str], prefix: &str, suffix: &str) -> Option<&'a str> {
+    names
+        .iter()
+        .copied()
+        .find(|n| n.starts_with(prefix) && n.ends_with(suffix))
+}
+
+/// The first asset matching one of `suffixes`, which are tried in order.
+fn pick_first_suffix<'a>(names: &[&'a str], prefix: &str, suffixes: &[&str]) -> Option<&'a str> {
+    suffixes
+        .iter()
+        .find_map(|suffix| pick_suffix(names, prefix, suffix))
 }
 
 /// The macOS ffmpeg/ffprobe redirect URL of the architecture deew runs on.
@@ -211,6 +242,9 @@ pub enum Status {
     Unpacking,
     Done,
     Failed,
+    /// No build of the tool for this platform: nothing is downloaded and
+    /// that is not a failure.
+    Skipped,
 }
 
 impl Status {
@@ -220,6 +254,7 @@ impl Status {
             Status::Unpacking => "unpacking...",
             Status::Done => "done",
             Status::Failed => "failed",
+            Status::Skipped => "not available",
         }
     }
 }
@@ -240,6 +275,7 @@ pub fn overall_fraction(status: Status, done: u64, total: Option<u64>) -> Option
         Status::Unpacking => total.map(|t| DOWNLOAD_SHARE + part(t) * (1.0 - DOWNLOAD_SHARE)),
         Status::Done => Some(1.0),
         Status::Failed => total.map(|t| part(t) * DOWNLOAD_SHARE),
+        Status::Skipped => None,
     }
 }
 
@@ -258,6 +294,10 @@ pub(crate) fn row_lines(
     let pad = " ".repeat(NAME_WIDTH.saturating_sub(name.len()));
     let name = format!("{}{pad}", tool_text(name, color));
     let separator = separator(color);
+    // nothing to download: no bar, no percent
+    if status == Status::Skipped {
+        return vec![format!("{name}{separator}{}", status.text())];
+    }
     // a failed bar stands still: no remaining time
     let secs = if status == Status::Failed { 0.0 } else { secs };
     if two_lines(width) {
@@ -797,7 +837,10 @@ enum Source {
     /// Latest release of a GitHub repo: the asset is picked by suffix.
     Suffix {
         repo: &'static str,
-        suffix: Option<&'static str>,
+        /// What the name of the asset starts with (empty for any).
+        prefix: &'static str,
+        /// Asset suffixes, tried in order (empty: no build for the platform).
+        suffixes: Vec<&'static str>,
     },
     /// BtbN's ffmpeg builds.
     Btbn { tag: Option<&'static str> },
@@ -805,15 +848,36 @@ enum Source {
     Url(Option<String>),
 }
 
+impl Source {
+    /// There is no build for the platform: the tool is skipped, not failed.
+    fn unavailable(&self) -> bool {
+        match self {
+            Source::Suffix { suffixes, .. } => suffixes.is_empty(),
+            Source::Btbn { tag } => tag.is_none(),
+            Source::Url(url) => url.is_none(),
+        }
+    }
+}
+
 fn resolve(agent: &ureq::Agent, source: &Source, platform: Platform) -> Result<Plan, String> {
     let unsupported = || format!("not available for {}", platform.describe());
     match source {
-        Source::Suffix { repo, suffix } => {
-            let suffix = suffix.ok_or_else(unsupported)?;
+        Source::Suffix {
+            repo,
+            prefix,
+            suffixes,
+        } => {
+            if suffixes.is_empty() {
+                return Err(unsupported());
+            }
             let assets = release_assets(agent, repo)?;
             let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
-            let name = pick_suffix(&names, suffix)
-                .ok_or_else(|| format!("no {suffix} asset in the latest release of {repo}"))?;
+            let name = pick_first_suffix(&names, prefix, suffixes).ok_or_else(|| {
+                format!(
+                    "no {} asset in the latest release of {repo}",
+                    suffixes.join(" or ")
+                )
+            })?;
             let asset = assets
                 .iter()
                 .find(|a| a.name == name)
@@ -891,17 +955,17 @@ fn jobs(platform: Platform) -> Vec<Job> {
             source: Source::Btbn {
                 tag: btbn_tag(platform),
             },
-            rows: vec![2, 3],
+            rows: vec![3, 4],
         }]
     } else {
         vec![
             Job {
                 source: Source::Url(macos_url(platform, "ffmpeg")),
-                rows: vec![2],
+                rows: vec![3],
             },
             Job {
                 source: Source::Url(macos_url(platform, "ffprobe")),
-                rows: vec![3],
+                rows: vec![4],
             },
         ]
     };
@@ -909,16 +973,26 @@ fn jobs(platform: Platform) -> Vec<Job> {
         Job {
             source: Source::Suffix {
                 repo: TRUEHDD_REPO,
-                suffix: truehdd_suffix(platform),
+                prefix: "",
+                suffixes: truehdd_suffix(platform).into_iter().collect(),
             },
             rows: vec![0],
         },
         Job {
             source: Source::Suffix {
-                repo: DEE_SHIM_REPO,
-                suffix: dee_shim_suffix(platform),
+                repo: HARLETTY_REPO,
+                prefix: HARLETTY_PREFIX,
+                suffixes: harletty_suffixes(platform).to_vec(),
             },
             rows: vec![1],
+        },
+        Job {
+            source: Source::Suffix {
+                repo: DEE_SHIM_REPO,
+                prefix: "",
+                suffixes: dee_shim_suffix(platform).into_iter().collect(),
+            },
+            rows: vec![2],
         },
     ];
     all.extend(ffmpeg_jobs);
@@ -978,10 +1052,30 @@ pub(crate) fn with_live_rows(rows: &[Arc<Row>], work: impl FnOnce()) {
     }
 }
 
+/// What became of one tool of `-gt`.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    Saved,
+    /// No build for the platform, not a failure.
+    Skipped,
+    Failed(Option<String>),
+}
+
+fn verdict(status: Status, outcome: Option<Result<(), String>>) -> Verdict {
+    if status == Status::Skipped {
+        return Verdict::Skipped;
+    }
+    match outcome {
+        Some(Ok(())) => Verdict::Saved,
+        Some(Err(reason)) => Verdict::Failed(Some(reason)),
+        None => Verdict::Failed(None),
+    }
+}
+
 /// `-gt`: download the tools into `exe_dir` and exit.
 pub fn run(exe_dir: &Path) -> ! {
     let platform = Platform::current();
-    let rows: Vec<Arc<Row>> = ["truehdd", "dee_shim", "ffmpeg", "ffprobe"]
+    let rows: Vec<Arc<Row>> = ["truehdd", "harletty", "dee_shim", "ffmpeg", "ffprobe"]
         .iter()
         .map(|&name| Arc::new(Row::new(name, exe(name))))
         .collect();
@@ -994,6 +1088,12 @@ pub fn run(exe_dir: &Path) -> ! {
                 let (rows, outcomes) = (&rows, &outcomes);
                 scope.spawn(move || {
                     let job_rows: Vec<&Row> = job.rows.iter().map(|&i| rows[i].as_ref()).collect();
+                    if job.source.unavailable() {
+                        for row in &job_rows {
+                            row.set(Status::Skipped, None);
+                        }
+                        return;
+                    }
                     let results = run_job(exe_dir, platform, &job.source, &job_rows);
                     for ((&i, row), result) in job.rows.iter().zip(&job_rows).zip(results) {
                         row.finish(result.is_ok());
@@ -1007,10 +1107,15 @@ pub fn run(exe_dir: &Path) -> ! {
 
     let mut failed = false;
     let mut saved = Vec::new();
-    for (&name, outcome) in names.iter().zip(&outcomes) {
-        match outcome.lock().expect("outcome").take() {
-            Some(Ok(())) => saved.push(name),
-            Some(Err(reason)) => {
+    for ((&name, outcome), row) in names.iter().zip(&outcomes).zip(&rows) {
+        let status = row.state.lock().expect("row state").0;
+        match verdict(status, outcome.lock().expect("outcome").take()) {
+            Verdict::Saved => saved.push(name),
+            Verdict::Skipped => rprintln!(
+                "[bold cyan]Note:[/bold cyan] [bold yellow]{name}[/bold yellow]: no build for {}",
+                platform.describe()
+            ),
+            Verdict::Failed(Some(reason)) => {
                 failed = true;
                 rprintln!(
                     "[color(231) on red]ERROR:[/color(231) on red] failed to get [bold yellow]{}[/bold yellow]: {}",
@@ -1018,7 +1123,7 @@ pub fn run(exe_dir: &Path) -> ! {
                     escape(&reason)
                 );
             }
-            None => failed = true,
+            Verdict::Failed(None) => failed = true,
         }
     }
     if !saved.is_empty() {
@@ -1132,7 +1237,7 @@ mod tests {
             arch: Arch::X86_64,
         };
         let pick = |names: &[&'static str], suffix: Option<&str>| {
-            suffix.and_then(|s| pick_suffix(names, s))
+            suffix.and_then(|s| pick_suffix(names, "", s))
         };
         assert_eq!(
             pick(&truehdd, truehdd_suffix(LINUX)),
@@ -1166,6 +1271,124 @@ mod tests {
         };
         assert_eq!(truehdd_suffix(other), None);
         assert_eq!(dee_shim_suffix(other), None);
+    }
+
+    #[test]
+    fn harletty_assets_per_platform() {
+        let pick = |names: &[&'static str], platform| {
+            pick_first_suffix(names, HARLETTY_PREFIX, harletty_suffixes(platform))
+        };
+        let win = Platform {
+            os: Os::Windows,
+            arch: Arch::X86_64,
+        };
+        let mac = |arch| Platform {
+            os: Os::Darwin,
+            arch,
+        };
+        // the fork: universal macOS build
+        let fork = [
+            "harletty-bridge-v0.9.0-linux-x86_64.zip",
+            "harletty-bridge-v0.9.0-macos-universal.zip",
+            "harletty-bridge-v0.9.0-windows-x86_64.zip",
+            "harletty-cli-v0.9.0-linux-x86_64.zip",
+            "harletty-cli-v0.9.0-macos-universal.zip",
+            "harletty-cli-v0.9.0-windows-x86_64.zip",
+        ];
+        assert_eq!(
+            pick(&fork, LINUX),
+            Some("harletty-cli-v0.9.0-linux-x86_64.zip")
+        );
+        assert_eq!(
+            pick(&fork, win),
+            Some("harletty-cli-v0.9.0-windows-x86_64.zip")
+        );
+        for arch in [Arch::Aarch64, Arch::X86_64] {
+            assert_eq!(
+                pick(&fork, mac(arch)),
+                Some("harletty-cli-v0.9.0-macos-universal.zip")
+            );
+        }
+        // upstream: arm64 only, Intel has no build
+        let upstream = [
+            "harletty-bridge-v0.9.0-macos-arm64.zip",
+            "harletty-cli-v0.9.0-linux-x86_64.zip",
+            "harletty-cli-v0.9.0-macos-arm64.zip",
+            "harletty-cli-v0.9.0-windows-x86_64.zip",
+        ];
+        assert_eq!(
+            pick(&upstream, mac(Arch::Aarch64)),
+            Some("harletty-cli-v0.9.0-macos-arm64.zip")
+        );
+        assert_eq!(pick(&upstream, mac(Arch::X86_64)), None);
+        // universal wins over arm64 when both exist
+        let both = [
+            "harletty-cli-v0.9.0-macos-arm64.zip",
+            "harletty-cli-v0.9.0-macos-universal.zip",
+        ];
+        assert_eq!(
+            pick(&both, mac(Arch::Aarch64)),
+            Some("harletty-cli-v0.9.0-macos-universal.zip")
+        );
+        // no arm64 Linux or Windows
+        for (os, arch) in [
+            (Os::Linux, Arch::Aarch64),
+            (Os::Windows, Arch::Aarch64),
+            (Os::Other, Arch::X86_64),
+        ] {
+            assert!(harletty_suffixes(Platform { os, arch }).is_empty());
+        }
+        // the plugin archives are never taken, even when they come first
+        let bridges = [
+            "harletty-bridge-v0.9.0-linux-x86_64.zip",
+            "harletty-bridge-v0.9.0-macos-arm64.zip",
+            "harletty-bridge-v0.9.0-macos-universal.zip",
+            "harletty-bridge-v0.9.0-windows-x86_64.zip",
+        ];
+        for platform in [LINUX, win, mac(Arch::Aarch64), mac(Arch::X86_64)] {
+            assert_eq!(pick(&bridges, platform), None);
+        }
+    }
+
+    #[test]
+    fn tools_without_a_build_are_skipped_not_failed() {
+        let mac_intel = Platform {
+            os: Os::Darwin,
+            arch: Arch::X86_64,
+        };
+        // every tool has a (possibly universal) build on Intel Macs
+        assert!(!jobs(mac_intel).iter().any(|j| j.source.unavailable()));
+        assert!(!jobs(LINUX).iter().any(|j| j.source.unavailable()));
+        let arm_linux = Platform {
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+        };
+        assert!(
+            jobs(arm_linux)
+                .iter()
+                .filter(|j| j.source.unavailable())
+                .count()
+                >= 3
+        );
+        assert!(Source::Url(None).unavailable() && !Source::Url(Some("u".into())).unavailable());
+        assert!(Source::Btbn { tag: None }.unavailable());
+        // only a real failure counts
+        assert_eq!(verdict(Status::Skipped, None), Verdict::Skipped);
+        assert_eq!(verdict(Status::Done, Some(Ok(()))), Verdict::Saved);
+        assert_eq!(
+            verdict(Status::Failed, Some(Err("x".into()))),
+            Verdict::Failed(Some("x".into()))
+        );
+        assert_eq!(verdict(Status::Failed, None), Verdict::Failed(None));
+    }
+
+    #[test]
+    fn skipped_rows_have_no_bar() {
+        let wide = row_lines("harletty", Status::Skipped, None, 3.0, 100, false);
+        assert_eq!(wide, ["harletty │ not available"]);
+        let narrow = row_lines("harletty", Status::Skipped, None, 3.0, 60, false);
+        assert_eq!(narrow, ["harletty │ not available"]);
+        assert_eq!(overall_fraction(Status::Skipped, 0, Some(5)), None);
     }
 
     #[test]

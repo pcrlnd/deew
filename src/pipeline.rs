@@ -4,15 +4,17 @@ use crate::cli::Args;
 use crate::commands::{
     AudioPlan, EncodeParams, INTERMEDIATE_EXISTS_PRINT, LfeSlot, audio_plan, decode_args,
     encode_args, ffmpeg_args, ffmpeg_pipe_args, ffmpeg_pipe_print, ffmpeg_pipe_print_short,
-    ffmpeg_print, ffmpeg_print_short, intermediate_variant, measure_args, measure_atmos_args,
-    measure_shim_args, pcm_input_format, pcm_rate, pipe_args, pipe_sample_count, print_command,
+    ffmpeg_print, ffmpeg_print_short, harletty_decode_args, intermediate_variant, measure_args,
+    measure_atmos_args, measure_shim_args, pcm_input_format, pcm_rate, pipe_args,
+    pipe_sample_count, print_command,
 };
 use crate::config::{Ac4ImsMode, Config, DdpAtmosMode, Paths, PipeMode, WarpMode};
 use crate::data::ErrorKind;
 use crate::deewlog::LogSpec;
-use crate::encode::{self, Job, Options, Outcome};
+use crate::encode::{self, Decoder, Job, Options, Outcome};
 use crate::error::{error_line, escape, format_error, print_exit};
 use crate::events;
+use crate::harletty::{self, Feed};
 use crate::inputs::{self, Input, Problem};
 use crate::interrupt;
 use crate::markup;
@@ -27,7 +29,7 @@ use crate::plan::{
 };
 use crate::probe::{self, Probe, ProbeError, TrackIndex};
 use crate::summary::{self, SummaryData};
-use crate::tools::{self, Shim, Versions};
+use crate::tools::{self, Shim, Version, Versions};
 use crate::ui::{End, Ui};
 use crate::util::{basename, delay_options, file_name, file_stem};
 use crate::{prompt, rprintln};
@@ -197,6 +199,8 @@ struct Programs {
     /// `dee_measure_loudness`, measures the decoded TrueHD Atmos sources of `-mo`.
     measure_atmos: Option<String>,
     truehdd: Option<String>,
+    /// Found without checking whether it is needed, see `detect_spatial`.
+    harletty: Option<String>,
     shim: Option<Shim>,
 }
 
@@ -232,6 +236,7 @@ fn find_programs(
         measure_atmos: None,
         // required once the inputs are known: Atmos masters need no truehdd
         truehdd: tools::find_truehdd(exe_dir, &cwd),
+        harletty: tools::find_harletty(exe_dir, &cwd),
         shim,
     }
 }
@@ -243,10 +248,145 @@ fn atmos_source(probe: &Probe) -> bool {
 }
 
 /// Whether the input is decoded by truehdd: the Atmos formats (and the Atmos
-/// source of AC4 IMS) take TrueHD, a master needs no decode.
+/// source of AC4 IMS) take TrueHD, a master needs no decode and a DTS:X or
+/// Auro-3D source goes to harletty.
 fn needs_truehdd(format: Format, probe: &Probe) -> bool {
     probe.master.is_none()
-        && (format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe)))
+        && probe.spatial.is_none()
+        && (format.is_atmos() || (format == Format::Ac4Ims && plan::ims_atmos_source(probe)))
+}
+
+/// Whether the input is decoded by harletty: a DTS:X or Auro-3D source of
+/// the Atmos formats and AC4 IMS. Any other format (and `-mo`) decodes DTS
+/// with ffmpeg.
+fn needs_harletty(format: Format, probe: &Probe) -> bool {
+    probe.master.is_none()
+        && probe.spatial.is_some()
+        && (format.is_atmos() || format == Format::Ac4Ims)
+}
+
+/// How many inputs are checked by harletty at the same time.
+const AURO_CHECKS_AT_ONCE: usize = 4;
+
+/// Best effort: ask harletty about the inputs that can be Auro-3D (see
+/// [`Probe::auro_candidate`]) so they are shown as such. Nothing is reported
+/// when harletty is missing, too old or can't read an input; the result is
+/// kept in `harletty_check` (only for the inputs it answered for), which the
+/// strict detection of the Atmos formats reuses. The checks run in parallel.
+pub fn check_auro(
+    ffmpeg: &str,
+    harletty: Option<&str>,
+    inputs: Vec<(&str, &mut Probe)>,
+    track: TrackIndex,
+) {
+    let Some(harletty) = harletty else {
+        return;
+    };
+    let mut todo: Vec<(&str, &mut Probe)> = inputs
+        .into_iter()
+        .filter(|(_, p)| p.harletty_check.is_none() && p.auro_candidate())
+        .collect();
+    if todo.is_empty()
+        || tools::check_min_version(&tools::harletty_version(harletty), tools::MIN_HARLETTY)
+            .is_err()
+    {
+        return;
+    }
+    for batch in todo.chunks_mut(AURO_CHECKS_AT_ONCE) {
+        let asked: Vec<(&str, Feed)> = batch.iter().map(|(f, p)| (*f, Feed::of(p))).collect();
+        let answers: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = asked
+                .iter()
+                .map(|&(file, feed)| {
+                    scope.spawn(move || harletty::detect(harletty, ffmpeg, file, track, feed))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join()).collect()
+        });
+        for ((_, probe), answer) in batch.iter_mut().zip(answers) {
+            if let Ok(Ok(spatial)) = answer {
+                probe.harletty_check = Some(spatial);
+            }
+        }
+    }
+}
+
+/// Ask harletty whether the DTS inputs are DTS:X or Auro-3D, which makes them
+/// Atmos sources. harletty is only looked for when there is a DTS input that
+/// [`check_auro`] has not answered for. For the Atmos formats the run stops if
+/// it is missing or too old, or can't read an input. AC4 IMS needs it only
+/// for a track ffprobe identifies as DTS:X; otherwise it is best effort, and
+/// without harletty the DTS tracks stay channel-based.
+fn detect_spatial(
+    programs: &mut Programs,
+    exe_dir: &Path,
+    cwd: &Path,
+    format: Format,
+    files: &[String],
+    probes: &mut [Probe],
+    track: TrackIndex,
+) {
+    // what [`check_auro`] found (Auro-3D in 24-bit PCM is only ever asked
+    // there, best effort: an answer that failed leaves the track as it was)
+    for probe in probes.iter_mut().filter(|p| p.master.is_none()) {
+        if let Some(check) = &probe.harletty_check {
+            probe.spatial = check.clone();
+        }
+    }
+    let unchecked: Vec<usize> = (0..probes.len())
+        .filter(|&i| {
+            probes[i].master.is_none()
+                && plan::is_dts(&probes[i])
+                && probes[i].harletty_check.is_none()
+        })
+        .collect();
+    if unchecked.is_empty() {
+        return;
+    }
+    let strict = format.is_atmos() || unchecked.iter().any(|&i| probes[i].is_dtsx());
+    let harletty = if strict {
+        let found = match programs.harletty.take() {
+            Some(found) => found,
+            None => tools::require_harletty(exe_dir, cwd),
+        };
+        tools::require_harletty_version(&found);
+        found
+    } else {
+        match programs.harletty.take() {
+            Some(found)
+                if tools::check_min_version(
+                    &tools::harletty_version(&found),
+                    tools::MIN_HARLETTY,
+                )
+                .is_ok() =>
+            {
+                found
+            }
+            other => {
+                programs.harletty = other;
+                return;
+            }
+        }
+    };
+    for i in unchecked {
+        match harletty::detect(
+            &harletty,
+            &programs.ffmpeg,
+            &files[i],
+            track,
+            Feed::of(&probes[i]),
+        ) {
+            Ok(spatial) => {
+                probes[i].harletty_check = Some(spatial.clone());
+                probes[i].spatial = spatial;
+            }
+            Err(message) => print_exit(
+                ErrorKind::HarlettyInfo,
+                Some(&escape(&format!("{}: {message}", file_name(&files[i])))),
+            ),
+        }
+    }
+    programs.harletty = Some(harletty);
 }
 
 /// Shown after the `-mo` of 7.1 and 7.0 input.
@@ -431,7 +571,7 @@ fn can_pipe(format: Format, measure_only: bool, probe: &Probe) -> bool {
     } else {
         format
     };
-    let atmos = format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe));
+    let atmos = format.is_atmos() || (format == Format::Ac4Ims && plan::ims_atmos_source(probe));
     !atmos && probe.master.is_none() && plan_format != Format::Thd && plan_format != Format::Ac4Ims
 }
 
@@ -453,6 +593,7 @@ fn versions(programs: &Programs) -> Versions {
     tools::probe_versions(
         Some(&programs.dee),
         programs.truehdd.as_deref(),
+        programs.harletty.as_deref(),
         programs.shim.as_ref(),
         &programs.ffmpeg,
         &programs.ffprobe,
@@ -475,13 +616,29 @@ fn master_source(probes: &[Probe]) -> Option<String> {
     Some(labels.join(" / "))
 }
 
+/// The Auro-3D layout and carrier shared by all the inputs, `None` when one is
+/// not Auro-3D or they differ.
+fn common_auro(probes: &[Probe]) -> Option<(Option<String>, Option<String>)> {
+    let key = |p: &Probe| {
+        p.auro()
+            .map(|s| (s.auro_layout.clone(), s.auro_carrier.clone()))
+    };
+    let first = key(probes.first()?)?;
+    probes
+        .iter()
+        .all(|p| key(p).as_ref() == Some(&first))
+        .then_some(first)
+}
+
 /// The "truehdd" row of the summary: the warp mode and the bed conformance
 /// that are set, when the run decodes a TrueHD Atmos source with truehdd.
 fn truehdd_summary(ctx: &Context, probes: &[Probe]) -> Option<String> {
     let uses_truehdd = (ctx.validated.format.has_truehdd() || ctx.args.measure_only)
-        && probes
-            .iter()
-            .any(|p| p.master.is_none() && (ctx.validated.format.is_atmos() || atmos_source(p)));
+        && probes.iter().any(|p| {
+            p.master.is_none()
+                && p.spatial.is_none()
+                && (ctx.validated.format.is_atmos() || plan::ims_atmos_source(p))
+        });
     if !uses_truehdd {
         return None;
     }
@@ -493,6 +650,23 @@ fn truehdd_summary(ctx: &Context, probes: &[Probe]) -> Option<String> {
         parts.push("bed conform on".to_string());
     }
     (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+/// The "harletty" row of the summary: the warp mode that is set and the bed
+/// conformance (always on), when the run decodes a DTS:X or Auro-3D source.
+fn harletty_summary(ctx: &Context, probes: &[Probe]) -> Option<String> {
+    if !probes
+        .iter()
+        .any(|p| needs_harletty(ctx.validated.format, p))
+    {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if let Some(mode) = warp_mode(ctx) {
+        parts.push(format!("warp mode {}", mode.name()));
+    }
+    parts.push("bed conform on".to_string());
+    Some(parts.join(", "))
 }
 
 /// Print the summary table (if enabled).
@@ -534,6 +708,8 @@ fn print_summary(
         versions: versions.clone(),
         channels: ctx.info.channels,
         master_source: master_source(probes),
+        dtsx: !probes.is_empty() && probes.iter().all(Probe::is_dtsx),
+        auro: common_auro(probes),
         mode: (ctx.validated.format == Format::Ac4Ims
             && ctx.validated.ims_mode == Ac4ImsMode::Music)
             .then_some("music"),
@@ -559,6 +735,7 @@ fn print_summary(
         instances,
         piping: Some(piping.to_string()),
         truehdd: truehdd_summary(ctx, probes),
+        harletty: harletty_summary(ctx, probes),
         delay,
         temp_path: ctx.temp,
     };
@@ -724,14 +901,20 @@ fn log_spec(
     let row = |k: &str, v: String| (k.to_string(), v);
     let format = ctx.validated.format;
     let v = ctx.versions;
-    let versions = vec![
+    let mut versions = vec![
         row("deew", env!("CARGO_PKG_VERSION").to_string()),
         row("DEE", v.dee.text()),
         row("truehdd", v.truehdd.text()),
+    ];
+    // only worth a line when it exists (it is optional, for DTS sources)
+    if v.harletty != Version::NotFound {
+        versions.push(row("harletty", v.harletty.text()));
+    }
+    versions.extend([
         row("dee_shim", v.shim.text()),
         row("ffmpeg", v.ffmpeg.text()),
         row("ffprobe", v.ffprobe.text()),
-    ];
+    ]);
     let duration = if probe.duration > 0.0 {
         format!("{:.3} s", probe.duration)
     } else {
@@ -966,11 +1149,13 @@ fn build_job(
         lfe_slot,
         downmix,
     );
+    // a DTS:X or Auro-3D source is decoded by harletty, always with the bed conformed
+    let harletty = needs_harletty(format, probe);
     let names = temp_names(
         ctx.temp,
         file,
         &variant,
-        &truehdd_variant(warp_mode(ctx), bed_conform_on(ctx)),
+        &truehdd_variant(warp_mode(ctx), harletty || bed_conform_on(ctx)),
     );
     let format = if measure_atmos {
         Format::DdpAtmos
@@ -979,7 +1164,7 @@ fn build_job(
     };
     // the audio is the `.atmos` file of truehdd (or the master): the Atmos
     // formats, and AC4 IMS from an Atmos source
-    let atmos = format.is_atmos() || (format == Format::Ac4Ims && atmos_source(probe));
+    let atmos = format.is_atmos() || (format == Format::Ac4Ims && plan::ims_atmos_source(probe));
     let decoded = atmos && !master;
     let intermediate: &str = if master {
         file
@@ -1002,7 +1187,7 @@ fn build_job(
     let pipe_path = pcm_pipe.then(|| pipe::path(index));
     let intermediate_exists = !pcm_pipe && !master && Path::new(intermediate).exists();
     let plan = (!atmos && !master).then(|| {
-        audio_plan(
+        let plan = audio_plan(
             plan_format,
             ctx.info.samplerate,
             ctx.info.channels,
@@ -1011,7 +1196,8 @@ fn build_job(
             lfe_slot,
             // the TrueHD and AC4 IMS encoders can't downmix, ffmpeg does
             downmix,
-        )
+        );
+        plan.with_dts_downmix(probe.dts_downmix)
     });
     let pcm_format = pcm_pipe.then(|| {
         let rate = pcm_rate(plan_format, ctx.info.samplerate);
@@ -1033,11 +1219,27 @@ fn build_job(
     };
     // what DEE reads: the wav, the pipe, or the `.atmos` file
     let dee_input = pipe_path.as_deref().unwrap_or(intermediate);
-    // truehdd reads raw streams only: a raw .thd goes to it directly, a track
-    // of a container is copied into its stdin by ffmpeg.
-    let piped = decoded && !probe.raw_truehd;
+    // truehdd and harletty read raw streams only: a raw .thd or .dts goes to
+    // them directly, a track of a container is copied into their stdin by ffmpeg.
+    let feed = Feed::of(probe);
+    let piped = decoded
+        && !(if harletty {
+            !feed.piped()
+        } else {
+            probe.raw_truehd
+        });
     let ffmpeg_args = if piped {
-        pipe_args(&ctx.programs.ffmpeg, file, ctx.validated.track_index)
+        if harletty {
+            feed.ffmpeg_args(&ctx.programs.ffmpeg, file, ctx.validated.track_index)
+                .unwrap_or_default()
+        } else {
+            pipe_args(
+                &ctx.programs.ffmpeg,
+                file,
+                ctx.validated.track_index,
+                "truehd",
+            )
+        }
     } else if pcm_pipe {
         plan.as_ref()
             .map(|plan| {
@@ -1056,16 +1258,24 @@ fn build_job(
     };
     let decode_args = if decoded {
         let prefix = names.atmos.strip_suffix(".atmos").unwrap_or(&names.atmos);
-        let truehdd = ctx.programs.truehdd.as_deref().unwrap_or_default();
-        decode_args(
-            truehdd,
-            if piped { "-" } else { file },
-            prefix,
-            warp_mode(ctx),
-            bed_conform_on(ctx),
-        )
+        let input = if piped { "-" } else { file };
+        if harletty {
+            let tool = ctx.programs.harletty.as_deref().unwrap_or_default();
+            harletty_decode_args(tool, input, prefix, warp_mode(ctx), feed.is_wav())
+        } else {
+            let truehdd = ctx.programs.truehdd.as_deref().unwrap_or_default();
+            decode_args(truehdd, input, prefix, warp_mode(ctx), bed_conform_on(ctx))
+        }
     } else {
         Vec::new()
+    };
+    let decoder = match &probe.spatial {
+        Some(spatial) if harletty => Decoder::Harletty {
+            experimental: spatial.experimental_warning(file_name(file)),
+            // the duration of a raw stream is an estimate from its bitrate
+            check_length: feed != Feed::RawDts,
+        },
+        _ => Decoder::Truehdd,
     };
 
     let output_path = ctx.output_path(file, probe);
@@ -1152,6 +1362,7 @@ fn build_job(
         ffmpeg_args,
         pipe: pipe_path,
         decode_args,
+        decoder,
         measure_args,
         encode_args,
         measure_only,
@@ -1370,13 +1581,34 @@ pub fn run(args: Args, config: Config, paths: Paths) {
     );
 
     let atmos_info = tools::dee_tool("atmos_info", &cwd, &paths.exe_dir);
-    let (files, probes) = probe_inputs(
+    let (files, mut probes) = probe_inputs(
         &programs.ffprobe,
         atmos_info.as_deref(),
         validated.track_index,
         args.no_prompt,
         inputs,
     );
+    check_auro(
+        &programs.ffmpeg,
+        programs.harletty.as_deref(),
+        files
+            .iter()
+            .map(String::as_str)
+            .zip(probes.iter_mut())
+            .collect(),
+        validated.track_index,
+    );
+    if (format.is_atmos() || format == Format::Ac4Ims) && !args.measure_only {
+        detect_spatial(
+            &mut programs,
+            &paths.exe_dir,
+            &cwd,
+            format,
+            &files,
+            &mut probes,
+            validated.track_index,
+        );
+    }
     let info = check_inputs(&probes).unwrap_or_else(|fail| fail.exit());
     if format.is_atmos() && !args.measure_only {
         check_atmos_inputs(&files, &probes).unwrap_or_else(|fail| fail.exit());
@@ -1673,6 +1905,7 @@ mod tests {
             channel_layout: String::new(),
             codec: if atmos { "truehd" } else { "pcm_s24le" }.into(),
             raw_truehd: false,
+            raw_dts: false,
             profile: if atmos {
                 "Dolby TrueHD + Dolby Atmos"
             } else {
@@ -1683,6 +1916,9 @@ mod tests {
             master: None,
             language: None,
             title: None,
+            dts_downmix: None,
+            spatial: None,
+            harletty_check: None,
         }
     }
 
@@ -1730,6 +1966,7 @@ mod tests {
             measure: Some("dee_measure_loudness".into()),
             measure_atmos: Some("dee_measure_loudness".into()),
             truehdd: Some("truehdd".into()),
+            harletty: Some("harletty".into()),
             shim: (profile.is_some() || args.measure_only).then(|| crate::tools::Shim {
                 run: "dee_shim".into(),
             }),
@@ -1940,6 +2177,227 @@ mod tests {
         let job = measure_job("/in/a.thd", &raw, |_| {});
         assert!(job.ffmpeg_args.is_empty());
         assert!(job.decode_args.contains(&"/in/a.thd".to_string()));
+    }
+
+    fn auro_probe(layout: Option<&str>, carrier: &str) -> Probe {
+        let mut probe = dts_probe(true, true);
+        let mut spatial = probe.spatial.take().unwrap();
+        spatial.kind = "auro".into();
+        spatial.auro_layout = layout.map(str::to_string);
+        spatial.auro_carrier = Some(carrier.into());
+        probe.harletty_check = Some(Some(spatial));
+        probe
+    }
+
+    #[test]
+    fn auro_is_shown_when_all_inputs_agree() {
+        let a = auro_probe(Some("13.1"), "7.1");
+        assert_eq!(
+            common_auro(&[a.clone(), a.clone()]),
+            Some((Some("13.1".into()), Some("7.1".into())))
+        );
+        assert_eq!(
+            common_auro(&[a.clone(), auro_probe(Some("11.1"), "7.1")]),
+            None
+        );
+        assert_eq!(common_auro(&[a.clone(), dts_probe(false, true)]), None);
+        assert_eq!(common_auro(&[]), None);
+        // no harletty: nothing is asked, nothing changes
+        let mut plain = dts_probe(false, true);
+        plain.profile = "DTS-HD MA".into();
+        plain.bit_depth = 24;
+        assert!(plain.auro_candidate());
+        check_auro(
+            "ffmpeg",
+            None,
+            vec![("a.dts", &mut plain)],
+            TrackIndex::default(),
+        );
+        assert_eq!(plain.harletty_check, None);
+        // a harletty that is not there
+        check_auro(
+            "ffmpeg",
+            Some("/nonexistent/harletty"),
+            vec![("a.dts", &mut plain)],
+            TrackIndex::default(),
+        );
+        assert_eq!(plain.harletty_check, None);
+    }
+
+    /// A DTS track that harletty found DTS:X in (`kind` `dtsx`) or not.
+    fn dts_probe(spatial: bool, raw: bool) -> Probe {
+        Probe {
+            is_truehd: false,
+            codec: "dts".into(),
+            raw_dts: raw,
+            is_atmos: false,
+            profile: "DTS-HD MA".into(),
+            dts_downmix: None,
+            spatial: spatial.then(|| crate::harletty::Spatial {
+                label: "DTS:X-7.1.4+3".into(),
+                kind: "dtsx".into(),
+                objects: Some(3),
+                experimental: true,
+                presentation: Some("ObjectsD0".into()),
+                auro_layout: None,
+                auro_carrier: None,
+            }),
+            harletty_check: None,
+            ..test_probe(8, false)
+        }
+    }
+
+    /// The job of an Atmos format (DDP Atmos needs dee_shim, a profile has it).
+    fn atmos_job(file: &str, probe: &Probe, edit: impl FnOnce(&mut Args)) -> Job {
+        let mut args = Args::default();
+        edit(&mut args);
+        test_job_with(file, probe, args, false, Some(Profile71::Standard))
+    }
+
+    #[test]
+    fn auro_in_pcm_is_decoded_by_harletty_through_a_wav_pipe() {
+        for (codec, truehd) in [("flac", false), ("truehd", true)] {
+            let mut probe = dts_probe(true, false);
+            probe.codec = codec.into();
+            probe.is_truehd = truehd;
+            probe.profile = String::new();
+            probe.spatial.as_mut().unwrap().kind = "auro".into();
+            probe.spatial.as_mut().unwrap().experimental = false;
+            for format in ["ddp-atmos", "thd-atmos", "ac4-atmos", "ac4-ims"] {
+                let job = atmos_job("a.mkv", &probe, |a| a.format = format.into());
+                let ffmpeg = &job.ffmpeg_args;
+                assert!(
+                    ffmpeg.ends_with(&["-c:a", "pcm_s24le", "-f", "wav", "-"].map(String::from)),
+                    "{format}"
+                );
+                assert_eq!(ffmpeg.contains(&"-drc_scale".to_string()), truehd);
+                assert!(!ffmpeg.contains(&"copy".to_string()));
+                assert_eq!(job.decode_args[0], "harletty");
+                assert_eq!(job.decode_args[1..3], ["--codec", "wav"].map(String::from));
+                assert!(!job.decode_args.contains(&"dts".to_string()));
+                assert_eq!(job.decode_args.last().map(String::as_str), Some("-"));
+                assert_eq!(
+                    job.decoder,
+                    Decoder::Harletty {
+                        experimental: None,
+                        check_length: true
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dtsx_sources_of_the_atmos_formats_are_decoded_by_harletty() {
+        for format in ["ddp-atmos", "thd-atmos", "ac4-atmos"] {
+            // a track of a container is copied into harletty
+            let job = atmos_job("/in/a.mkv", &dts_probe(true, false), |a| {
+                a.format = format.into()
+            });
+            assert_eq!(job.ffmpeg_args.last().map(String::as_str), Some("-"));
+            assert!(job.ffmpeg_args.contains(&"dts".to_string()), "{format}");
+            assert!(!job.ffmpeg_args.contains(&"truehd".to_string()));
+            assert_eq!(job.decode_args[0], "harletty");
+            assert_eq!(job.decode_args.last().map(String::as_str), Some("-"));
+            assert!(job.decode_args.contains(&"--bed-conform".to_string()));
+            assert!(job.decode_args.contains(&join("/t", "a.bc")));
+            assert_eq!(
+                job.decoder,
+                Decoder::Harletty {
+                    experimental: Some(
+                        "a.mkv: DTS:X-7.1.4+3 (ObjectsD0) is decoded experimentally by harletty, check the result."
+                            .into()
+                    ),
+                    check_length: true,
+                }
+            );
+            // from here on it is a decoded Atmos master as for truehdd
+            assert_eq!(job.intermediate, join("/t", "a.bc.atmos"));
+            assert!(job.temp_files.contains(&join("/t", "a.bc.atmos.audio")));
+            assert!(job.encode_args.contains(&job.intermediate), "{format}");
+        }
+        // a raw stream goes to harletty directly, its duration is an estimate
+        let job = atmos_job("/in/a.dts", &dts_probe(true, true), |a| {
+            a.format = "ddp-atmos".into()
+        });
+        assert!(job.ffmpeg_args.is_empty());
+        assert_eq!(
+            job.decode_args.last().map(String::as_str),
+            Some("/in/a.dts")
+        );
+        assert!(matches!(
+            job.decoder,
+            Decoder::Harletty {
+                check_length: false,
+                ..
+            }
+        ));
+        // the bed is conformed whatever -bc says, the warp mode is passed
+        let job = atmos_job("/in/a.mkv", &dts_probe(true, false), |a| {
+            a.format = "thd-atmos".into();
+            a.bed_conform = Some("off".into());
+            a.warp_mode = Some("loro".into());
+        });
+        let i = job
+            .decode_args
+            .iter()
+            .position(|a| a == "--warp-mode")
+            .unwrap();
+        assert_eq!(job.decode_args[i + 1], "loro");
+        assert!(job.decode_args.contains(&"--bed-conform".to_string()));
+        assert!(job.intermediate.ends_with("a.wm-loro.bc.atmos"));
+    }
+
+    #[test]
+    fn dtsx_sources_of_ac4_ims_are_decoded_by_harletty() {
+        let job = encode_job("/in/a.mkv", &dts_probe(true, false), false, |a| {
+            a.format = "ac4-ims".into();
+            a.bed_conform = Some("off".into());
+            a.warp_mode = Some("loro".into());
+        });
+        assert_eq!(job.decode_args[0], "harletty");
+        assert!(job.decode_args.contains(&"--bed-conform".to_string()));
+        assert!(job.decode_args.contains(&"--warp-mode".to_string()));
+        assert!(matches!(job.decoder, Decoder::Harletty { .. }));
+        assert!(job.intermediate.ends_with("a.wm-loro.bc.atmos"));
+        assert!(job.encode_args.contains(&job.intermediate));
+        assert!(needs_harletty(Format::Ac4Ims, &dts_probe(true, false)));
+        assert!(!needs_truehdd(Format::Ac4Ims, &dts_probe(true, false)));
+        // a plain DTS track stays channel-based
+        let job = encode_job("/in/a.mkv", &dts_probe(false, false), false, |a| {
+            a.format = "ac4-ims".into()
+        });
+        assert!(job.decode_args.is_empty());
+        assert!(!needs_harletty(Format::Ac4Ims, &dts_probe(false, false)));
+        assert!(plan::ims_atmos_source(&dts_probe(true, false)));
+        assert!(!plan::ims_atmos_source(&dts_probe(false, false)));
+    }
+
+    #[test]
+    fn dts_goes_through_ffmpeg_for_the_other_formats_and_measuring() {
+        for format in ["dd", "ddp", "thd", "ac4", "ac4-ims", "aac"] {
+            let job = encode_job("/in/a.mkv", &dts_probe(false, false), false, |a| {
+                a.format = format.into()
+            });
+            assert!(job.decode_args.is_empty(), "{format}");
+            assert_eq!(job.decoder, Decoder::Truehdd);
+            assert!(!needs_harletty(job.format, &dts_probe(false, false)));
+        }
+        // even a DTS:X track: harletty is not run for them (AC4 IMS has its own test)
+        let probe = dts_probe(true, false);
+        for format in [Format::Dd, Format::Ddp, Format::Thd] {
+            assert!(!needs_harletty(format, &probe));
+        }
+        let job = measure_job("/in/a.mkv", &probe, |_| {});
+        assert!(job.decode_args.is_empty());
+        assert_eq!(job.ffmpeg_args[0], "ffmpeg");
+        assert!(!job.ffmpeg_args.contains(&"copy".to_string()));
+        // the Atmos formats of a TrueHD source stay with truehdd
+        assert!(needs_truehdd(Format::DdpAtmos, &test_probe(8, true)));
+        assert!(!needs_truehdd(Format::DdpAtmos, &probe));
+        assert!(needs_harletty(Format::DdpAtmos, &probe));
+        assert!(!needs_harletty(Format::DdpAtmos, &dts_probe(false, false)));
+        assert!(!needs_harletty(Format::DdpAtmos, &test_probe(8, true)));
     }
 
     #[test]

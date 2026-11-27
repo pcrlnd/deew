@@ -129,6 +129,41 @@ describe("parseProgressEvent", () => {
   })
 })
 
+describe("decoder of progress events", () => {
+  it("parses the decoder and ignores unknown ones", () => {
+    const line = (d: string) =>
+      `{"type":"progress","job":0,"stage":"decode","decoder":"${d}","percent":1,"db":null}`
+    expect(parseProgressEvent(line("harletty"))).toMatchObject({
+      decoder: "harletty",
+    })
+    expect(parseProgressEvent(line("truehdd"))).toMatchObject({
+      decoder: "truehdd",
+    })
+    expect(parseProgressEvent(line("x"))).not.toHaveProperty("decoder")
+    expect(
+      parseProgressEvent(
+        '{"type":"progress","job":0,"stage":"decode","percent":1,"db":null}'
+      )
+    ).not.toHaveProperty("decoder")
+  })
+
+  it("reduces the decoder into the job", () => {
+    const events: ProgressEvent[] = [
+      { type: "jobs", files: ["a.mkv"] },
+      {
+        type: "progress",
+        job: 0,
+        stage: "decode",
+        decoder: "harletty",
+        percent: 5,
+        db: null,
+      },
+    ]
+    const state = events.reduce(reduceProgress, EMPTY_PROGRESS)
+    expect(stageLabel(state.jobs[0])).toBe("harletty decode")
+  })
+})
+
 describe("reduceProgress", () => {
   const apply = (events: ProgressEvent[], from = EMPTY_PROGRESS) =>
     events.reduce(reduceProgress, from)
@@ -237,6 +272,15 @@ describe("reduceProgress", () => {
 })
 
 describe("stageLabel", () => {
+  it("labels the decode stage with the decoder", () => {
+    expect(stageLabel(job({ stage: "decode", decoder: "harletty" }))).toBe(
+      "harletty decode"
+    )
+    expect(stageLabel(job({ stage: "decode", decoder: "truehdd" }))).toBe(
+      "truehdd decode"
+    )
+  })
+
   it("names the stages and appends the loudness", () => {
     expect(stageLabel(job())).toBe("waiting")
     expect(stageLabel(job({ stage: "starting" }))).toBe("starting")

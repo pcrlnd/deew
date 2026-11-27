@@ -32,6 +32,19 @@ fn row(cells: &[&str], end_section: bool) -> Row {
     }
 }
 
+/// `Auro-3D 13.1 (carried in 7.1)`, without what is not known.
+pub fn auro_text(layout: Option<&str>, carrier: Option<&str>) -> String {
+    let mut text = "Auro-3D".to_string();
+    if let Some(layout) = layout {
+        text.push(' ');
+        text.push_str(layout);
+    }
+    if let Some(carrier) = carrier {
+        text.push_str(&format!(" (carried in {carrier})"));
+    }
+    text
+}
+
 /// Everything shown in the table.
 #[derive(Debug, Clone)]
 pub struct SummaryData<'a> {
@@ -43,6 +56,11 @@ pub struct SummaryData<'a> {
     /// What the inputs are when they all are Atmos masters (`ADM BWF Atmos
     /// master`), shown instead of their channels and bit depth.
     pub master_source: Option<String>,
+    /// Every input is DTS:X: its channels (the bed) are shown as `DTS:X 7.1`.
+    pub dtsx: bool,
+    /// Every input is Auro-3D with this layout and carrier (`13.1`, `7.1`),
+    /// shown as `Auro-3D 13.1 (carried in 7.1)`.
+    pub auro: Option<(Option<String>, Option<String>)>,
     /// The AC4 IMS mode when it is not the default (`music`).
     pub mode: Option<&'static str>,
     /// Sample rate in Hz of every input.
@@ -68,6 +86,9 @@ pub struct SummaryData<'a> {
     /// Text of the "truehdd" row (its warp mode and bed conformance), `None`
     /// leaves the row out.
     pub truehdd: Option<String>,
+    /// Text of the "harletty" row (its warp mode and bed conformance, for a
+    /// DTS:X or Auro-3D source), `None` leaves the row out.
+    pub harletty: Option<String>,
     /// Text of the "Delay" row, see [`delay_summary`].
     pub delay: String,
     pub temp_path: &'a str,
@@ -91,16 +112,22 @@ fn input_channels(channels: i64) -> String {
     }
 }
 
-/// The version rows of the binaries section (and of `deew -v`): label and
-/// value (markup).
-pub fn binary_cells(v: &Versions) -> [(&'static str, String); 5] {
-    [
+/// The version rows of the binaries section: label and value (markup).
+/// harletty is optional, it has a row when it was found.
+pub fn binary_cells(v: &Versions) -> Vec<(&'static str, String)> {
+    let mut cells = vec![
         ("DEE version", version_cell(&v.dee)),
         ("truehdd version", version_cell(&v.truehdd)),
+    ];
+    if v.harletty != Version::NotFound {
+        cells.push(("harletty version", version_cell(&v.harletty)));
+    }
+    cells.extend([
         ("dee_shim version", version_cell(&v.shim)),
         ("ffmpeg version", version_cell(&v.ffmpeg)),
         ("ffprobe version", version_cell(&v.ffprobe)),
-    ]
+    ]);
+    cells
 }
 
 /// The distinct bit depths sorted, e.g. `24` or `16/24/32`.
@@ -183,7 +210,17 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
         rows.push(row(&["[bold yellow]Input(s)"], false));
         match &d.master_source {
             Some(source) => rows.push(row(&["Source", &escape(source)], false)),
-            None => rows.push(row(&["Channels", &input_channels(d.channels)], false)),
+            None => {
+                let channels = input_channels(d.channels);
+                let channels = if let Some((layout, carrier)) = &d.auro {
+                    auro_text(layout.as_deref(), carrier.as_deref())
+                } else if d.dtsx {
+                    format!("DTS:X {channels}")
+                } else {
+                    channels
+                };
+                rows.push(row(&["Channels", &channels], false));
+            }
         }
         rows.push(row(
             &["Sample rate", &sample_rate_cell(d.sample_rates)],
@@ -234,6 +271,9 @@ pub fn summary_rows(d: &SummaryData) -> Vec<Row> {
         }
         if let Some(truehdd) = &d.truehdd {
             rows.push(row(&["truehdd", truehdd], false));
+        }
+        if let Some(harletty) = &d.harletty {
+            rows.push(row(&["harletty", harletty], false));
         }
         rows.push(row(&["Delay", &d.delay], false));
         rows.push(Row {
@@ -584,12 +624,15 @@ mod tests {
             versions: Versions {
                 dee: Version::Found("6.7.0".into()),
                 truehdd: Version::Found("0.6.2".into()),
+                harletty: Version::NotFound,
                 shim: Version::NotFound,
                 ffmpeg: Version::Found("7.1.5".into()),
                 ffprobe: Version::CouldntParse,
             },
             channels: 6,
             master_source: None,
+            dtsx: false,
+            auro: None,
             mode: None,
             sample_rates: &[48000],
             bit_depths: &[24, 24],
@@ -605,6 +648,7 @@ mod tests {
             instances: 2.5,
             piping: None,
             truehdd: None,
+            harletty: None,
             delay: "0ms".into(),
             temp_path: "/tmp/de[ew",
         }
@@ -651,6 +695,8 @@ mod tests {
                 },
                 channels: p["channels"].as_i64().unwrap(),
                 master_source: None,
+                dtsx: false,
+                auro: None,
                 mode: None,
                 sample_rates: &[48000],
                 bit_depths: &bit_depths,
@@ -666,6 +712,7 @@ mod tests {
                 instances: p["instances"].as_f64().unwrap(),
                 piping: None,
                 truehdd: None,
+                harletty: None,
                 delay: s("delay_text").to_string(),
                 temp_path: s("temp"),
             };
@@ -919,6 +966,51 @@ mod tests {
         let rows = summary_rows(&d);
         assert_eq!(rows[1].cells[1], "[red]not found");
         assert_eq!(rows[2].cells[1], "[red]not found");
+        // harletty is optional: a row once it exists
+        d.versions.harletty = Version::Found("0.9.0".into());
+        let rows = summary_rows(&d);
+        let labels: Vec<&str> = rows.iter().map(|r| r.cells[0].as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "[cyan]DEE version",
+                "[cyan]truehdd version",
+                "[cyan]harletty version",
+                "[cyan]dee_shim version",
+                "[cyan]ffmpeg version",
+                "[cyan]ffprobe version"
+            ]
+        );
+        assert_eq!(rows[2].cells[1], "0.9.0");
+        assert!(rows[5].end_section && !rows[4].end_section);
+    }
+
+    #[test]
+    fn dtsx_input_is_shown_with_its_bed() {
+        let mut s = sections(false);
+        s.input_info = true;
+        let mut d = data(&s);
+        d.channels = 8;
+        d.dtsx = true;
+        assert_eq!(summary_rows(&d)[1].cells, ["Channels", "DTS:X 7.1"]);
+    }
+
+    #[test]
+    fn auro_input_is_shown_with_layout_and_carrier() {
+        let mut s = sections(false);
+        s.input_info = true;
+        let mut d = data(&s);
+        d.channels = 8;
+        d.auro = Some((Some("13.1".into()), Some("7.1".into())));
+        assert_eq!(
+            summary_rows(&d)[1].cells,
+            ["Channels", "Auro-3D 13.1 (carried in 7.1)"]
+        );
+        d.auro = Some((None, Some("7.1".into())));
+        assert_eq!(
+            summary_rows(&d)[1].cells,
+            ["Channels", "Auro-3D (carried in 7.1)"]
+        );
     }
 
     #[test]
@@ -1089,6 +1181,21 @@ mod tests {
         let rows = summary_rows(&d);
         let at = rows.iter().position(|r| r.cells[0] == "truehdd").unwrap();
         assert_eq!(rows[at].cells[1], "warp mode normal, bed conform on");
+        assert_eq!(rows[at + 1].cells[0], "Delay");
+    }
+
+    #[test]
+    fn harletty_row_follows_the_decode() {
+        let all = sections(true);
+        let mut d = data(&all);
+        let rows = summary_rows(&d);
+        assert!(!rows.iter().any(|r| r.cells[0] == "harletty"));
+        d.truehdd = Some("warp mode loro".into());
+        d.harletty = Some("warp mode normal, bed conform on".into());
+        let rows = summary_rows(&d);
+        let at = rows.iter().position(|r| r.cells[0] == "harletty").unwrap();
+        assert_eq!(rows[at].cells[1], "warp mode normal, bed conform on");
+        assert_eq!(rows[at - 1].cells[0], "truehdd");
         assert_eq!(rows[at + 1].cells[0], "Delay");
     }
 

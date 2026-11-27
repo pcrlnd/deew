@@ -7,6 +7,8 @@ export type Stage = "starting" | "ffmpeg" | "decode" | "measure" | "encode"
 
 export type Gating = "dialogue" | "level"
 
+export type Decoder = "harletty" | "truehdd"
+
 export type JobResult = "finished" | "failed" | "stopped"
 
 export type ProgressEvent =
@@ -18,6 +20,8 @@ export type ProgressEvent =
       stage: Stage
       percent: number | null
       db: number | null
+      /** Decode stage only (newer CLIs): the decoder in use. */
+      decoder?: Decoder
       /** `-mo` only: how the measurement was gated and the speech share. */
       gating?: Gating
       speech?: number
@@ -91,6 +95,9 @@ export function parseProgressEvent(line: string): ProgressEvent | null {
         stage: m.stage as Stage,
         percent: (m.percent as number | null | undefined) ?? null,
         db: (m.db as number | null | undefined) ?? null,
+        ...(m.decoder === "harletty" || m.decoder === "truehdd"
+          ? { decoder: m.decoder }
+          : {}),
         ...(m.gating === "dialogue" || m.gating === "level"
           ? { gating: m.gating }
           : {}),
@@ -131,6 +138,8 @@ export interface JobProgress {
   /** 0-100; null = unknown (indeterminate). */
   percent: number | null
   db: number | null
+  /** Decoder of the decode stage; absent from an older CLI (= truehdd). */
+  decoder?: Decoder
   gating?: Gating
   speech?: number
   program?: number
@@ -203,6 +212,7 @@ export function reduceProgress(
           stage: event.stage,
           percent: event.percent,
           db: event.db,
+          decoder: event.decoder,
           gating: event.gating,
           speech: event.speech,
           program: event.program,
@@ -259,7 +269,10 @@ const STAGE_LABELS: Record<JobProgress["stage"], string> = {
 }
 
 export function stageLabel(job: JobProgress): string {
-  const label = STAGE_LABELS[job.stage]
+  const label =
+    job.stage === "decode"
+      ? `${job.decoder ?? "truehdd"} decode`
+      : STAGE_LABELS[job.stage]
   const level = levelText(job)
   return level ? `${label} (${level})` : label
 }

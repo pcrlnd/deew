@@ -145,6 +145,10 @@ pub enum ErrorKind {
     ShimVersion,
     TruehddOld,
     TruehddVersion,
+    HarlettyMissing,
+    HarlettyOld,
+    HarlettyVersion,
+    HarlettyInfo,
     ShimDdp71,
     ShimDdp70,
     ShimDdp50,
@@ -253,6 +257,16 @@ impl ErrorKind {
             Self::TruehddVersion => {
                 "can't read the version of truehdd, deew needs 0.6.3 or newer: update it with [bold yellow]-gt[/bold yellow]"
             }
+            Self::HarlettyMissing => {
+                "[bold yellow]harletty[/bold yellow] is required for DTS:X and Auro-3D sources of the Atmos formats and AC-4 IMS (to read and decode them), put harletty next to deew or in your PATH, or get it with [bold yellow]-gt[/bold yellow] (https://github.com/harletty/harletty-bridge)"
+            }
+            Self::HarlettyOld => {
+                "harletty [bold yellow]🤠[/bold yellow] is too old, deew needs 0.9.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
+            }
+            Self::HarlettyVersion => {
+                "can't read the version of harletty, deew needs 0.9.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
+            }
+            Self::HarlettyInfo => "harletty couldn't read 🤠",
             Self::ShimDdp71 => {
                 "dee_shim is required for 7.1 DDP with the standard profile, put dee_shim next to deew or in your PATH, or use [bold yellow]--ddp-mode bluray[/bold yellow] (768-1664 kbps)"
             }
@@ -275,10 +289,10 @@ impl ErrorKind {
                 "the channel layout [bold yellow]🤠[/bold yellow] is not supported, 5 channels have to be 5.0 and 7 channels 7.0 (no LFE)."
             }
             Self::AtmosInput => {
-                "[bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow] and [bold yellow]ac4-atmos[/bold yellow] need a TrueHD input with an Atmos presentation, [bold yellow]🤠[/bold yellow] is not a TrueHD file."
+                "[bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow] and [bold yellow]ac4-atmos[/bold yellow] need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, [bold yellow]🤠[/bold yellow] is none of them."
             }
             Self::AtmosNoAtmos => {
-                "[bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow] and [bold yellow]ac4-atmos[/bold yellow] need a TrueHD input with an Atmos presentation, [bold yellow]🤠[/bold yellow] has no Atmos."
+                "[bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow] and [bold yellow]ac4-atmos[/bold yellow] need a TrueHD Atmos, DTS:X or Auro-3D (24-bit DTS-HD MA, FLAC, PCM or TrueHD with a harletty that reads PCM) input or an Atmos master, [bold yellow]🤠[/bold yellow] has no Atmos, DTS:X or Auro-3D."
             }
             Self::ThdMonoInput => {
                 "input channels for TrueHD encoding can only be [bold yellow]2[/bold yellow]/[bold yellow]6[/bold yellow]/[bold yellow]8[/bold yellow]. "
@@ -321,7 +335,7 @@ impl ErrorKind {
                 "[bold yellow]ac4-ims[/bold yellow] needs a 5.1 (or 5.0, 7.0, 7.1) or an Atmos input, stereo and mono can't be encoded to immersive stereo."
             }
             Self::Ac4ImsMixed => {
-                "[bold yellow]ac4-ims[/bold yellow] can't encode Atmos inputs (TrueHD Atmos, ADM BWF, DAMF) and channel-based inputs in the same run."
+                "[bold yellow]ac4-ims[/bold yellow] can't encode Atmos inputs (TrueHD Atmos, DTS:X, Auro-3D, ADM BWF, DAMF) and channel-based inputs in the same run."
             }
             Self::MasterFormat => {
                 "Atmos masters (ADM BWF, DAMF) can't be encoded to [bold yellow]🤠[/bold yellow], use [bold yellow]ddp-atmos[/bold yellow], [bold yellow]thd-atmos[/bold yellow], [bold yellow]ac4-atmos[/bold yellow] or [bold yellow]ac4-ims[/bold yellow] (or [bold yellow]dd[/bold yellow]/[bold yellow]ddp[/bold yellow] for a 5.1 render)."

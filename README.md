@@ -25,6 +25,7 @@
 - drives the command line tools of Dolby Encoding Engine 6.7 and creates the intermediate files in the background, giving you a proper tool
 - encodes DD, DDP, DDP Atmos, TrueHD, TrueHD Atmos, AC4, AC4 Atmos, AC4 IMS (immersive stereo) and AAC (always 2.0, mono inputs are rejected)
 - re-encodes TrueHD Atmos to DDP Atmos / TrueHD Atmos / AC4 Atmos from the Atmos master (raw `.thd` or a container like mkv/mka/m2ts, use `-ti` to select the track; decoded with truehdd, DDP Atmos and TrueHD Atmos use dee_shim to stop DEE smoothing the object positions a second time)
+- encodes DTS:X and Auro-3D (in 24-bit DTS-HD MA, or in 24-bit FLAC, PCM and TrueHD with a harletty that reads PCM, `--codec wav`; ffmpeg pipes the decoded wav, bit-exact) to DDP Atmos / TrueHD Atmos / AC4 Atmos / AC4 IMS (raw `.dts` or a container): harletty decodes them into an Atmos master, which goes into DEE like a TrueHD Atmos source; harletty's DTS:X decoding is based on reverse engineering, some DTS:X layouts are marked experimental (deew warns about them), check the result. Every other format decodes DTS with ffmpeg as before (the DTS:X / Auro-3D track as its 5.1 / 7.1 bed)
 - reads Dolby Atmos masters directly: ADM BWF (`.wav`/`.bwf` with `chna` and `axml` chunks) and DAMF (`.atmos` with its `.atmos.audio` and `.atmos.metadata`) go straight into DEE for `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims` (no truehdd, no ffmpeg), and `-mo` measures them; `dd`/`ddp` get a 5.1 (or `-dm 2`/`1`) render of the master from DEE
 - runs multiple encodes in parallel for batch encoding (see config)
 - works on Windows, Linux and macOS
@@ -37,14 +38,15 @@
 - AC4 `-dn` (loudness measurement) doesn't support 7.1 sources
 - versatile delay option that supports ms, s and also frame@fps formats, parsing delay from filenames also supported
 
-The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects ffprobe, ffmpeg, truehdd, dee_shim and the DEE tools, with the exact options it passes to each one for every format.
+The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects ffprobe, ffmpeg, truehdd, harletty, dee_shim and the DEE tools, with the exact options it passes to each one for every format.
 
 # Requirements
 - ffmpeg
 - ffprobe
 - [Dolby Encoding Engine 6.7](https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670)
 - [truehdd](https://github.com/truehdd/truehdd) 0.6.3 or newer (only for TrueHD Atmos sources of the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; Atmos masters don't need it)
-- [dee_shim](https://github.com/truehdd/dee-shim) 0.4.0 or newer (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP, 7.0 DDP, 5.0 DD and DDP and `-mo` of 7.1/7.0); deew refuses a job that needs truehdd or dee_shim when it is older, `deew -gt` replaces them with the latest
+- [harletty](https://github.com/harletty/harletty-bridge) 0.9.0 or newer (only for DTS sources of `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims`, to read and decode their DTS:X or Auro-3D, and to show Auro-3D inputs as such; builds exist for x86_64 Linux (glibc 2.35 or newer), x86_64 Windows and macOS (universal). Until my pull requests to harletty are merged, `deew -gt` downloads it from my fork [pcrlnd/harletty-bridge](https://github.com/pcrlnd/harletty-bridge): harletty's `main` plus Auro-3D from PCM (`--codec wav`, needed for Auro-3D in FLAC, PCM and TrueHD), the universal macOS build and the version in `--version`)
+- [dee_shim](https://github.com/truehdd/dee-shim) 0.4.0 or newer (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP, 7.0 DDP, 5.0 DD and DDP and `-mo` of 7.1/7.0); deew refuses a job that needs truehdd, harletty or dee_shim when it is older, `deew -gt` replaces them with the latest
   - `ddp-atmos` and `thd-atmos` use it so DEE doesn't smooth the object positions of the TrueHD decode a second time, TrueHD with DRC `none` (the default) uses it because the TrueHD encoder has no `none` DRC preset; 96 kHz TrueHD (any DRC) is encoded through it with `--apodise off` so it stays lossless (DEE's own encoder applies its apodising filter to 96 kHz input, which changes every sample, so dee_shim is required for it)
 
 # Where deew looks for the programs
@@ -58,7 +60,7 @@ deew looks for the programs in this order, there is nothing to set in the config
 <details>
 <summary><b>macOS: deew-gui.app in Applications</b></summary>
 
-With `deew-gui.app` in `/Applications` (or `~/Applications`) the deew folder is `~/Library/Application Support/deew/` instead of the folder next to the app: `deew-macos`, `config.toml`, `dee/` (the DEE tools, put there by hand), ffmpeg, ffprobe, truehdd, dee_shim and `temp/` all live there. The tools are looked up there first, then in the PATH, then in `/opt/homebrew/bin` and `/usr/local/bin`.
+With `deew-gui.app` in `/Applications` (or `~/Applications`) the deew folder is `~/Library/Application Support/deew/` instead of the folder next to the app: `deew-macos`, `config.toml`, `dee/` (the DEE tools, put there by hand), ffmpeg, ffprobe, truehdd, harletty, dee_shim and `temp/` all live there. The tools are looked up there first, then in the PATH, then in `/opt/homebrew/bin` and `/usr/local/bin`.
 - Utilities → Update and install all downloads `deew-macos` there if it is missing; `deew -gt` (Utilities → Download tools) downloads the tools there; `-u` from that CLI also updates `/Applications/deew-gui.app`.
 - To use the CLI in a terminal run `~/Library/Application Support/deew/deew-macos`, or link it: `ln -s ~/Library/Application\ Support/deew/deew-macos /usr/local/bin/deew`.
 - With `deew-gui.app` in any other folder (portable) everything stays next to the app.
@@ -67,7 +69,7 @@ With `deew-gui.app` in `/Applications` (or `~/Applications`) the deew folder is 
 
 `deew -v` shows what it found and where.
 
-`deew -gt` / `deew --get-tools` downloads everything except DEE next to deew: ffmpeg, ffprobe, truehdd and dee_shim (ffmpeg is the latest stable GPL build from [BtbN](https://github.com/BtbN/FFmpeg-Builds) on Windows/Linux and from [martin-riedl.de](https://ffmpeg.martin-riedl.de/) on macOS). DEE can't be downloaded, install it by hand (see below).
+`deew -gt` / `deew --get-tools` downloads everything except DEE next to deew: ffmpeg, ffprobe, truehdd, harletty and dee_shim (ffmpeg is the latest stable GPL build from [BtbN](https://github.com/BtbN/FFmpeg-Builds) on Windows/Linux and from [martin-riedl.de](https://ffmpeg.martin-riedl.de/) on macOS). DEE can't be downloaded, install it by hand (see below).
 
 `deew -u` / `deew --update` updates deew, and deew-gui and deew-web if they are next to it, to the latest release (it shows what will change and asks first, `-np` skips the question). `deew -u all` also installs the missing ones. On macOS it also finds deew-gui.app in /Applications (or ~/Applications).
 
@@ -78,7 +80,7 @@ One folder holds everything:
 | CLI | `deew.exe` | `deew` | `deew-macos` |
 | GUI (optional) | `deew-gui.exe` | `deew-gui` | `deew-gui.app` (from `deew-gui-macos.zip`) |
 | web UI (optional) | `deew-web.exe` | `deew-web` | `deew-web-macos` |
-| tools | `ffmpeg.exe`, `ffprobe.exe`, `truehdd.exe`, `dee_shim.exe` | `ffmpeg`, `ffprobe`, `truehdd`, `dee_shim` | `ffmpeg`, `ffprobe`, `truehdd`, `dee_shim` |
+| tools | `ffmpeg.exe`, `ffprobe.exe`, `truehdd.exe`, `harletty.exe`, `dee_shim.exe` | `ffmpeg`, `ffprobe`, `truehdd`, `harletty`, `dee_shim` | `ffmpeg`, `ffprobe`, `truehdd`, `harletty`, `dee_shim` |
 
 plus `config.toml`, `dee/` (`dee_ddp_encoder`, `dee_dthd_encoder`, ... `license.lic`) and `temp/`.
 
@@ -97,7 +99,7 @@ plus `config.toml`, `dee/` (`dee_ddp_encoder`, `dee_dthd_encoder`, ... `license.
 - run with: `deew` (`deew.exe` on Windows, `deew-macos` on macOS)\
 *(run the binary from terminal, doubleclicking it won't work)*
 - on the first run it will create a config file (the tools go next to deew or in your PATH, see above)
-- run `deew -gt` to download everything except DEE (ffmpeg, ffprobe, truehdd, dee_shim) next to deew
+- run `deew -gt` to download everything except DEE (ffmpeg, ffprobe, truehdd, harletty, dee_shim) next to deew
 - updating: run `deew -u`, or grab the latest build from: [https://github.com/pcrlnd/deew/releases](https://github.com/pcrlnd/deew/releases)
 
 ### build from source (Windows/Linux/macOS):
@@ -152,6 +154,12 @@ FLAGS:
                             default: ddp
                             ddp-atmos and thd-atmos use truehdd and dee_shim,
                             ac4-atmos and ac4-ims (from Atmos) use truehdd
+                            ddp-atmos, thd-atmos, ac4-atmos and ac4-ims also
+                            take DTS:X and Auro-3D sources, decoded with
+                            harletty
+                            Auro-3D is read from 24-bit DTS-HD MA, and from
+                            24-bit FLAC, PCM and TrueHD with a harletty that
+                            reads PCM (--codec wav)
   --ddp-mode MODE           options: standard / bluray
                             default: run -c/--config
                             profile of 7.1 DDP, 5.1 and below are not affected
@@ -202,7 +210,8 @@ FLAGS:
                             to the source
   -wm, --warp-mode MODE     options: normal / warping / prologiciix / loro
                             default: from the source's metadata
-                            truehdd's warp mode, only used when the TrueHD Atmos
+                            warp mode of the TrueHD Atmos (truehdd) and DTS:X /
+                            Auro-3D (harletty) sources, only used when the
                             source has none
                             config: truehdd_warp_mode
   -bc, --bed-conform SWITCH
@@ -210,6 +219,7 @@ FLAGS:
                             default: off
                             truehdd's bed conformance, for Atmos sources whose
                             bed comes out as objects
+                            DTS:X and Auro-3D sources are always conformed
                             config: truehdd_bed_conform
   -d, --delay DELAY         examples: -5.1ms, +1,52s, -24@pal, +10@24000/1001
                             default: 0ms or parsed from filename
@@ -246,8 +256,8 @@ FLAGS:
                             ignored, TrueHD Atmos sources and Atmos masters are
                             measured as Atmos
   -lb, --list-bitrates      list bitrates that DEE can do for each format
-  -la, --long-argument      print ffmpeg, truehdd and DEE arguments for each
-                            input
+  -la, --long-argument      print ffmpeg, truehdd, harletty and DEE arguments
+                            for each input
   -np, --no-prompt          skip confirmation questions, print them as notes and
                             continue
   -pl, --print-logos        show all logo variants you can set in the config
@@ -255,8 +265,8 @@ FLAGS:
   -c, --config              show config and config location
   -gc, --generate-config    generate a new config, asks before overwriting an
                             existing config (-np skips the question)
-  -gt, --get-tools          download ffmpeg, ffprobe, truehdd and dee_shim next
-                            to deew
+  -gt, --get-tools          download ffmpeg, ffprobe, truehdd, harletty and
+                            dee_shim next to deew
 
 blue: uses dee_shim
 ```
@@ -294,6 +304,9 @@ TrueHD Atmos -> TrueHD Atmos re-encode (16 elements, uses truehdd and dee_shim)
 
 `deew -f ac4-atmos -b 448 -i *thd`\
 TrueHD Atmos -> AC4 Atmos encoding at 448kbps
+
+`deew -f ddp-atmos -i *mkv`\
+DTS:X or Auro-3D (DTS-HD MA, FLAC, PCM, TrueHD) -> DDP Atmos encoding (uses harletty and dee_shim)
 
 `deew -f ac4-ims -i *thd`\
 TrueHD Atmos -> AC4 immersive stereo (`--ac4-ims-mode music` for music)

@@ -2,6 +2,7 @@
 # - ffmpeg, ffprobe
 # - the 'dee' folder of the DEE 6.7 tools (dee_ddp_encoder, dee_ddpjoc_encoder, ...)
 # - truehdd for ddp-atmos, thd-atmos and ac4-atmos (https://github.com/truehdd/truehdd)
+# - harletty for DTS:X and Auro-3D sources (Auro-3D in 24-bit DTS-HD MA, or in FLAC, PCM and TrueHD with a harletty that reads PCM, --codec wav) of ddp-atmos, thd-atmos, ac4-atmos and ac4-ims (https://github.com/harletty/harletty-bridge)
 # - dee_shim for ddp-atmos, thd-atmos, TrueHD with DRC none, 7.0 DDP and 7.1 DDP with the standard profile (https://github.com/truehdd/dee-shim)
 # Setup instructions: https://github.com/pcrlnd/deew#where-deew-looks-for-the-programs
 
@@ -30,10 +31,11 @@ low_pass_filter = true
 # TrueHD asks first: the output is no longer identical to the source.
 surround_3db_attenuation = false
 
-# TrueHD Atmos sources: truehdd's warp mode, used only when the source has none: '' (not passed), 'normal', 'warping', 'prologiciix' or 'loro' (-wm overrides it for one run).
+# TrueHD Atmos (truehdd) and DTS:X / Auro-3D (harletty) sources: the warp mode, used only when the source has none: '' (not passed), 'normal', 'warping', 'prologiciix' or 'loro' (-wm overrides it for one run).
 truehdd_warp_mode = ''
 
 # TrueHD Atmos sources: truehdd's bed conformance, for sources whose bed comes out as objects, set to true to turn it on (-bc overrides it for one run).
+# DTS:X and Auro-3D sources (harletty) are always conformed, this does not change it.
 truehdd_bed_conform = false
 
 # Feed the decoded audio from ffmpeg straight into DEE instead of writing a temp .wav (DD, DDP, AC4, AAC, -mo).

@@ -8,6 +8,7 @@ mod encode;
 mod error;
 mod events;
 mod get_tools;
+mod harletty;
 mod help;
 mod info;
 mod inputs;

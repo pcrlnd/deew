@@ -309,6 +309,8 @@ pub fn failed_text(name: &str, error: &str, color: bool) -> String {
 #[derive(Debug, Clone)]
 pub struct Row<'a> {
     pub stage: Stage,
+    /// The program of the decode stage: `truehdd` or `harletty`.
+    pub decoder: &'static str,
     pub name: &'a str,
     pub db: Option<Level>,
     /// 0 to 1, `None` for an unknown total (a pulsing bar).
@@ -323,7 +325,7 @@ impl Row<'_> {
         match self.stage {
             Stage::Starting => None,
             Stage::Ffmpeg => Some(("ffmpeg", "decode", COLOR_DECODE)),
-            Stage::Decode => Some(("truehdd", "decode", COLOR_DECODE)),
+            Stage::Decode => Some((self.decoder, "decode", COLOR_DECODE)),
             Stage::Measure => Some(("DEE", "measure", COLOR_MEASURE)),
             Stage::Encode => Some(("DEE", "encode", COLOR_ENCODE)),
         }
@@ -446,6 +448,7 @@ fn should_emit(pct: f64, fresh: bool, last: Option<Instant>, now: Instant) -> bo
 /// What was last written as an event of a bar.
 struct EventState {
     stage: Option<Stage>,
+    decoder: &'static str,
     db: Option<Level>,
     /// `None` while the total is unknown.
     percent: Option<f64>,
@@ -458,6 +461,7 @@ struct EventState {
 struct Job {
     name: String,
     stage: Stage,
+    decoder: &'static str,
     db: Option<Level>,
     fraction: Option<f64>,
     step_started: Instant,
@@ -479,6 +483,13 @@ impl Bar {
         if let Some(live) = self.live.lock().expect("live lines").get_mut(&self.index) {
             f(live);
         }
+    }
+
+    /// The program that does the decode step (`truehdd` or `harletty`), to be
+    /// set before `describe(Stage::Decode, ..)`.
+    pub fn set_decoder(&self, decoder: &'static str) {
+        self.with_live(|live| live.decoder = decoder);
+        self.events.lock().expect("event state").decoder = decoder;
     }
 
     /// Set the step; `db` is the measured loudness, once known. A new step
@@ -506,7 +517,7 @@ impl Bar {
             state.db = db;
             state.fresh = true;
             state.last = Some(Instant::now());
-            events::progress(self.index, stage, state.percent, db);
+            events::progress(self.index, stage, state.decoder, state.percent, db);
         }
     }
 
@@ -515,7 +526,7 @@ impl Bar {
         if let Some(stage) = state.stage {
             state.fresh = false;
             state.last = Some(now);
-            events::progress(self.index, stage, state.percent, state.db);
+            events::progress(self.index, stage, state.decoder, state.percent, state.db);
         }
     }
 
@@ -592,6 +603,7 @@ impl Ui {
                     .values()
                     .map(|l| Row {
                         stage: l.stage,
+                        decoder: l.decoder,
                         name: &l.name,
                         db: l.db,
                         fraction: l.fraction,
@@ -626,6 +638,7 @@ impl Ui {
             Job {
                 name: name.to_string(),
                 stage: Stage::Starting,
+                decoder: "truehdd",
                 db: None,
                 fraction: Some(0.0),
                 step_started: Instant::now(),
@@ -644,6 +657,7 @@ impl Ui {
             live: self.live.clone(),
             events: Mutex::new(EventState {
                 stage: None,
+                decoder: "truehdd",
                 db: None,
                 percent: Some(0.0),
                 fresh: false,
@@ -717,6 +731,7 @@ mod tests {
     fn row(stage: Stage, name: &str) -> Row<'_> {
         Row {
             stage,
+            decoder: "truehdd",
             name,
             db: None,
             fraction: Some(0.0),
@@ -1008,6 +1023,19 @@ mod tests {
         }
         // at 80 columns it is one line again
         assert_eq!(render_rows(80, &[r], false)[0].len(), 1);
+    }
+
+    #[test]
+    fn decode_row_names_its_decoder() {
+        let mut r = row(Stage::Decode, "a.dts");
+        let text = plain(&render_rows(100, std::slice::from_ref(&r), false)[0][0]);
+        assert!(text.contains("truehdd decode"), "{text}");
+        r.decoder = "harletty";
+        let text = plain(&render_rows(100, std::slice::from_ref(&r), false)[0][0]);
+        assert!(
+            text.contains("harletty decode") && !text.contains("truehdd"),
+            "{text}"
+        );
     }
 
     #[test]
