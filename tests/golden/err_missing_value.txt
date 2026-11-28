@@ -1,4 +1,4 @@
-deew 5.7.0
+deew 5.7.1
 
 USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
             [-o DIRECTORY] [-oi] [-on NAME] [-f FORMAT] [-b BITRATE]

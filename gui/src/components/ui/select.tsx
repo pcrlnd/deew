@@ -88,9 +88,9 @@ function SelectContent({
           )}
           {...props}
         >
-          <SelectScrollUpButton />
+          {/* No scroll arrows: base-ui shows them on a 1px sub-pixel overflow and
+              they cover the last item. The popup scrolls natively (wheel/keyboard). */}
           <SelectPrimitive.List>{children}</SelectPrimitive.List>
-          <SelectScrollDownButton />
         </SelectPrimitive.Popup>
       </SelectPrimitive.Positioner>
     </SelectPrimitive.Portal>

@@ -1,5 +1,5 @@
 //! `-gt`: download the latest ffmpeg, ffprobe, truehdd, harletty and dee_shim
-//! next to the deew executable.
+//! next to the deew executable, the ones that are missing or out of date.
 
 use crate::error::escape;
 use crate::interrupt;
@@ -7,8 +7,10 @@ use crate::live::Live;
 use crate::markup::color_enabled;
 use crate::rprintln;
 use crate::term::console_width;
+use crate::tools::{self, Version, version_numbers};
 use crate::ui::{download_tail_text, separator, tool_text, two_line_bar, two_lines};
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -25,6 +27,10 @@ const TRUEHDD_REPO: &str = "truehdd/truehdd";
 // version in `--version` (PRs to harletty/harletty-bridge); switch back once
 // they are merged.
 const HARLETTY_REPO: &str = "pcrlnd/harletty-bridge";
+/// The fork's binary reports `0.9.0-pcr` for the release tag `v0.9.0`, so an
+/// upstream `0.9.0` is not the fork's build. Remove this (set it to `""`) when
+/// `HARLETTY_REPO` is upstream again.
+const HARLETTY_VERSION_SUFFIX: &str = "-pcr";
 /// The CLI archives of the harletty release (`harletty-cli-v0.9.0-linux-x86_64.zip`),
 /// not the `harletty-bridge-*` plugins.
 const HARLETTY_PREFIX: &str = "harletty-cli-";
@@ -830,6 +836,175 @@ fn unpack(archive: Archive, path: &Path, targets: &[Target]) -> Vec<Result<(), S
     }
 }
 
+// --- what needs updating ---
+
+/// The installed tool next to deew.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Current {
+    Missing,
+    /// Not in the deew folder, but in the `PATH` (its version, if it can be
+    /// read): `-gt` only manages the deew folder, so it is still installed.
+    Elsewhere(Option<String>),
+    /// There, but its version can't be read.
+    Unknown,
+    Found(String),
+}
+
+impl Current {
+    fn text(&self) -> String {
+        match self {
+            Current::Missing => "not installed".to_string(),
+            Current::Elsewhere(Some(v)) => format!("not installed (PATH: {v})"),
+            Current::Elsewhere(None) => "not installed (in PATH)".to_string(),
+            Current::Unknown => "unknown".to_string(),
+            Current::Found(v) => v.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Install,
+    Update,
+    /// Installed, but the latest version is not known: fetched anyway.
+    Download,
+    UpToDate,
+    /// The installed version is newer than the release: never downgraded.
+    Newer,
+    /// No build for the platform.
+    Unavailable,
+    Failed,
+}
+
+impl Action {
+    fn text(self) -> &'static str {
+        match self {
+            Action::Install => "install",
+            Action::Update => "update",
+            Action::Download => "download",
+            Action::UpToDate => "up to date",
+            Action::Newer => "newer than the release",
+            Action::Unavailable => "not available",
+            Action::Failed => "failed",
+        }
+    }
+
+    fn color(self) -> &'static str {
+        match self {
+            Action::Install | Action::Update | Action::Download => "bold yellow",
+            Action::UpToDate => "green",
+            Action::Newer | Action::Unavailable => "not bold white",
+            Action::Failed => "red",
+        }
+    }
+
+    fn todo(self) -> bool {
+        matches!(self, Action::Install | Action::Update | Action::Download)
+    }
+}
+
+/// `0.5.0` of `0.5.0+g6a82dad`, `v0.5.0` or `n9.0-3-gabc`.
+fn version_numbers_of(version: &str) -> Option<[u64; 3]> {
+    version_numbers(version.trim().trim_start_matches(['v', 'n']))
+}
+
+/// What to do about a tool. `exact`: only `latest` itself (build metadata
+/// aside) is up to date, not the same numbers with another suffix. `depth`:
+/// how many of the numbers are compared (ffmpeg's `n9.0` builds are 9.0.x).
+fn decide(current: &Current, latest: Option<&str>, exact: bool, depth: usize) -> Action {
+    let have = match current {
+        Current::Missing | Current::Elsewhere(_) => return Action::Install,
+        Current::Unknown => None,
+        Current::Found(v) => Some(v.as_str()),
+    };
+    let Some(want) = latest else {
+        return Action::Download;
+    };
+    let Some(have) = have else {
+        return Action::Update;
+    };
+    let (Some(have_n), Some(want_n)) = (version_numbers_of(have), version_numbers_of(want)) else {
+        return Action::Update;
+    };
+    if exact && have.trim_start_matches('v').split('+').next() == Some(want) {
+        return Action::UpToDate;
+    }
+    match have_n[..depth].cmp(&want_n[..depth]) {
+        Ordering::Greater => Action::Newer,
+        Ordering::Equal if !exact => Action::UpToDate,
+        _ => Action::Update,
+    }
+}
+
+/// The version of the program `name` at `program`.
+fn probe(name: &str, program: String) -> Version {
+    match name {
+        "truehdd" => tools::truehdd_version(&program),
+        "harletty" => tools::harletty_version(&program),
+        "dee_shim" => tools::shim_version(&tools::Shim { run: program }),
+        _ => tools::version_of(&program, &["-version"]),
+    }
+}
+
+/// The tool `name` in `dir` (only there counts as installed; one in the
+/// `PATH` is noted).
+fn installed(dir: &Path, name: &str) -> Current {
+    let path = dir.join(exe(name));
+    if !path.is_file() {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        return match tools::find_program(name, dir, &cwd) {
+            Some(other) => Current::Elsewhere(match probe(name, other) {
+                Version::Found(v) => Some(v),
+                _ => None,
+            }),
+            None => Current::Missing,
+        };
+    }
+    match probe(name, path.to_string_lossy().into_owned()) {
+        Version::Found(v) => Current::Found(v),
+        _ => Current::Unknown,
+    }
+}
+
+/// A row of the table: tool, installed version, latest version, action.
+struct Line {
+    name: &'static str,
+    current: String,
+    latest: String,
+    action: Action,
+}
+
+fn table_lines(items: &[Line], color: bool) -> Vec<String> {
+    let width = |f: &dyn Fn(&Line) -> usize, header: &str| {
+        items.iter().map(f).chain([header.len()]).max().unwrap_or(0)
+    };
+    let (w0, w1, w2) = (
+        width(&|i| i.name.len(), "tool"),
+        width(&|i| i.current.len(), "current"),
+        width(&|i| i.latest.len(), "latest"),
+    );
+    let sep = if color {
+        " [color(240)]│[/color(240)] "
+    } else {
+        " │ "
+    };
+    let mut lines = vec![format!(
+        "[bold white]{:<w0$}[/bold white]{sep}[bold white]{:<w1$}[/bold white]{sep}[bold white]{:<w2$}[/bold white]{sep}[bold white]action[/bold white]",
+        "tool", "current", "latest"
+    )];
+    for item in items {
+        lines.push(format!(
+            "[bold cyan]{:<w0$}[/bold cyan]{sep}{}{sep}{}{sep}[{c}]{}[/{c}]",
+            item.name,
+            escape(&format!("{:<w1$}", item.current)),
+            escape(&format!("{:<w2$}", item.latest)),
+            item.action.text(),
+            c = item.action.color(),
+        ));
+    }
+    lines
+}
+
 // --- jobs ---
 
 /// How a job finds its archive.
@@ -841,6 +1016,9 @@ enum Source {
         prefix: &'static str,
         /// Asset suffixes, tried in order (empty: no build for the platform).
         suffixes: Vec<&'static str>,
+        /// What the installed program adds to the release's version; not
+        /// empty means only that exact version counts as up to date.
+        version_suffix: &'static str,
     },
     /// BtbN's ffmpeg builds.
     Btbn { tag: Option<&'static str> },
@@ -849,6 +1027,43 @@ enum Source {
 }
 
 impl Source {
+    /// How many numbers of the versions are compared: ffmpeg's BtbN builds
+    /// are named by the branch (`n9.0`) but are 9.0.x.
+    fn depth(&self) -> usize {
+        if matches!(self, Source::Btbn { .. }) {
+            2
+        } else {
+            3
+        }
+    }
+
+    /// Whether an installed version string comes from the build scheme of
+    /// this source, so that it can be compared with the latest version. A
+    /// hand-copied, distro or git build is not: it is replaced.
+    fn same_scheme(&self, installed: &str) -> bool {
+        let installed = installed.trim();
+        match self {
+            Source::Suffix { .. } => true,
+            // `n9.0.2-982-g836df4e858-2026...`
+            Source::Btbn { .. } => installed.strip_prefix('n').is_some_and(|rest| {
+                rest.starts_with(|c: char| c.is_ascii_digit())
+                    && version_numbers_of(installed).is_some()
+                    && rest.contains('-')
+            }),
+            // `9.0.2-https://www.martin-riedl.de`
+            Source::Url(_) => {
+                installed.starts_with(|c: char| c.is_ascii_digit())
+                    && version_numbers_of(installed).is_some()
+                    && installed.contains("-https://www.martin")
+            }
+        }
+    }
+
+    /// Only the exact release version counts as up to date.
+    fn exact(&self) -> bool {
+        matches!(self, Source::Suffix { version_suffix, .. } if !version_suffix.is_empty())
+    }
+
     /// There is no build for the platform: the tool is skipped, not failed.
     fn unavailable(&self) -> bool {
         match self {
@@ -859,18 +1074,40 @@ impl Source {
     }
 }
 
-fn resolve(agent: &ureq::Agent, source: &Source, platform: Platform) -> Result<Plan, String> {
+/// A download plan and the version it gets (`None`: not known beforehand).
+struct Resolved {
+    plan: Plan,
+    latest: Option<String>,
+}
+
+/// `v0.6.3` as `0.6.3`, `None` if it is not a version number.
+fn clean_version(tag: &str) -> Option<String> {
+    let version = tag.trim().trim_start_matches('v');
+    version_numbers_of(version).map(|_| version.to_string())
+}
+
+/// The version in the final URL of a martin-riedl download
+/// (`.../macos/arm64/1789931890_9.0.2/ffmpeg.zip`).
+fn macos_url_version(final_url: &str) -> Option<String> {
+    let path = final_url.split(['?', '#']).next()?;
+    let folder = path.rsplit('/').nth(1)?;
+    clean_version(folder.split_once('_')?.1)
+}
+
+fn resolve(agent: &ureq::Agent, source: &Source, platform: Platform) -> Result<Resolved, String> {
     let unsupported = || format!("not available for {}", platform.describe());
     match source {
         Source::Suffix {
             repo,
             prefix,
             suffixes,
+            version_suffix,
         } => {
             if suffixes.is_empty() {
                 return Err(unsupported());
             }
-            let assets = release_assets(agent, repo)?;
+            let release = latest_release(agent, repo)?;
+            let assets = release.assets;
             let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
             let name = pick_first_suffix(&names, prefix, suffixes).ok_or_else(|| {
                 format!(
@@ -882,7 +1119,10 @@ fn resolve(agent: &ureq::Agent, source: &Source, platform: Platform) -> Result<P
                 .iter()
                 .find(|a| a.name == name)
                 .expect("picked asset");
-            plan_for_asset(&assets, asset, None)
+            Ok(Resolved {
+                plan: plan_for_asset(&assets, asset, None)?,
+                latest: clean_version(&release.tag).map(|v| format!("{v}{version_suffix}")),
+            })
         }
         Source::Btbn { tag } => {
             let tag = tag.ok_or_else(unsupported)?;
@@ -895,23 +1135,35 @@ fn resolve(agent: &ureq::Agent, source: &Source, platform: Platform) -> Result<P
                 .iter()
                 .find(|a| a.name == name)
                 .expect("picked asset");
-            plan_for_asset(&assets, asset, Some("checksums.sha256"))
+            Ok(Resolved {
+                plan: plan_for_asset(&assets, asset, Some("checksums.sha256"))?,
+                latest: btbn_version(name, tag)
+                    .map(|v| v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")),
+            })
         }
-        Source::Url(url) => Ok(Plan {
-            url: url.clone().ok_or_else(unsupported)?,
-            archive: Archive::Zip,
-            checksum: Checksum::NextToFinalUrl,
-        }),
+        Source::Url(url) => {
+            let url = url.clone().ok_or_else(unsupported)?;
+            // the redirect to the current build carries its version
+            let latest = agent
+                .head(&url)
+                .header("User-Agent", format!("deew/{}", env!("CARGO_PKG_VERSION")))
+                .call()
+                .ok()
+                .and_then(|r| macos_url_version(&r.get_uri().to_string()));
+            Ok(Resolved {
+                plan: Plan {
+                    url,
+                    archive: Archive::Zip,
+                    checksum: Checksum::NextToFinalUrl,
+                },
+                latest,
+            })
+        }
     }
 }
 
 /// Download one archive and take the files of `rows` out of it.
-fn run_job(
-    exe_dir: &Path,
-    platform: Platform,
-    source: &Source,
-    rows: &[&Row],
-) -> Vec<Result<(), String>> {
+fn run_job(exe_dir: &Path, plan: &Plan, rows: &[&Row]) -> Vec<Result<(), String>> {
     let message = |rows: &[&Row], e: String| -> Vec<Result<(), String>> {
         rows.iter().map(|_| Err(e.clone())).collect()
     };
@@ -921,16 +1173,12 @@ fn run_job(
     if let Err(e) = File::create(&archive_tmp.path) {
         return message(rows, format!("cannot write to {}: {e}", exe_dir.display()));
     }
-    let plan = match resolve(&agent, source, platform) {
-        Ok(plan) => plan,
-        Err(e) => return message(rows, e),
-    };
     let progress = |done: u64, total: Option<u64>| {
         for row in rows {
             row.progress(Status::Downloading, done, total);
         }
     };
-    if let Err(e) = fetch_archive(&agent, &plan, &archive_tmp.path, &progress) {
+    if let Err(e) = fetch_archive(&agent, plan, &archive_tmp.path, &progress) {
         return message(rows, e);
     }
     for row in rows {
@@ -975,6 +1223,7 @@ fn jobs(platform: Platform) -> Vec<Job> {
                 repo: TRUEHDD_REPO,
                 prefix: "",
                 suffixes: truehdd_suffix(platform).into_iter().collect(),
+                version_suffix: "",
             },
             rows: vec![0],
         },
@@ -983,6 +1232,7 @@ fn jobs(platform: Platform) -> Vec<Job> {
                 repo: HARLETTY_REPO,
                 prefix: HARLETTY_PREFIX,
                 suffixes: harletty_suffixes(platform).to_vec(),
+                version_suffix: HARLETTY_VERSION_SUFFIX,
             },
             rows: vec![1],
         },
@@ -991,6 +1241,7 @@ fn jobs(platform: Platform) -> Vec<Job> {
                 repo: DEE_SHIM_REPO,
                 prefix: "",
                 suffixes: dee_shim_suffix(platform).into_iter().collect(),
+                version_suffix: "",
             },
             rows: vec![2],
         },
@@ -1072,58 +1323,157 @@ fn verdict(status: Status, outcome: Option<Result<(), String>>) -> Verdict {
     }
 }
 
-/// `-gt`: download the tools into `exe_dir` and exit.
+/// `-gt`: download the missing and outdated tools into `exe_dir` and exit.
 pub fn run(exe_dir: &Path) -> ! {
     let platform = Platform::current();
-    let rows: Vec<Arc<Row>> = ["truehdd", "harletty", "dee_shim", "ffmpeg", "ffprobe"]
+    let names: [&'static str; 5] = ["truehdd", "harletty", "dee_shim", "ffmpeg", "ffprobe"];
+    let jobs = jobs(platform);
+
+    // what is installed and what is the latest, all at the same time
+    let (currents, resolved) = std::thread::scope(|scope| {
+        let probes: Vec<_> = names
+            .iter()
+            .map(|&name| scope.spawn(move || installed(exe_dir, name)))
+            .collect();
+        let lookups: Vec<_> = jobs
+            .iter()
+            .map(|job| {
+                scope.spawn(move || {
+                    (!job.source.unavailable()).then(|| resolve(&agent(), &job.source, platform))
+                })
+            })
+            .collect();
+        let currents: Vec<Current> = probes
+            .into_iter()
+            .map(|h| h.join().expect("version probe"))
+            .collect();
+        let resolved: Vec<Option<Result<Resolved, String>>> = lookups
+            .into_iter()
+            .map(|h| h.join().expect("release lookup"))
+            .collect();
+        (currents, resolved)
+    });
+
+    // the action of every tool; a job that downloads one archive for several
+    // tools gets them all when one needs it
+    let mut lines: Vec<Line> = names
+        .iter()
+        .zip(&currents)
+        .map(|(&name, current)| Line {
+            name,
+            current: current.text(),
+            latest: "-".to_string(),
+            action: Action::Unavailable,
+        })
+        .collect();
+    let mut failures: Vec<(&'static str, String)> = Vec::new();
+    for (job, result) in jobs.iter().zip(&resolved) {
+        match result {
+            None => {}
+            Some(Err(reason)) => {
+                for &i in &job.rows {
+                    lines[i].action = Action::Failed;
+                    failures.push((names[i], reason.clone()));
+                }
+            }
+            Some(Ok(found)) => {
+                for &i in &job.rows {
+                    lines[i].latest = found.latest.clone().unwrap_or_else(|| "unknown".into());
+                    let current = match &currents[i] {
+                        Current::Found(v) if !job.source.same_scheme(v) => &Current::Unknown,
+                        other => other,
+                    };
+                    lines[i].action = decide(
+                        current,
+                        found.latest.as_deref(),
+                        job.source.exact(),
+                        job.source.depth(),
+                    );
+                }
+                if job.rows.iter().any(|&i| lines[i].action.todo()) {
+                    for &i in &job.rows {
+                        if !lines[i].action.todo() {
+                            lines[i].action = Action::Update;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for line in table_lines(&lines, color_enabled()) {
+        rprintln!("{line}");
+    }
+
+    let rows: Vec<Arc<Row>> = names
         .iter()
         .map(|&name| Arc::new(Row::new(name, exe(name))))
         .collect();
-
     let outcomes: Vec<Mutex<Option<Result<(), String>>>> =
         rows.iter().map(|_| Mutex::new(None)).collect();
-    with_live_rows(&rows, || {
-        std::thread::scope(|scope| {
-            for job in jobs(platform) {
-                let (rows, outcomes) = (&rows, &outcomes);
-                scope.spawn(move || {
-                    let job_rows: Vec<&Row> = job.rows.iter().map(|&i| rows[i].as_ref()).collect();
-                    if job.source.unavailable() {
-                        for row in &job_rows {
-                            row.set(Status::Skipped, None);
+    let shown: Vec<Arc<Row>> = rows
+        .iter()
+        .zip(&lines)
+        .filter(|(_, line)| line.action.todo())
+        .map(|(row, _)| row.clone())
+        .collect();
+    let any_todo = !shown.is_empty();
+    if any_todo {
+        with_live_rows(&shown, || {
+            std::thread::scope(|scope| {
+                for (job, result) in jobs.iter().zip(&resolved) {
+                    let Some(Ok(found)) = result else { continue };
+                    if !job.rows.iter().any(|&i| lines[i].action.todo()) {
+                        continue;
+                    }
+                    let (rows, outcomes) = (&rows, &outcomes);
+                    scope.spawn(move || {
+                        let job_rows: Vec<&Row> =
+                            job.rows.iter().map(|&i| rows[i].as_ref()).collect();
+                        let results = run_job(exe_dir, &found.plan, &job_rows);
+                        for ((&i, row), result) in job.rows.iter().zip(&job_rows).zip(results) {
+                            row.finish(result.is_ok());
+                            *outcomes[i].lock().expect("outcome") = Some(result);
                         }
-                        return;
-                    }
-                    let results = run_job(exe_dir, platform, &job.source, &job_rows);
-                    for ((&i, row), result) in job.rows.iter().zip(&job_rows).zip(results) {
-                        row.finish(result.is_ok());
-                        *outcomes[i].lock().expect("outcome") = Some(result);
-                    }
-                });
-            }
+                    });
+                }
+            });
         });
-    });
-    let names: Vec<&'static str> = rows.iter().map(|r| r.name).collect();
+    }
 
-    let mut failed = false;
+    let mut failed = !failures.is_empty();
     let mut saved = Vec::new();
-    for ((&name, outcome), row) in names.iter().zip(&outcomes).zip(&rows) {
-        let status = row.state.lock().expect("row state").0;
-        match verdict(status, outcome.lock().expect("outcome").take()) {
-            Verdict::Saved => saved.push(name),
-            Verdict::Skipped => rprintln!(
+    for (i, &name) in names.iter().enumerate() {
+        match lines[i].action {
+            Action::Unavailable => rprintln!(
                 "[bold cyan]Note:[/bold cyan] [bold yellow]{name}[/bold yellow]: no build for {}",
                 platform.describe()
             ),
-            Verdict::Failed(Some(reason)) => {
-                failed = true;
-                rprintln!(
-                    "[color(231) on red]ERROR:[/color(231) on red] failed to get [bold yellow]{}[/bold yellow]: {}",
-                    name,
-                    escape(&reason)
-                );
+            Action::Failed => {
+                if let Some((_, reason)) = failures.iter().find(|(n, _)| *n == name) {
+                    rprintln!(
+                        "[color(231) on red]ERROR:[/color(231) on red] failed to get [bold yellow]{}[/bold yellow]: {}",
+                        name,
+                        escape(reason)
+                    );
+                }
             }
-            Verdict::Failed(None) => failed = true,
+            Action::UpToDate | Action::Newer => {}
+            _ => {
+                let status = rows[i].state.lock().expect("row state").0;
+                match verdict(status, outcomes[i].lock().expect("outcome").take()) {
+                    Verdict::Saved => saved.push(name),
+                    Verdict::Skipped => {}
+                    Verdict::Failed(Some(reason)) => {
+                        failed = true;
+                        rprintln!(
+                            "[color(231) on red]ERROR:[/color(231) on red] failed to get [bold yellow]{}[/bold yellow]: {}",
+                            name,
+                            escape(&reason)
+                        );
+                    }
+                    Verdict::Failed(None) => failed = true,
+                }
+            }
         }
     }
     if !saved.is_empty() {
@@ -1131,6 +1481,9 @@ pub fn run(exe_dir: &Path) -> ! {
             "[bold cyan]Tools saved to:[/bold cyan] {}",
             escape(&exe_dir.display().to_string())
         );
+    }
+    if !any_todo && !failed {
+        rprintln!("[bold green]Everything is up to date.[/bold green]");
     }
     std::process::exit(i32::from(failed));
 }
@@ -1143,6 +1496,204 @@ mod tests {
         os: Os::Linux,
         arch: Arch::X86_64,
     };
+
+    fn found(v: &str) -> Current {
+        Current::Found(v.to_string())
+    }
+
+    #[test]
+    fn action_of_a_tool() {
+        // older: update; same numbers with a build suffix: up to date
+        assert_eq!(
+            decide(&found("0.4.0"), Some("0.5.0"), false, 3),
+            Action::Update
+        );
+        assert_eq!(
+            decide(&found("0.5.0+g6a82dad"), Some("0.5.0"), false, 3),
+            Action::UpToDate
+        );
+        assert_eq!(
+            decide(&found("0.1.0+282-g0301b3e"), Some("0.1.0"), false, 3),
+            Action::UpToDate
+        );
+        // numbers, not strings
+        assert_eq!(
+            decide(&found("0.9.0"), Some("0.10.0"), false, 3),
+            Action::Update
+        );
+        assert_eq!(
+            decide(&found("n9.0-3-gabc"), Some("9.0"), false, 3),
+            Action::UpToDate
+        );
+        assert_eq!(
+            decide(&found("0.6.4"), Some("0.6.3"), false, 3),
+            Action::Newer
+        );
+        assert!(!Action::Newer.todo() && !Action::UpToDate.todo());
+        // not installed
+        assert_eq!(
+            decide(&Current::Missing, Some("0.5.0"), false, 3),
+            Action::Install
+        );
+        assert_eq!(decide(&Current::Missing, None, false, 3), Action::Install);
+        // latest unknown: always download
+        assert_eq!(decide(&found("9.0.2"), None, false, 3), Action::Download);
+        assert_eq!(decide(&Current::Unknown, None, false, 3), Action::Download);
+        // installed but unreadable, or not a version number: replace
+        assert_eq!(
+            decide(&Current::Unknown, Some("1.0"), false, 3),
+            Action::Update
+        );
+        assert_eq!(
+            decide(&found("git-abc"), Some("1.0"), false, 3),
+            Action::Update
+        );
+    }
+
+    #[test]
+    fn only_the_deew_folder_counts_as_installed() {
+        // in the PATH only: installed next to deew
+        let elsewhere = Current::Elsewhere(Some("7.1".into()));
+        assert_eq!(decide(&elsewhere, Some("7.1"), false, 2), Action::Install);
+        assert_eq!(elsewhere.text(), "not installed (PATH: 7.1)");
+        assert_eq!(Current::Elsewhere(None).text(), "not installed (in PATH)");
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("truehdd");
+            std::fs::write(
+                &script,
+                "#!/bin/sh\necho 'truehdd 0.6.3 (truehd library 0.7.2)'\n",
+            )
+            .unwrap();
+            make_executable(&script).unwrap();
+            // next to deew and current: up to date
+            let current = installed(dir.path(), "truehdd");
+            assert_eq!(current, found("0.6.3"));
+            assert_eq!(decide(&current, Some("0.6.3"), false, 3), Action::UpToDate);
+            // not there: never `Found`, whatever the PATH holds
+            let empty = tempfile::tempdir().unwrap();
+            let other = installed(empty.path(), "no_such_tool_xyz");
+            assert_eq!(other, Current::Missing);
+        }
+    }
+
+    #[test]
+    fn ffmpeg_is_compared_only_within_its_build_scheme() {
+        let btbn = Source::Btbn {
+            tag: Some("linux64"),
+        };
+        assert!(btbn.same_scheme("n9.0.2-982-g836df4e858-2026..."));
+        assert!(btbn.same_scheme("n9.0-3-gabc"));
+        for other in [
+            "7.1",
+            "N-123-g4811625b5f-2026",
+            "7.1.1-1ubuntu1",
+            "n9.0",
+            "",
+        ] {
+            assert!(!btbn.same_scheme(other), "{other}");
+        }
+        let mac = Source::Url(Some("u".into()));
+        assert!(mac.same_scheme("9.0.2-https://www.martin-riedl.de"));
+        assert!(!mac.same_scheme("n9.0.2-982-gabc"));
+        assert!(!mac.same_scheme("7.1"));
+        // a foreign build is never "up to date", even with the same numbers
+        let current = Current::Found("9.0.2".into());
+        let shown = if btbn.same_scheme("9.0.2") {
+            &current
+        } else {
+            &Current::Unknown
+        };
+        assert_eq!(decide(shown, Some("9.0"), false, 2), Action::Update);
+    }
+
+    #[test]
+    fn ffmpeg_builds_compare_major_and_minor() {
+        // the `n9.0` BtbN builds are 9.0.x
+        let latest = Some("9.0");
+        assert_eq!(
+            decide(&found("n9.0.2-982-gabc"), latest, false, 2),
+            Action::UpToDate
+        );
+        assert_eq!(
+            decide(&found("n8.1.3-5-gabc"), latest, false, 2),
+            Action::Update
+        );
+        assert_eq!(
+            decide(&found("n9.1-1-gabc"), latest, false, 2),
+            Action::Newer
+        );
+        let btbn = Source::Btbn {
+            tag: Some("linux64"),
+        };
+        assert_eq!(btbn.depth(), 2);
+        assert_eq!(Source::Url(None).depth(), 3);
+    }
+
+    #[test]
+    fn harletty_fork_needs_its_own_build() {
+        let latest = Some("0.9.0-pcr");
+        // upstream's 0.9.0 is not the fork's
+        assert_eq!(decide(&found("0.9.0"), latest, true, 3), Action::Update);
+        assert_eq!(decide(&found("0.8.0"), latest, true, 3), Action::Update);
+        assert_eq!(
+            decide(&found("0.9.0-pcr"), latest, true, 3),
+            Action::UpToDate
+        );
+        assert_eq!(
+            decide(&found("0.9.0-pcr+gabc"), latest, true, 3),
+            Action::UpToDate
+        );
+        assert_eq!(decide(&found("0.10.0"), latest, true, 3), Action::Newer);
+        assert_eq!(decide(&Current::Missing, latest, true, 3), Action::Install);
+        // the fork is the source of harletty only
+        let harletty = jobs(LINUX)
+            .into_iter()
+            .map(|j| j.source.exact())
+            .collect::<Vec<_>>();
+        assert_eq!(harletty, [false, true, false, false]);
+    }
+
+    #[test]
+    fn latest_versions_from_tags_and_urls() {
+        assert_eq!(clean_version("v0.6.3").as_deref(), Some("0.6.3"));
+        assert_eq!(clean_version("0.9.0").as_deref(), Some("0.9.0"));
+        assert_eq!(clean_version("nightly"), None);
+        assert_eq!(clean_version(""), None);
+        let url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip";
+        assert_eq!(macos_url_version(url).as_deref(), Some("9.0.2"));
+        assert_eq!(macos_url_version("https://x/ffmpeg.zip"), None);
+        assert_eq!(macos_url_version("https://x/a/latest/ffmpeg.zip"), None);
+    }
+
+    #[test]
+    fn table_shows_current_latest_and_action() {
+        let line = |name, current: &str, latest: &str, action| Line {
+            name,
+            current: current.to_string(),
+            latest: latest.to_string(),
+            action,
+        };
+        let items = [
+            line("truehdd", "0.6.3", "0.6.3", Action::UpToDate),
+            line("harletty", "not installed", "0.9.0-pcr", Action::Install),
+            line("ffmpeg", "9.0", "unknown", Action::Download),
+        ];
+        let plain: Vec<String> = table_lines(&items, false)
+            .iter()
+            .map(|l| crate::markup::strip(l))
+            .collect();
+        assert_eq!(
+            plain,
+            [
+                "tool     │ current       │ latest    │ action",
+                "truehdd  │ 0.6.3         │ 0.6.3     │ up to date",
+                "harletty │ not installed │ 0.9.0-pcr │ install",
+                "ffmpeg   │ 9.0           │ unknown   │ download",
+            ]
+        );
+    }
 
     #[test]
     fn btbn_picks_the_highest_stable_gpl_build() {

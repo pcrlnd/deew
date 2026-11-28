@@ -2046,7 +2046,7 @@ export default function ToolChain() {
                         <code>measure_loudness</code>)
                       </li>
                       <li>
-                        dee_shim 0.4.0 or newer (deew checks it, and truehdd
+                        dee_shim 0.5.0 or newer (deew checks it, and truehdd
                         0.6.3 or newer, <code>-gt</code> downloads the latest)
                       </li>
                     </ul>
@@ -2157,7 +2157,7 @@ export default function ToolChain() {
                       {"7.1/eac3|7.0/eac3|7.0|5.0"}
                     </span>{" "}
                     <span className="c">{"[--mode dd]"}</span>{" "}
-                    <span className="c">{"[--unpadded-wav]"}</span>
+                    <span className="c">{"[--unpadded]"}</span>
                     {" --bitrate "}
                     <span className="v">{"B"}</span>{" "}
                     <span className="s">{"--"}</span>
@@ -2188,7 +2188,7 @@ export default function ToolChain() {
                     {"\n         "}
                     <span className="m">
                       {
-                        "# --unpadded-wav only for a wav: it holds just the layout's channels (7 for 7.0, 8 for 7.1); the pipe is raw PCM of 8 channels (DEE takes none of 7), the 7.0 LFE slot silent. 5.0 DD/DDP: the wav has 5 channels, the pipe 6 (DEE takes no raw PCM of 5), -e ddp|dd:drc_profile=P:lfe_on=0"
+                        "# --unpadded: the wav or the raw PCM of the pipe holds just the layout's channels, no LFE slot (7 for 7.0, 5 for 5.0 DD/DDP); 7.1 (all 8 slots) only gets it for a wav. 5.0 DD/DDP: -e ddp|dd:drc_profile=P:lfe_on=0"
                       }
                     </span>
                   </pre>

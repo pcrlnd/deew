@@ -296,7 +296,7 @@ printf meta > "$prefix.atmos.metadata"
 const FAKE_DSHIM: &str = r#"#!/bin/sh
 dir=$(dirname "$0")
 if [ "$1" = "--version" ]; then
-  echo "dee_shim v0.4.0+g790d050"
+  echo "dee_shim v0.5.0+g790d050"
   exit 0
 fi
 { echo "---"; for a in "$@"; do printf '%s\n' "$a"; done; } >> "$dir/dee_shim.args"
@@ -730,7 +730,7 @@ fn ddp_51_default_and_cleanup() {
     assert_eq!(summary_row(&text, "Channels"), "5.1");
     assert_eq!(summary_row(&text, "DEE version"), "6.7.0", "{text}");
     assert_eq!(summary_row(&text, "truehdd version"), "0.6.3");
-    assert_eq!(summary_row(&text, "dee_shim version"), "0.4.0+g790d050");
+    assert_eq!(summary_row(&text, "dee_shim version"), "0.5.0+g790d050");
     assert!(!summary_row(&text, "ffmpeg version").is_empty());
     // the output directory is listed in the Output section, cropped to the
     // table's maximum width
@@ -1728,7 +1728,7 @@ fn ddp_atmos_with_dee_shim() {
     assert_eq!(summary_row(&text, "Format"), "DDP Atmos");
     assert_eq!(last_summary_row(&text, "Channels"), "Atmos");
     assert_eq!(summary_row(&text, "Bitrate"), "1024 kbps");
-    assert_eq!(summary_row(&text, "dee_shim version"), "0.4.0+g790d050");
+    assert_eq!(summary_row(&text, "dee_shim version"), "0.5.0+g790d050");
     assert!(!text.contains("dee_shim wasn't found"), "{text}");
 
     // truehdd decodes into the temp directory
@@ -2365,7 +2365,7 @@ fn measure_only_of_7_1_goes_through_dee_shim() {
     assert_eq!(shim[0], "measure_loudness");
     assert_eq!(opt(&shim, "--layout"), "7.1");
     assert!(opt(&shim, "--binary").ends_with("dee_measure_loudness"));
-    assert!(!has(&shim, "--unpadded-wav"));
+    assert!(!has(&shim, "--unpadded"));
     let args = env.run("dee_measure_loudness");
     assert_eq!(opt(&args, "--input-format"), "wav");
     assert!(opt(&args, "--output-manifest").ends_with("sur.loudness.json"));
@@ -2409,15 +2409,21 @@ fn old_tools_are_refused_when_the_job_uses_them() {
     let shim = |version: &str| {
         write_script(
             &env.path("bin/dee_shim"),
-            &FAKE_DSHIM.replace("v0.4.0+g790d050", version),
+            &FAKE_DSHIM.replace("v0.5.0+g790d050", version),
         );
     };
+    // 0.4.x lacks `--unpadded` (it has `--unpadded-wav`): refused now
+    shim("v0.4.0+g790d050");
+    assert_error(
+        &env.deew(&["-i", "sur.wav"]),
+        "dee_shim 0.4.0+g790d050 is too old, deew needs 0.5.0 or newer: update it with -gt",
+    );
     // 7.1 DDP with the standard profile, and -mo of 7.1, run dee_shim
     shim("v0.3.0+gabcdef");
     for args in [&["-i", "sur.wav"][..], &["-i", "sur.wav", "-mo"][..]] {
         assert_error(
             &env.deew(args),
-            "dee_shim 0.3.0+gabcdef is too old, deew needs 0.4.0 or newer: update it with -gt",
+            "dee_shim 0.3.0+gabcdef is too old, deew needs 0.5.0 or newer: update it with -gt",
         );
     }
     // so does DD and DDP of a 5.0 source, on the pipe too
@@ -2426,7 +2432,7 @@ fn old_tools_are_refused_when_the_job_uses_them() {
         env.set_pipe(pipe);
         assert_error(
             &env.deew(&["-i", "five.wav"]),
-            "dee_shim 0.3.0+gabcdef is too old, deew needs 0.4.0 or newer: update it with -gt",
+            "dee_shim 0.3.0+gabcdef is too old, deew needs 0.5.0 or newer: update it with -gt",
         );
     }
     env.set_pipe(false);
@@ -2438,7 +2444,7 @@ fn old_tools_are_refused_when_the_job_uses_them() {
     write_script(&env.path("bin/dee_shim"), "#!/bin/sh\necho nothing\n");
     assert_error(
         &env.deew(&["-i", "sur.wav"]),
-        "can't read the version of dee_shim, deew needs 0.4.0 or newer: update it with -gt",
+        "can't read the version of dee_shim, deew needs 0.5.0 or newer: update it with -gt",
     );
     // newer is fine, also with more digits
     shim("v0.10.1");
@@ -2450,7 +2456,7 @@ fn old_tools_are_refused_when_the_job_uses_them() {
             &FAKE_TRUEHDD.replace("truehdd 0.6.3", &format!("truehdd {version}")),
         );
     };
-    shim("v0.4.0+g790d050");
+    shim("v0.5.0+g790d050");
     env.truehd("atmos.thd");
     truehdd("0.6.2");
     assert_error(
@@ -3885,7 +3891,7 @@ fn programs_next_to_deew_are_used_first() {
     assert!(bin.join("dee_shim.args").exists() && bin.join("truehdd.args").exists());
     assert_eq!(
         summary_row(&stdout(&out), "dee_shim version"),
-        "0.4.0+g790d050"
+        "0.5.0+g790d050"
     );
 }
 
@@ -3908,7 +3914,7 @@ fn five_and_seven_channel_inputs_get_a_silent_lfe_slot() {
     assert_eq!(last_summary_row(&text, "Channels"), "5.0");
     let shim = env.dshim_run().unwrap();
     assert_eq!(opt(&shim, "--layout"), "5.0");
-    assert!(has(&shim, "--unpadded-wav"));
+    assert!(has(&shim, "--unpadded"));
     assert!(!has(&shim, "--mode"));
     assert_eq!(opt(&shim, "--bitrate"), "1024");
     // the native options are the plain ones, the data rate is the shim's
@@ -3923,17 +3929,21 @@ fn five_and_seven_channel_inputs_get_a_silent_lfe_slot() {
     assert_eq!(opt(&shim, "--layout"), "5.0");
     assert_eq!(opt(&shim, "--bitrate"), "448");
     assert_eq!(opt(&shim, "-e"), "dd:drc_profile=none:lfe_on=0");
-    // the pipe: raw PCM as DEE takes it (6 channels, silent LFE), no --unpadded-wav
+    // the pipe: raw PCM of the 5 channels, --unpadded too (DD and DDP)
     env.set_pipe(true);
     ok(&env.deew(&["-i", "five.wav"]));
     let shim = env.dshim_run().unwrap();
     assert_eq!(opt(&shim, "--layout"), "5.0");
-    assert!(!has(&shim, "--unpadded-wav"));
+    assert!(has(&shim, "--unpadded"));
     assert!(
-        opt(&shim, "--input-format").contains("channels=6"),
+        opt(&shim, "--input-format").contains("channels=5"),
         "{shim:?}"
     );
     assert_eq!(opt(&shim, "-e"), "ddp:drc_profile=none:lfe_on=0");
+    ok(&env.deew(&["-i", "five.wav", "-f", "dd"]));
+    let shim = env.dshim_run().unwrap();
+    assert!(has(&shim, "--unpadded"));
+    assert!(opt(&shim, "--input-format").contains("channels=5"));
     env.set_pipe(false);
     // a stereo downmix has no LFE to remove: DEE alone
     fs::remove_file(env.path("bin").join("dee_shim.args")).ok();
@@ -3960,14 +3970,14 @@ fn five_and_seven_channel_inputs_get_a_silent_lfe_slot() {
         text.contains("pan=7.0|c0=c0|c1=c1|c2=c2|c3=c5|c4=c6|c5=c3|c6=c4"),
         "{text}"
     );
-    // no LFE slot: the wav has the 7 channels of the layout, read with --unpadded-wav
+    // no LFE slot: the wav has the 7 channels of the layout, read with --unpadded
     let wav = env.temp().join("seven.7ch.wav");
     assert_eq!(ffprobe_field(&wav, "channels"), "7");
     assert_eq!(last_summary_row(&text, "Channels"), "7.0");
     assert_eq!(summary_row(&text, "Profile"), "Standard (dee_shim)");
     let shim = env.dshim_run().unwrap();
     assert_eq!(opt(&shim, "--layout"), "7.0/eac3");
-    assert!(has(&shim, "--unpadded-wav"));
+    assert!(has(&shim, "--unpadded"));
     assert!(env.out().join("seven.ec3").exists());
     // --ddp-mode bluray: the Blu-ray 7.0 layout of dee_shim (AC-3 core)
     fs::remove_file(env.path("bin").join("dee_shim.args")).ok();
@@ -3992,15 +4002,20 @@ fn five_and_seven_channel_inputs_get_a_silent_lfe_slot() {
         "7"
     );
     assert_eq!(opt(&env.dshim_run().unwrap(), "--layout"), "7.0/eac3");
-    // the pipe: DEE takes no raw PCM of 7 channels, the LFE slot stays (silent)
+    // the pipe: raw PCM of the 7 channels, --unpadded too (both profiles)
     env.set_pipe(true);
     ok(&env.deew(&["-i", "seven.wav"]));
     let shim = env.dshim_run().unwrap();
     assert!(
-        opt(&shim, "--input-format").contains("channels=8"),
+        opt(&shim, "--input-format").contains("channels=7"),
         "{shim:?}"
     );
-    assert!(!has(&shim, "--unpadded-wav"));
+    assert!(has(&shim, "--unpadded"));
+    ok(&env.deew(&["-i", "seven.wav", "--ddp-mode", "bluray", "-b", "1100"]));
+    let shim = env.dshim_run().unwrap();
+    assert_eq!(opt(&shim, "--layout"), "7.0");
+    assert!(opt(&shim, "--input-format").contains("channels=7"));
+    assert!(has(&shim, "--unpadded"));
     env.set_pipe(false);
     // downmix from 7.0 (not a 5-channel source: DEE alone)
     ok(&env.deew(&["-i", "seven.wav", "-dm", "6"]));

@@ -1,4 +1,6 @@
-deew     5.7.0  [deew]
+deew     5.7.1  [deew]
+deew-gui not found
+deew-web not found
 DEE      not found
 truehdd  not found
 harletty not found

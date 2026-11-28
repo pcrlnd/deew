@@ -399,8 +399,8 @@ fn measure_by_shim(measure_only: bool, channels: i64) -> bool {
 }
 
 /// Whether a DD/DDP encode of a 5.0 source goes through dee_shim's 5.0 layout
-/// (always: dee_shim is required). A wav (no pipe) then holds the 5 channels,
-/// read with `--unpadded-wav`.
+/// (always: dee_shim is required). The wav or pipe then holds the 5 channels,
+/// read with `--unpadded` (also the raw PCM of a pipe).
 fn five_zero_by_shim(
     format: Format,
     layout: &Layout,
@@ -1128,15 +1128,13 @@ fn build_job(
         ffmpeg_downmix(ctx)
     };
     // the 7.0 layouts of dee_shim read a wav of 7 channels, without the LFE
-    // slot (`--unpadded-wav`). DEE takes no raw PCM of 7 channels, the pipe
-    // keeps the silent LFE slot.
+    // slot (`--unpadded`), also the raw PCM of a pipe.
     let five_zero = five_zero_by_shim(plan_format, ctx.layout, ctx.info.channels, measure_only);
-    let lfe_slot = if (five_zero && !ctx.pipe)
+    let lfe_slot = if five_zero
         || (ctx.layout.lfe == Lfe::Removed
             && plan_format == Format::Ddp
             && ctx.layout.outchannels == 8
-            && !measure_only
-            && !ctx.pipe)
+            && !measure_only)
     {
         LfeSlot::Dropped
     } else {
@@ -1205,7 +1203,7 @@ fn build_job(
             plan.as_ref().map_or(24, |plan| plan.bit_depth),
             rate,
             if lfe_slot == LfeSlot::Dropped {
-                7
+                if ctx.info.channels == 5 { 5 } else { 7 }
             } else {
                 plan::wav_channels(ctx.info.channels)
             },
@@ -2572,6 +2570,47 @@ mod tests {
         assert_eq!(pipe_input_format(&job.measure_args), "wav");
         assert_eq!(pipe_input_format(&job.encode_args), "wav");
         assert!(job.temp_files.contains(&join("/t", "a.wav")));
+    }
+
+    #[test]
+    fn five_and_seven_zero_pipes_drop_the_lfe_slot() {
+        let flag = |job: &Job| job.encode_args.contains(&"--unpadded".to_string());
+        // DD and DDP 5.0, DDP 7.0 (standard and Blu-ray): dee_shim reads the
+        // raw PCM of the layout's channels, the ffmpeg pan has no LFE
+        for (format, channels, profile, bluray) in [
+            ("ddp", 5, Profile71::Standard, false),
+            ("dd", 5, Profile71::Standard, false),
+            ("ddp", 7, Profile71::Standard, false),
+            ("ddp", 7, Profile71::Bluray, true),
+        ] {
+            let probe = test_probe(channels, false);
+            let args = Args {
+                format: format.into(),
+                ddp_mode: bluray.then(|| "bluray".to_string()),
+                ..Args::default()
+            };
+            let job = test_job_with("/in/a.wav", &probe, args, true, Some(profile));
+            assert!(job.pipe.is_some(), "{format} {channels}");
+            assert!(flag(&job), "{format} {channels}: {:?}", job.encode_args);
+            assert!(
+                pipe_input_format(&job.encode_args).contains(&format!("channels={channels}")),
+                "{format} {channels}"
+            );
+            let pan = format!("pan={channels}.0|");
+            assert!(
+                job.ffmpeg_args.iter().any(|a| a.contains(&pan)),
+                "{format} {channels}: {:?}",
+                job.ffmpeg_args
+            );
+        }
+        // TrueHD is no pipe: wav only, never --unpadded
+        for channels in [5, 7] {
+            let job = encode_job("/in/a.wav", &test_probe(channels, false), true, |a| {
+                a.format = "thd".into()
+            });
+            assert!(job.pipe.is_none());
+            assert!(!flag(&job));
+        }
     }
 
     #[test]

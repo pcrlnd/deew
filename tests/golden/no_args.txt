@@ -1,4 +1,4 @@
-deew 5.7.0
+deew 5.7.1
 
 USAGE: deew [-h] [-fh] [-v] [-u [all]] [-i [INPUT ...]] [-ti INDEX]
             [-o DIRECTORY] [-oi] [-on NAME] [-f FORMAT] [-b BITRATE]
@@ -73,6 +73,7 @@ FLAGS:
   -gc, --generate-config    generate a new config, asks before overwriting an
                             existing config (-np skips the question)
   -gt, --get-tools          download ffmpeg, ffprobe, truehdd, harletty and
-                            dee_shim next to deew
+                            dee_shim next to deew, only what is missing or out
+                            of date
 
 blue: uses dee_shim

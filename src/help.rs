@@ -127,7 +127,7 @@ const RAW_HELP: &str = concat!(
   [green]-cl[/green], [green]--changelog[/green]          show changelog
   [green]-c[/green], [green]--config[/green]              show config and config location
   [green]-gc[/green], [green]--generate[/green][green]-config[/green]    generate a new config, asks before overwriting an existing config (-np skips the question)
-  [green]-gt[/green], [green]--get[/green][green]-tools[/green]          download ffmpeg, ffprobe, truehdd, harletty and dee_shim next to deew
+  [green]-gt[/green], [green]--get[/green][green]-tools[/green]          download ffmpeg, ffprobe, truehdd, harletty and dee_shim next to deew, only what is missing or out of date
 
 [bold bright_blue]blue[/bold bright_blue]: uses dee_shim"#
 );

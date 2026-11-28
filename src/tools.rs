@@ -272,8 +272,9 @@ pub fn parse_shim_version(output: &str) -> Option<String> {
 
 /// The oldest dee_shim deew works with: it passes a DEE `named_pipe://` URI on
 /// (0.2.0), has `measure_loudness` with `--layout` (0.3.0) and
-/// `--unpadded-wav` (0.4.0).
-pub const MIN_SHIM: [u64; 3] = [0, 4, 0];
+/// `--unpadded-wav` (0.4.0), and has `--unpadded` instead (0.5.0), which also
+/// reads raw PCM, through a pipe too.
+pub const MIN_SHIM: [u64; 3] = [0, 5, 0];
 /// The oldest truehdd deew works with.
 pub const MIN_TRUEHDD: [u64; 3] = [0, 6, 3];
 /// The oldest harletty deew works with (the first release with `info --json`,
@@ -469,10 +470,15 @@ mod tests {
     #[test]
     fn minimum_versions_are_compared_by_number() {
         let found = |v: &str| Version::Found(v.to_string());
-        assert_eq!(check_min_version(&found("0.4.0"), MIN_SHIM), Ok(()));
+        assert_eq!(check_min_version(&found("0.5.0"), MIN_SHIM), Ok(()));
         assert_eq!(
-            check_min_version(&found("0.4.0+g790d050"), MIN_SHIM),
+            check_min_version(&found("0.5.0+g790d050"), MIN_SHIM),
             Ok(())
+        );
+        // 0.4.x has `--unpadded-wav` only
+        assert_eq!(
+            check_min_version(&found("0.4.9"), MIN_SHIM),
+            Err(Some("0.4.9".to_string()))
         );
         // 10 is more than 4, not a text comparison
         assert_eq!(check_min_version(&found("0.10.0"), MIN_SHIM), Ok(()));

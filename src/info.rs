@@ -34,12 +34,14 @@ const DEE_TOOLS: [&str; 8] = [
 
 /// The lines of `deew -v`: deew itself, then the versions of the tools as in
 /// the encoding summary, each followed by where it was found (`exe` for deew,
-/// `paths` in the order of the tools; nothing for one that was not found). The
-/// first line is read by deew-gui.
+/// `paths` in the order of the tools; nothing for one that was not found).
+/// deew-gui and deew-web (`apps`, read from their files) come right after deew. The first line is
+/// read by deew-gui.
 #[cfg(test)]
 pub fn version_lines(
     versions: &Versions,
     paths: &[Option<String>; 6],
+    apps: &AppRows,
     exe: Option<&str>,
 ) -> Vec<String> {
     let known = [
@@ -51,11 +53,14 @@ pub fn version_lines(
         &versions.ffprobe,
     ]
     .map(|v| Some(v.clone()));
-    partial_version_lines(&known, paths, exe)
+    partial_version_lines(&known, paths, apps, exe)
 }
 
 /// Shown for a tool whose probe has not finished.
 const PENDING: &str = "[dim]…[/dim]";
+
+/// Version and path of deew-gui and deew-web.
+pub type AppRows = [(tools::Version, Option<String>); 2];
 
 /// [`version_lines`] while the probes are still running: a tool without a
 /// result (`None`) shows a placeholder and no path, and does not count for
@@ -63,8 +68,20 @@ const PENDING: &str = "[dim]…[/dim]";
 pub fn partial_version_lines(
     versions: &[Option<tools::Version>; 6],
     paths: &[Option<String>; 6],
+    apps: &AppRows,
     exe: Option<&str>,
 ) -> Vec<String> {
+    // deew-gui and deew-web come right after deew
+    let versions: Vec<Option<tools::Version>> = apps
+        .iter()
+        .map(|(v, _)| Some(v.clone()))
+        .chain(versions.iter().cloned())
+        .collect();
+    let paths: Vec<Option<String>> = apps
+        .iter()
+        .map(|(_, p)| p.clone())
+        .chain(paths.iter().cloned())
+        .collect();
     let own = env!("CARGO_PKG_VERSION");
     let found = |i: usize| {
         paths[i].is_some()
@@ -72,16 +89,17 @@ pub fn partial_version_lines(
                 .as_ref()
                 .is_some_and(|v| *v != tools::Version::NotFound)
     };
-    let plain = versions
-        .each_ref()
-        .map(|v| v.as_ref().map_or(0, |v| v.text().chars().count()));
+    let plain: Vec<usize> = versions
+        .iter()
+        .map(|v| v.as_ref().map_or(0, |v| v.text().chars().count()))
+        .collect();
     // the paths start two columns after the longest version that has one
     let own_width = if exe.is_some() {
         own.chars().count()
     } else {
         0
     };
-    let column = (0..6)
+    let column = (0..versions.len())
         .filter(|&i| found(i))
         .map(|i| plain[i])
         .max()
@@ -101,7 +119,7 @@ pub fn partial_version_lines(
         "deew"
     )];
     let labels = [
-        "DEE", "truehdd", "harletty", "dee_shim", "ffmpeg", "ffprobe",
+        "deew-gui", "deew-web", "DEE", "truehdd", "harletty", "dee_shim", "ffmpeg", "ffprobe",
     ];
     for (i, label) in labels.into_iter().enumerate() {
         let cell = versions[i]
@@ -158,13 +176,15 @@ pub fn print_version() -> ! {
             None => text,
         }
     });
+    let apps = crate::update::installed_apps(exe_dir);
     let results: Arc<Mutex<[Option<tools::Version>; 6]>> = Arc::default();
     let live = {
-        let (results, paths, exe) = (results.clone(), paths.clone(), exe.clone());
+        let (results, paths, apps, exe) =
+            (results.clone(), paths.clone(), apps.clone(), exe.clone());
         let color = color_enabled();
         Live::new(move |_| {
             let known = results.lock().expect("versions").clone();
-            partial_version_lines(&known, &paths, exe.as_deref())
+            partial_version_lines(&known, &paths, &apps, exe.as_deref())
                 .iter()
                 .map(|line| render(line, color))
                 .collect()
@@ -186,7 +206,7 @@ pub fn print_version() -> ! {
     if live.is_hidden() {
         live.finish(false);
         let known = results.lock().expect("versions").clone();
-        for line in partial_version_lines(&known, &paths, exe.as_deref()) {
+        for line in partial_version_lines(&known, &paths, &apps, exe.as_deref()) {
             rprintln!("{}", line);
         }
     } else {
@@ -644,6 +664,33 @@ mod tests {
     use crate::markup::strip;
     use crate::tools::Version;
 
+    const NO_APPS: AppRows = [(Version::NotFound, None), (Version::NotFound, None)];
+
+    #[test]
+    fn version_rows_of_the_gui_and_web() {
+        let versions = Versions::default();
+        let paths: [Option<String>; 6] = Default::default();
+        let plain = |apps: &AppRows| -> Vec<String> {
+            version_lines(&versions, &paths, apps, None)
+                .iter()
+                .map(|l| strip(l))
+                .collect()
+        };
+        // neither installed
+        let lines = plain(&NO_APPS);
+        assert_eq!(lines.len(), 9);
+        assert_eq!(lines[1], "deew-gui not found");
+        assert_eq!(lines[2], "deew-web not found");
+        // both installed; a file without a readable version says so
+        let apps: AppRows = [
+            (Version::Found("1.2.3".into()), Some("/x/deew-gui".into())),
+            (Version::CouldntParse, Some("/x/deew-web".into())),
+        ];
+        let lines = plain(&apps);
+        assert_eq!(lines[1], "deew-gui 1.2.3           /x/deew-gui");
+        assert_eq!(lines[2], "deew-web couldn't parse  /x/deew-web");
+    }
+
     fn default_lines() -> Vec<String> {
         let (d, m) = config::default_values_of(None);
         bitrate_lines(&d, &m, 78)
@@ -767,7 +814,14 @@ mod tests {
             Some("/usr/bin/ffmpeg".to_string()),
             None,
         ];
-        let lines: Vec<String> = version_lines(&versions, &paths, Some("/opt/my deew/deew"))
+        let apps: AppRows = [
+            (
+                Version::Found("1.1.1".into()),
+                Some("/opt/deew/deew-gui".into()),
+            ),
+            (Version::NotFound, None),
+        ];
+        let lines: Vec<String> = version_lines(&versions, &paths, &apps, Some("/opt/my deew/deew"))
             .iter()
             .map(|l| strip(l))
             .collect();
@@ -783,6 +837,8 @@ mod tests {
         assert_eq!(
             lines[1..],
             [
+                "deew-gui 1.1.1           /opt/deew/deew-gui",
+                "deew-web not found",
                 "DEE      6.7.0           /opt/deew/dee",
                 "truehdd  not found",
                 "harletty 0.9.0           /x/harletty",
@@ -805,7 +861,7 @@ mod tests {
         ];
         let exe = Some("/a/deew");
         let plain = |known: &[Option<Version>; 6]| -> Vec<String> {
-            partial_version_lines(known, &paths, exe)
+            partial_version_lines(known, &paths, &NO_APPS, exe)
                 .iter()
                 .map(|l| strip(l))
                 .collect()
@@ -814,15 +870,15 @@ mod tests {
         let mut known: [Option<Version>; 6] = Default::default();
         let own = env!("CARGO_PKG_VERSION");
         let lines = plain(&known);
-        assert_eq!(lines.len(), 7);
-        assert_eq!(lines[1], "DEE      …");
-        assert_eq!(lines[6], "ffprobe  …");
+        assert_eq!(lines.len(), 9);
+        assert_eq!(lines[3], "DEE      …");
+        assert_eq!(lines[8], "ffprobe  …");
         assert_eq!(lines[0], format!("deew     {own}  /a/deew"));
         // one long version widens the column, the others stay pending
         known[4] = Some(Version::Found("7.1.1-very-long".into()));
         let lines = plain(&known);
-        assert_eq!(lines[5], "ffmpeg   7.1.1-very-long  /a/ffmpeg");
-        assert_eq!(lines[2], "truehdd  …");
+        assert_eq!(lines[7], "ffmpeg   7.1.1-very-long  /a/ffmpeg");
+        assert_eq!(lines[4], "truehdd  …");
         assert!(lines[0].ends_with("/a/deew") && lines[0].len() > own.len() + 17);
         // all known: exactly the final output
         let versions = Versions {
@@ -842,8 +898,8 @@ mod tests {
             Some(versions.ffprobe.clone()),
         ];
         assert_eq!(
-            partial_version_lines(&all, &paths, exe),
-            version_lines(&versions, &paths, exe)
+            partial_version_lines(&all, &paths, &NO_APPS, exe),
+            version_lines(&versions, &paths, &NO_APPS, exe)
         );
     }
 
@@ -858,13 +914,13 @@ mod tests {
             ffprobe: Version::NotFound,
         };
         let paths = [None, None, None, None, None, None];
-        let lines = version_lines(&versions, &paths, None);
+        let lines = version_lines(&versions, &paths, &NO_APPS, None);
         assert_eq!(
             strip(&lines[0]),
             format!("deew     {}", env!("CARGO_PKG_VERSION"))
         );
         // the brackets of a path are escaped
-        let lines = version_lines(&versions, &paths, Some("/a[b]/deew"));
+        let lines = version_lines(&versions, &paths, &NO_APPS, Some("/a[b]/deew"));
         assert_eq!(
             strip(&lines[0]),
             format!("deew     {}  /a[b]/deew", env!("CARGO_PKG_VERSION"))

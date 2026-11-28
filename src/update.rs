@@ -9,6 +9,7 @@ use crate::get_tools::{
 };
 use crate::markup::color_enabled;
 use crate::rprintln;
+use crate::tools::Version;
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::ffi::OsString;
@@ -259,6 +260,42 @@ fn local_state(names: &Names, comp: Comp, dir: &Path) -> Local {
     } else {
         Local::Missing
     }
+}
+
+/// deew-gui and deew-web as `-v` shows them: the version (as far as it can be
+/// read without running them) and where they are. Not installed: `NotFound`
+/// and no path.
+pub(crate) fn installed_apps(exe_dir: &Path) -> [(Version, Option<String>); 2] {
+    installed_apps_in(
+        platform_names(Platform::current()),
+        exe_dir,
+        &AppDirs::current(),
+    )
+}
+
+fn installed_apps_in(
+    names: Option<Names>,
+    exe_dir: &Path,
+    dirs: &AppDirs,
+) -> [(Version, Option<String>); 2] {
+    let Some(names) = names else {
+        return [(Version::NotFound, None), (Version::NotFound, None)];
+    };
+    let dir = gui_dir(&names, exe_dir, dirs, &|_| false);
+    [Comp::Gui, Comp::Web].map(|comp| {
+        let folder = if comp == Comp::Gui { &dir } else { exe_dir };
+        let path = |name: &str| Some(folder.join(name).to_string_lossy().into_owned());
+        match local_state(&names, comp, folder) {
+            Local::Missing => (Version::NotFound, None),
+            Local::Binary(Some(v)) | Local::App(Some(v)) => {
+                (Version::Found(v), path(names.local(comp)))
+            }
+            Local::Binary(None) | Local::App(None) => {
+                (Version::CouldntParse, path(names.local(comp)))
+            }
+            Local::OldBare => (Version::CouldntParse, path("deew-gui-macos")),
+        }
+    })
 }
 
 /// The version a deew-gui / deew-web binary carries in its `VERSION_MARK`
@@ -1147,6 +1184,38 @@ mod tests {
     }
 
     // --- local state ---
+
+    #[test]
+    fn installed_apps_for_the_version_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let none = AppDirs {
+            system: dir.join("nowhere"),
+            user: None,
+            support: None,
+        };
+        let names = platform_names(LINUX);
+        // nothing installed
+        assert_eq!(
+            installed_apps_in(names, &dir, &none),
+            [(Version::NotFound, None), (Version::NotFound, None)]
+        );
+        // a binary with a marker, and one without
+        let mut gui = b"xx\0deew-gui-version=1.2.3\0yy".to_vec();
+        gui.extend_from_slice(&[0; 8]);
+        std::fs::write(dir.join("deew-gui"), gui).unwrap();
+        std::fs::write(dir.join("deew-web"), b"no marker").unwrap();
+        let [gui, web] = installed_apps_in(names, &dir, &none);
+        assert_eq!(gui.0, Version::Found("1.2.3".into()));
+        assert_eq!(
+            gui.1.as_deref(),
+            Some(dir.join("deew-gui").to_str().unwrap())
+        );
+        assert_eq!(web.0, Version::CouldntParse);
+        assert!(web.1.is_some());
+        // no build for the platform: nothing
+        assert_eq!(installed_apps_in(None, &dir, &none)[0].0, Version::NotFound);
+    }
 
     #[test]
     fn plist_versions() {

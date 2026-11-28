@@ -17,8 +17,8 @@ pub enum LfeSlot {
     /// A silent channel: the encoder can't leave the LFE out (5.1 / 7.1).
     Silent,
     /// No slot: a 5-channel wav (L R C Ls Rs) or a 7-channel one (L R C Ls Rs
-    /// Lrs Rrs) for the 5.0 and 7.0 layouts of dee_shim, which read it with
-    /// `--unpadded-wav`.
+    /// Lrs Rrs) for the 5.0 and 7.0 layouts of dee_shim, which read it (a wav
+    /// or raw PCM, also through a pipe) with `--unpadded`.
     Dropped,
 }
 
@@ -530,7 +530,7 @@ pub struct EncodeParams<'a> {
     /// The output has no LFE channel (`lfe_on=0`, or a 7.0 layout of dee_shim).
     pub lfe_removed: bool,
     /// DD/DDP of a 5.0 source, encoded by dee_shim's 5.0 layout (needs `shim`;
-    /// `--unpadded-wav` for a wav of 5 channels).
+    /// `--unpadded` for 5 channels, a wav or the raw PCM of a pipe).
     pub five_zero: bool,
     /// DD/DDP: turn off DEE's 90 degree phase shift of the surround channels
     /// (`-e` option); DDP Atmos: dee_shim's `--phase90 off`.
@@ -737,7 +737,7 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
             // The standard 7.1 profile (E-AC-3 independent and dependent
             // substreams) is a dee_shim layout, which supplies the -e. So are
             // both 7.0 profiles (7.0 is the Blu-ray AC-3 core). With
-            // --unpadded-wav the wav holds the channels of the layout in the
+            // --unpadded the wav (or raw PCM) holds the channels of the layout in the
             // order of `dee_shim ddp_encoder --list`: 8 for 7.1 (L R C LFE Ls
             // Rs Lrs Rrs), 7 for 7.0 (no LFE slot).
             let shim = p
@@ -756,11 +756,10 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                 "--layout",
                 layout,
             ]));
-            // only a wav is read unpadded: DEE takes no raw PCM of 7 channels,
-            // the pipe carries the slots as they are (the LFE slot of 7.0
-            // silent) and the switch would change nothing
-            if p.input_format == "wav" {
-                args.push("--unpadded-wav".to_string());
+            // 7.0 (no LFE slot) is read unpadded, a wav or the raw PCM of a
+            // pipe; 7.1 fills all 8 slots and only gets it for a wav
+            if p.lfe_removed || p.input_format == "wav" {
+                args.push("--unpadded".to_string());
             }
             args.extend(strings(&["--bitrate", &bitrate, "--"]));
             args.extend(strings(&common));
@@ -802,9 +801,7 @@ pub fn encode_args(p: &EncodeParams) -> Vec<String> {
                     if p.format == Format::Dd {
                         args.extend(strings(&["--mode", "dd"]));
                     }
-                    if p.input_format == "wav" {
-                        args.push("--unpadded-wav".to_string());
-                    }
+                    args.push("--unpadded".to_string());
                     args.extend(strings(&["--bitrate", &bitrate, "--"]));
                 }
                 None => args.push(p.tool.to_string()),
@@ -1770,7 +1767,7 @@ mod tests {
                 "/dee/tool",
                 "--layout",
                 "5.0",
-                "--unpadded-wav",
+                "--unpadded",
                 "--bitrate",
                 "1024"
             ]
@@ -1784,10 +1781,10 @@ mod tests {
         let args = encode_args(&p);
         assert_eq!(args[4..8], ["--layout", "5.0", "--mode", "dd"]);
         assert!(args.contains(&"dd:drc_profile=music_light:lfe_on=0".to_string()));
-        // the pipe carries raw PCM: no --unpadded-wav
-        p.input_format = "pcm_s24le:sample_rate=48000:channels=6:streaming=1";
+        // the pipe carries the 5 channels as raw PCM: --unpadded too
+        p.input_format = "pcm_s24le:sample_rate=48000:channels=5:streaming=1";
         let args = encode_args(&p);
-        assert!(!args.contains(&"--unpadded-wav".to_string()));
+        assert!(args.contains(&"--unpadded".to_string()));
         assert!(args.contains(&"--bitrate".to_string()));
     }
 
@@ -2053,7 +2050,7 @@ mod tests {
                 "/dee/tool",
                 "--layout",
                 "7.1/eac3",
-                "--unpadded-wav",
+                "--unpadded",
                 "--bitrate",
                 "1792",
                 "--",
@@ -2077,9 +2074,9 @@ mod tests {
                 "/t"
             ])
         );
-        // the pipe carries raw PCM: nothing to unpad
+        // 7.1 through a pipe: all 8 slots are filled, nothing to unpad
         p.input_format = "pcm_s24le:sample_rate=48000:channels=8:streaming=1";
-        assert!(!encode_args(&p).contains(&"--unpadded-wav".to_string()));
+        assert!(!encode_args(&p).contains(&"--unpadded".to_string()));
         p.input_format = "wav";
         // Blu-ray: native, also when dee_shim is there
         p.bluray = true;

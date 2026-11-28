@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "deew-gui"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "base64 0.23.1",
  "deew-gui-core",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "deew-web"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "argon2",
  "axum",

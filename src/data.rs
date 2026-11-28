@@ -246,10 +246,10 @@ impl ErrorKind {
                 "dee_shim is required for 96 kHz TrueHD (DEE's own encoder applies its apodising filter, so it wouldn't be lossless), put dee_shim next to deew or in your PATH (https://github.com/truehdd/dee-shim)"
             }
             Self::ShimOld => {
-                "dee_shim [bold yellow]🤠[/bold yellow] is too old, deew needs 0.4.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
+                "dee_shim [bold yellow]🤠[/bold yellow] is too old, deew needs 0.5.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
             }
             Self::ShimVersion => {
-                "can't read the version of dee_shim, deew needs 0.4.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
+                "can't read the version of dee_shim, deew needs 0.5.0 or newer: update it with [bold yellow]-gt[/bold yellow]"
             }
             Self::TruehddOld => {
                 "truehdd [bold yellow]🤠[/bold yellow] is too old, deew needs 0.6.3 or newer: update it with [bold yellow]-gt[/bold yellow]"

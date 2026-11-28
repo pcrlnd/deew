@@ -1,3 +1,10 @@
+# deew 5.7.1:
+- `-v` also shows the installed versions of `deew-gui` and `deew-web`
+- `-gt` shows the installed and the latest version of each tool and what it does (install, update, up to date, like `-u`), and only downloads the tools that are missing or out of date
+- dee_shim 0.5.0 or newer is required: 5.0 DD/DDP and 7.0 DDP now drop the empty LFE slot through a pipe as well (dee_shim's `--unpadded`, which replaces `--unpadded-wav`); TrueHD is unchanged
+- `deew-gui`/`deew-web` 1.1.2:
+  - fixed: a scroll arrow could cover the last entry of a short dropdown (e.g. "bluray" in DDP mode)
+
 # deew 5.7.0:
 - DTS:X and Auro-3D sources for `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims`: [harletty](https://github.com/harletty/harletty-bridge) (0.9.0 or newer) decodes them into an Atmos master, which DEE encodes like a TrueHD Atmos source
   - DTS tracks (raw `.dts` or a container) are checked with harletty when one of these formats is selected; a DTS track without DTS:X or Auro-3D is refused, like any other input without Atmos
@@ -18,98 +25,45 @@
   - help texts mention DTS:X / Auro-3D sources and harletty
 
 # deew 5.6.1:
-- `-u` shows the installed version of `deew-gui` and `deew-web` instead of
-  "installed" (from 1.1.0 on; an older one shows its version when it is
-  identical to the release, "unknown" otherwise)
+- `-u` shows the installed version of `deew-gui` and `deew-web` instead of "installed" (from 1.1.0 on; an older one shows its version when it is identical to the release, "unknown" otherwise)
 - `deew-gui`/`deew-web` 1.1.0:
-  - fixed: when the window is too small and the page scrolls, the bottom
-    of the output area now keeps its margin
-  - macOS: new app icon with light and dark variants; on macOS 26 it
-    follows the "Icon & widget style" setting in System Settings ->
-    Appearance (Clear and Tinted are derived from it), not the light/dark
-    theme
-  - fixed: the hint in the empty input list says the add buttons are
-    below it (it said above)
-  - new `minimum_output_height` key in `[gui]`: the smallest height of the
-    output area in pixels (320 by default), the page scrolls below it
-  - new `title_bar` key in `[gui]`: `'custom'` (default) keeps deew-gui's
-    own title bar, `'native'` uses the operating system's title bar with
-    a bar under it for Utilities and the theme; takes effect on the next
-    start
+  - fixed: when the window is too small and the page scrolls, the bottom of the output area now keeps its margin
+  - macOS: new app icon with light and dark variants; on macOS 26 it follows the "Icon & widget style" setting in System Settings -> Appearance (Clear and Tinted are derived from it), not the light/dark theme
+  - fixed: the hint in the empty input list says the add buttons are below it (it said above)
+  - new `minimum_output_height` key in `[gui]`: the smallest height of the output area in pixels (320 by default), the page scrolls below it
+  - new `title_bar` key in `[gui]`: `'custom'` (default) keeps deew-gui's own title bar, `'native'` uses the operating system's title bar with a bar under it for Utilities and the theme; takes effect on the next start
 
 # deew 5.6.0:
-- raw TrueHD inputs (`.thd`, `.mlp`) keep their decode progress with the
-  next truehdd release: deew passes `--progress` to truehdd when it reads
-  the file itself, because truehdd will only count the frames (which deew
-  uses for the percentage) when a progress bar is asked for
-- new `-u, --update [all]`: updates deew, and `deew-gui`/`deew-web` when
-  they are next to it, from the latest release; `-u all` also installs the
-  missing ones (the download is checked against GitHub's SHA-256)
-- `-v` also shows where deew itself is, and in a terminal it shows deew's
-  version right away and each tool as soon as it answers
-- deew needs dee_shim 0.4.0 and truehdd 0.6.3 or newer: a job that uses
-  an older one stops with a message (`-gt` downloads the latest); jobs
-  that don't use them are not affected
-- `-mo` of 7.1 and 7.0 measures with dee_shim's `measure_loudness`, the
-  real 7.1 loudness of all channels; before, it ran the DDP encoder and
-  stopped it, which measured its 5.1 downmix and could read up to ~5 dB
-  lower with loud surrounds (that is still what a 7.1/7.0 DDP encode sets
-  its dialnorm from, `-mo` says so)
-- 5.0 DD/DDP and 7.0 DDP are written without the silent LFE channel
-  (dee_shim's `--unpadded-wav`), the output is the same; 5.0 DD and DDP
-  now need dee_shim too
-- the dee_shim dry-run check of `named_pipe://` inputs is gone (fixed
-  since dee_shim 0.2.0)
-- macOS: the tools are also looked up in `/opt/homebrew/bin` and
-  `/usr/local/bin` (an app started from Finder doesn't get the `PATH` of
-  the terminal)
+- raw TrueHD inputs (`.thd`, `.mlp`) keep their decode progress with the next truehdd release: deew passes `--progress` to truehdd when it reads the file itself, because truehdd will only count the frames (which deew uses for the percentage) when a progress bar is asked for
+- new `-u, --update [all]`: updates deew, and `deew-gui`/`deew-web` when they are next to it, from the latest release; `-u all` also installs the missing ones (the download is checked against GitHub's SHA-256)
+- `-v` also shows where deew itself is, and in a terminal it shows deew's version right away and each tool as soon as it answers
+- deew needs dee_shim 0.4.0 and truehdd 0.6.3 or newer: a job that uses an older one stops with a message (`-gt` downloads the latest); jobs that don't use them are not affected
+- `-mo` of 7.1 and 7.0 measures with dee_shim's `measure_loudness`, the real 7.1 loudness of all channels; before, it ran the DDP encoder and stopped it, which measured its 5.1 downmix and could read up to ~5 dB lower with loud surrounds (that is still what a 7.1/7.0 DDP encode sets its dialnorm from, `-mo` says so)
+- 5.0 DD/DDP and 7.0 DDP are written without the silent LFE channel (dee_shim's `--unpadded-wav`), the output is the same; 5.0 DD and DDP now need dee_shim too
+- the dee_shim dry-run check of `named_pipe://` inputs is gone (fixed since dee_shim 0.2.0)
+- macOS: the tools are also looked up in `/opt/homebrew/bin` and `/usr/local/bin` (an app started from Finder doesn't get the `PATH` of the terminal)
 - `deew-gui`/`deew-web` 1.0.1:
-  - macOS: `deew-gui` is released as `deew-gui-macos.zip` with
-    `deew-gui.app` in it, so it has its icon in the Dock and Finder; keep
-    `deew-macos` next to `deew-gui.app`, the GUI uses that CLI
-  - new "Update" (`-u`) and "Update and install all" (`-u all`) in
-    Utilities, they ask first and can't run during an encode; without a
-    deew CLI only "Update and install all" is available, and it downloads
-    the CLI first
-  - macOS: with `deew-gui.app` in Applications, the CLI, `config.toml`,
-    `dee/` and the tools are in `~/Library/Application Support/deew/`
+  - macOS: `deew-gui` is released as `deew-gui-macos.zip` with `deew-gui.app` in it, so it has its icon in the Dock and Finder; keep `deew-macos` next to `deew-gui.app`, the GUI uses that CLI
+  - new "Update" (`-u`) and "Update and install all" (`-u all`) in Utilities, they ask first and can't run during an encode; without a deew CLI only "Update and install all" is available, and it downloads the CLI first
+  - macOS: with `deew-gui.app` in Applications, the CLI, `config.toml`, `dee/` and the tools are in `~/Library/Application Support/deew/`
   - `deew-web.exe` has the deew icon
-  - the Linux `deew-gui` uses the 128x128 icon as its window icon,
-    which makes the binary about 1 MB smaller
+  - the Linux `deew-gui` uses the 128x128 icon as its window icon, which makes the binary about 1 MB smaller
 
 # deew 5.5.3:
-- new advanced `-p, --pipe auto|always|never` (only in `-fh`): overrides
-  the config's `pipe` for one run
+- new advanced `-p, --pipe auto|always|never` (only in `-fh`): overrides the config's `pipe` for one run
 - new configs have `theme = 'system'` in the `[gui]` section
 - `deew-gui`/`deew-web` 1.0.0:
   - 1.0.0 because the GUI is considered complete and stable now
-  - the theme button opens a menu with Light, Dark and System (follows
-    the operating system); `deew-gui` saves the choice as `theme` in the
-    `[gui]` section of the config (`'system'`, `'light'` or `'dark'`,
-    default `'system'`), `deew-web` starts on System and each browser
-    keeps its own choice
+  - the theme button opens a menu with Light, Dark and System (follows the operating system); `deew-gui` saves the choice as `theme` in the `[gui]` section of the config (`'system'`, `'light'` or `'dark'`, default `'system'`), `deew-web` starts on System and each browser keeps its own choice
 
 # deew 5.5.2:
-- piped encodes (DD, DDP, AC4, AAC and `-mo` when ffmpeg feeds DEE
-  directly) show real progress instead of jumping from 0 to 100%: DEE
-  prints no progress while it reads a pipe, so deew follows ffmpeg's
-  position against the source's length, and in DEE's encoding step after
-  the measurement the size of the output file; when the length of the
-  source is unknown, the step that reads the source shows a spinner and
-  the length found there is used for the rest
+- piped encodes (DD, DDP, AC4, AAC and `-mo` when ffmpeg feeds DEE directly) show real progress instead of jumping from 0 to 100%: DEE prints no progress while it reads a pipe, so deew follows ffmpeg's position against the source's length, and in DEE's encoding step after the measurement the size of the output file; when the length of the source is unknown, the step that reads the source shows a spinner and the length found there is used for the rest
 
 # deew 5.5.1:
-- the encoder delay is trimmed correctly in two cases where the output
-  started late:
-  - AAC below 88 kbps: DEE's AAC encoder adds 1710 samples up to
-    71 kbps (56, 64) and 1702 for 72-87 kbps (80), not 1600 (110 and
-    102 samples late)
-  - downmixes done by DEE add 32 samples: DD/DDP with `-dm`, DD from a
-    7.1 or TrueHD Atmos source, `-dm` from an Atmos master and AAC from
-    5.1/7.1 (32 samples late, 64 kbps AAC from 5.1: 141)
-  - TrueHD, AC-4 IMS (ffmpeg downmixes) and DDP Atmos were already
-    sample-exact; AC-4 is unchanged (it can't be checked without an
-    AC-4 decoder)
+- the encoder delay is trimmed correctly in two cases where the output started late:
+  - AAC below 88 kbps: DEE's AAC encoder adds 1710 samples up to 71 kbps (56, 64) and 1702 for 72-87 kbps (80), not 1600 (110 and 102 samples late)
+  - downmixes done by DEE add 32 samples: DD/DDP with `-dm`, DD from a 7.1 or TrueHD Atmos source, `-dm` from an Atmos master and AAC from 5.1/7.1 (32 samples late, 64 kbps AAC from 5.1: 141)
+  - TrueHD, AC-4 IMS (ffmpeg downmixes) and DDP Atmos were already sample-exact; AC-4 is unchanged (it can't be checked without an AC-4 decoder)
 
 # deew 5.5.0:
 - new advanced `-wm, --warp-mode normal|warping|prologiciix|loro` and

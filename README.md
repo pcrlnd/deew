@@ -46,7 +46,7 @@ The [deew tool chain](https://deew.app/tool-chain) page shows how deew connects 
 - [Dolby Encoding Engine 6.7](https://customer.dolby.com/content-creation-and-delivery/dolby-encoding-engine-v670)
 - [truehdd](https://github.com/truehdd/truehdd) 0.6.3 or newer (only for TrueHD Atmos sources of the Atmos formats: `ddp-atmos`, `thd-atmos`, `ac4-atmos`, `ac4-ims`; Atmos masters don't need it)
 - [harletty](https://github.com/harletty/harletty-bridge) 0.9.0 or newer (only for DTS sources of `ddp-atmos`, `thd-atmos`, `ac4-atmos` and `ac4-ims`, to read and decode their DTS:X or Auro-3D, and to show Auro-3D inputs as such; builds exist for x86_64 Linux (glibc 2.35 or newer), x86_64 Windows and macOS (universal). Until my pull requests to harletty are merged, `deew -gt` downloads it from my fork [pcrlnd/harletty-bridge](https://github.com/pcrlnd/harletty-bridge): harletty's `main` plus Auro-3D from PCM (`--codec wav`, needed for Auro-3D in FLAC, PCM and TrueHD), the universal macOS build and the version in `--version`)
-- [dee_shim](https://github.com/truehdd/dee-shim) 0.4.0 or newer (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP, 7.0 DDP, 5.0 DD and DDP and `-mo` of 7.1/7.0); deew refuses a job that needs truehdd, harletty or dee_shim when it is older, `deew -gt` replaces them with the latest
+- [dee_shim](https://github.com/truehdd/dee-shim) 0.5.0 or newer (only for `ddp-atmos`, `thd-atmos`, TrueHD with DRC `none` or at 96 kHz, the standard profile of 7.1 DDP, 7.0 DDP, 5.0 DD and DDP and `-mo` of 7.1/7.0); deew refuses a job that needs truehdd, harletty or dee_shim when it is older, `deew -gt` replaces them with the latest
   - `ddp-atmos` and `thd-atmos` use it so DEE doesn't smooth the object positions of the TrueHD decode a second time, TrueHD with DRC `none` (the default) uses it because the TrueHD encoder has no `none` DRC preset; 96 kHz TrueHD (any DRC) is encoded through it with `--apodise off` so it stays lossless (DEE's own encoder applies its apodising filter to 96 kHz input, which changes every sample, so dee_shim is required for it)
 
 # Where deew looks for the programs
@@ -69,7 +69,7 @@ With `deew-gui.app` in `/Applications` (or `~/Applications`) the deew folder is 
 
 `deew -v` shows what it found and where.
 
-`deew -gt` / `deew --get-tools` downloads everything except DEE next to deew: ffmpeg, ffprobe, truehdd, harletty and dee_shim (ffmpeg is the latest stable GPL build from [BtbN](https://github.com/BtbN/FFmpeg-Builds) on Windows/Linux and from [martin-riedl.de](https://ffmpeg.martin-riedl.de/) on macOS). DEE can't be downloaded, install it by hand (see below).
+`deew -gt` / `deew --get-tools` downloads everything except DEE next to deew: ffmpeg, ffprobe, truehdd, harletty and dee_shim, only what is missing or out of date: it shows each tool's installed and latest version and what it does, and a tool found only in the PATH counts as not installed (ffmpeg is the latest stable GPL build from [BtbN](https://github.com/BtbN/FFmpeg-Builds) on Windows/Linux and from [martin-riedl.de](https://ffmpeg.martin-riedl.de/) on macOS). DEE can't be downloaded, install it by hand (see below).
 
 `deew -u` / `deew --update` updates deew, and deew-gui and deew-web if they are next to it, to the latest release (it shows what will change and asks first, `-np` skips the question). `deew -u all` also installs the missing ones. On macOS it also finds deew-gui.app in /Applications (or ~/Applications).
 
