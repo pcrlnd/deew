@@ -17,6 +17,7 @@ import {
   FileInputIcon,
   FileJsonIcon,
   GaugeIcon,
+  AudioLinesIcon,
   PackageOpenIcon,
   PuzzleIcon,
   Rows3Icon,
@@ -35,6 +36,27 @@ const ICON_SIZE = 14
 const ICON_GAP = 5
 // Must match the font-size of `.diagram .t-name` in tool-chain/tool-chain.css.
 const NAME_FONT_SIZE = 13
+
+// Orthogonal polyline with small rounded corners (radius r, clipped to half
+// of each adjoining segment).
+function ortho(pts: number[][], r = 8): string {
+  let d = `M${pts[0][0]},${pts[0][1]}`
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1]
+    const [cx, cy] = pts[i]
+    const [nx, ny] = pts[i + 1]
+    const lin = Math.hypot(cx - px, cy - py)
+    const lout = Math.hypot(nx - cx, ny - cy)
+    const rr = Math.min(r, lin / 2, lout / 2)
+    const ax = cx - ((cx - px) / lin) * rr
+    const ay = cy - ((cy - py) / lin) * rr
+    const bx = cx + ((nx - cx) / lout) * rr
+    const by = cy + ((ny - cy) / lout) * rr
+    d += ` L${ax},${ay} Q${cx},${cy} ${bx},${by}`
+  }
+  const last = pts[pts.length - 1]
+  return `${d} L${last[0]},${last[1]}`
+}
 
 /**
  * A node of the overview diagram: the block's own shapes, its name and a
@@ -221,9 +243,9 @@ export default function ToolChain() {
             <div className="diagram">
               <svg
                 className="dg"
-                viewBox="0 0 1120 450"
+                viewBox="0 0 1080 587"
                 role="img"
-                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD, AC4 IMS, pipe = false and, on Windows, pipe = 'auto' with 2 or more encodes at once) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; dee_shim optionally wraps the encoder; the encoder writes the output."
+                aria-label="Block diagram: input file to ffprobe; input to ffmpeg, whose raw PCM goes through a pipe (NAME.wav for TrueHD, AC4 IMS, pipe = false and, on Windows, pipe = 'auto' with 2 or more encodes at once) to the DEE encoder, and to an optional dee_measure_loudness and loudness.json; a raw .thd (Atmos) goes directly into truehdd and a raw .dts (DTS:X / Auro-3D) directly into harletty; input through an optional ffmpeg copy pipe to truehdd decode to NAME.atmos, then to the DEE encoder; harletty decodes DTS:X and Auro-3D to NAME.atmos as an alternative to truehdd (for Auro-3D, ffmpeg first decodes the track to a 24-bit wav); dee_shim optionally wraps the encoder; the encoder writes the output."
               >
                 <defs>
                   <marker
@@ -241,8 +263,9 @@ export default function ToolChain() {
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M130,185 C152,185 144,45 166,45 L178,45"
+                  d={ortho([[130,237],[154,237],[154,45],[178,45]])}
                 />
+                <g transform="translate(0 52)">
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
@@ -251,13 +274,14 @@ export default function ToolChain() {
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M130,230 C152,230 150,290 178,290 L405,290 L405,318"
+                  d={ortho([[105,240],[105,335],[366,335]])}
                 />
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M75,240 L75,335 Q75,355 95,355 L178,355"
+                  d={ortho([[75,240],[75,415],[178,415]])}
                 />
+                </g>
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
@@ -268,88 +292,107 @@ export default function ToolChain() {
                   markerEnd="url(#ah)"
                   d="M500,45 L548,45"
                 />
+                <g transform="translate(0 52)">
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
                   d="M320,205 L368,205"
                 />
+                </g>
                 <path
                   className="wire opt"
                   markerEnd="url(#ah)"
-                  d="M500,192 C516,192 510,125 526,125 L538,125"
-                />
-                <path
-                  className="wire opt"
-                  markerEnd="url(#ah)"
-                  d="M730,125 L758,125"
+                  d={ortho([[500,244],[519,244],[519,140],[538,140]])}
                 />
                 <path
                   className="wire opt"
                   markerEnd="url(#ah)"
-                  d="M890,125 C902,125 896,168 906,168 L918,168"
+                  d="M635,160 L635,208"
+                />
+                <path
+                  className="wire opt"
+                  markerEnd="url(#ah)"
+                  d="M700,230 L878,230"
+                />
+                <g transform="translate(0 52)">
+                <path
+                  className="wire"
+                  markerEnd="url(#ah)"
+                  d="M500,212 L878,212"
                 />
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M500,212 L918,212"
+                  d={ortho([[320,408],[343,408],[343,355],[366,355]])}
                 />
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M320,355 L366,355"
+                  d={ortho([[500,355],[534,355],[534,408],[568,408]])}
                 />
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M500,355 L548,355"
+                  d={ortho([[740,415],[830,415],[830,250],[878,250]])}
                 />
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M720,355 L770,355 C800,355 790,250 820,250 L918,250"
+                  d={ortho([[320,423],[343,423],[343,475],[368,475]])}
                 />
                 <path
                   className="wire"
                   markerEnd="url(#ah)"
-                  d="M1050,270 L1050,378"
+                  d={ortho([[45,240],[45,500],[368,500]])}
                 />
+                <path
+                  className="wire"
+                  markerEnd="url(#ah)"
+                  d={ortho([[500,475],[534,475],[534,423],[568,423]])}
+                />
+                <path
+                  className="wire"
+                  markerEnd="url(#ah)"
+                  d="M1010,270 L1010,378"
+                />
+                </g>
                 <text className="lbl" x="344" y="36" textAnchor="middle">
                   JSON
                 </text>
+                <g transform="translate(0 52)">
                 <text className="lbl" x="344" y="196" textAnchor="middle">
                   PCM
                 </text>
-                <text className="lbl" x="700" y="188" textAnchor="middle">
+                <text className="lbl" x="510" y="228" textAnchor="start">
                   -i /dev/stdin
                 </text>
-                <text className="lbl" x="700" y="204" textAnchor="middle">
+                <text className="lbl" x="510" y="244" textAnchor="start">
                   (Windows: named_pipe://\\.\pipe\deew-PID-JOB)
                 </text>
-                <text className="lbl" x="700" y="228" textAnchor="middle">
-                  --input-format pcm_s24le:…
-                </text>
-                <text className="lbl" x="510" y="246" textAnchor="start">
-                  else -i NAME.wav (--input-format wav)
-                </text>
-                <text className="lbl" x="343" y="346" textAnchor="middle">
-                  pipe
-                </text>
-                <text className="lbl" x="524" y="346" textAnchor="middle">
+                <text className="lbl" x="526" y="419" textAnchor="end">
                   writes
                 </text>
-                <text className="lbl" x="860" y="242" textAnchor="middle">
+                <text className="lbl" x="352" y="419" textAnchor="start">
+                  pipe
+                </text>
+                <text className="lbl" x="820" y="335" textAnchor="end">
                   -i NAME.atmos
                 </text>
-                <text className="lbl" x="290" y="282" textAnchor="middle">
-                  raw .thd: truehdd reads IN directly
+                <text className="lbl" x="236" y="327" textAnchor="middle">
+                  raw .thd (Atmos): read directly
                 </text>
-                <text className="lbl" x="128" y="347" textAnchor="middle">
+                <text className="lbl" x="215" y="492" textAnchor="middle">
+                  raw .dts (DTS:X / Auro-3D): read directly
+                </text>
+                <text className="lbl" x="128" y="407" textAnchor="middle">
                   container
                 </text>
-                <text className="lbl" x="1062" y="330" textAnchor="start">
+                <text className="lbl" x="1022" y="330" textAnchor="start">
                   -o
                 </text>
+                </g>
 
+                <g transform="translate(0 52)">
                 <DiagramNode
                   kind="file"
                   icon={FileInputIcon}
@@ -382,6 +425,7 @@ export default function ToolChain() {
                     thd, mkv, m2ts…
                   </text>
                 </DiagramNode>
+                </g>
 
                 <DiagramNode
                   kind="tool"
@@ -456,6 +500,7 @@ export default function ToolChain() {
                   </text>
                 </DiagramNode>
 
+                <g transform="translate(0 52)">
                 <DiagramNode
                   kind="tool"
                   icon={AudioWaveformIcon}
@@ -512,26 +557,27 @@ export default function ToolChain() {
                     or NAME.wav
                   </text>
                 </DiagramNode>
+                </g>
                 <a href="#loudness">
                   <DiagramNode
                     kind="tool"
                     icon={GaugeIcon}
                     textClass="t-tool"
                     x={635}
-                    y={122}
+                    y={139}
                     name="dee_measure_loudness"
                   >
                     <rect
                       className="b-tool dash"
                       x="540"
-                      y="100"
+                      y="120"
                       width="190"
-                      height="50"
+                      height="40"
                     />
                     <text
                       className="t-tool t-sub"
                       x="635"
-                      y="139"
+                      y="154"
                       textAnchor="middle"
                     >
                       -mo / AC4 -dn · see Loudness
@@ -542,57 +588,58 @@ export default function ToolChain() {
                   kind="file"
                   icon={FileJsonIcon}
                   textClass="t-file"
-                  x={825}
-                  y={122}
+                  x={635}
+                  y={229}
                   name="loudness.json"
                 >
                   <rect
                     className="b-file dash"
-                    x="760"
-                    y="100"
+                    x="570"
+                    y="210"
                     width="130"
-                    height="50"
+                    height="40"
                   />
                   <text
                     className="t-file t-sub"
-                    x="825"
-                    y="139"
+                    x="635"
+                    y="244"
                     textAnchor="middle"
                   >
                     → --input-manifest
                   </text>
                 </DiagramNode>
 
+                <g transform="translate(0 52)">
                 <DiagramNode
                   kind="tool"
                   icon={CopyIcon}
                   textClass="t-tool"
                   x={250}
-                  y={348}
+                  y={408}
                   name="ffmpeg"
                 >
                   <rect
                     className="b-tool"
                     x="180"
-                    y="320"
+                    y="380"
                     width="140"
                     height="70"
                   />
                   <text
                     className="t-tool t-sub"
                     x="250"
-                    y="366"
+                    y="426"
                     textAnchor="middle"
                   >
-                    copy track TI
+                    copy track TI (mkv,
                   </text>
                   <text
                     className="t-tool t-sub"
                     x="250"
-                    y="380"
+                    y="440"
                     textAnchor="middle"
                   >
-                    mkv / mka / m2ts
+                    mka, m2ts) or → wav
                   </text>
                 </DiagramNode>
                 <DiagramNode
@@ -628,30 +675,63 @@ export default function ToolChain() {
                   </text>
                 </DiagramNode>
                 <DiagramNode
+                  kind="tool"
+                  icon={AudioLinesIcon}
+                  textClass="t-tool"
+                  x={435}
+                  y={468}
+                  name="harletty"
+                >
+                  <rect
+                    className="b-tool"
+                    x="370"
+                    y="440"
+                    width="130"
+                    height="70"
+                  />
+                  <text
+                    className="t-tool t-sub"
+                    x="435"
+                    y="486"
+                    textAnchor="middle"
+                  >
+                    decode
+                  </text>
+                  <text
+                    className="t-tool t-sub"
+                    x="435"
+                    y="500"
+                    textAnchor="middle"
+                  >
+                    DTS:X · Auro-3D
+                  </text>
+                </DiagramNode>
+                <DiagramNode
                   kind="file"
                   icon={BoxIcon}
                   textClass="t-file"
-                  x={635}
-                  y={352}
+                  x={655}
+                  y={412}
                   name="NAME.atmos"
                 >
                   <rect
                     className="b-file"
-                    x="550"
-                    y="330"
+                    x="570"
+                    y="390"
                     width="170"
                     height="50"
                   />
                   <text
                     className="t-file t-sub"
-                    x="635"
-                    y="369"
+                    x="655"
+                    y="429"
                     textAnchor="middle"
                   >
                     + .metadata + .audio (DAMF)
                   </text>
                 </DiagramNode>
 
+                <g transform="translate(-40 0)">
                 <rect
                   className="b-frame"
                   x="900"
@@ -757,6 +837,8 @@ export default function ToolChain() {
                     .ac3 .ec3 .eb3 .thd .ac4 .aac
                   </text>
                 </DiagramNode>
+                </g>
+                </g>
               </svg>
             </div>
           </section>
