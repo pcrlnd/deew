@@ -17,7 +17,6 @@ import {
   FileInputIcon,
   FileJsonIcon,
   GaugeIcon,
-  AudioLinesIcon,
   PackageOpenIcon,
   PuzzleIcon,
   Rows3Icon,
@@ -676,7 +675,7 @@ export default function ToolChain() {
                 </DiagramNode>
                 <DiagramNode
                   kind="tool"
-                  icon={AudioLinesIcon}
+                  icon={PackageOpenIcon}
                   textClass="t-tool"
                   x={435}
                   y={468}
